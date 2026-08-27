@@ -17,8 +17,6 @@ npx supabase start
 npx supabase db reset
 ```
 
-Пользователи входят через GoTrue (`auth.users`); рабочий профиль и роли — `public.users` с тем же `id`. Файлы пишутся в bucket `medtech-files`. Доменные ограничения остаются в PostgreSQL (триггеры, RPC вроде `change_equipment_site` и `accept_task_closure`).
-
 ## Деплой на Dokploy
 
 ### Application
@@ -28,31 +26,31 @@ npx supabase db reset
 - **Docker context:** `.`
 - **Port:** `80`
 
-### Build Arguments (обязательно)
+### Environment (runtime)
 
-Vite вшивает переменные **только при сборке**. В Dokploy задайте их как **Build Arguments** (или Environment с галочкой *Available at build time*):
+Dokploy **не** передаёт обычный Environment в Docker `ARG` при сборке (в логах было `[ -z "" ]`).  
+Поэтому переменные читаются **при старте контейнера** и вшиваются в `index.html`. Отдельного `/config.js` нет (404).
+
+В **Environment** приложения задайте:
 
 | Имя | Значение |
 |---|---|
-| `VITE_SUPABASE_URL` | URL вашего Supabase |
+| `VITE_SUPABASE_URL` | URL Supabase |
 | `VITE_SUPABASE_ANON_KEY` | anon key |
 
-Без них сборка упадёт с явной ошибкой в логах Dokploy.
-
-После смены URL/ключа нужен **полный Redeploy (rebuild)**, не только Restart.
+После смены env достаточно Redeploy/Restart.
 
 ### После деплоя
 
-1. Supabase Auth → Site URL и Redirect URLs = домен фронта.
-2. Миграции применить к production-БД.
-3. `/config.js` не используется (404).
+1. Supabase Auth → Site URL / Redirect URLs = домен фронта.
+2. Применить миграции к production-БД.
 
-### Локальная проверка образа
+### Локальная проверка
 
 ```bash
-docker build \
-  --build-arg VITE_SUPABASE_URL="https://your-supabase.example" \
-  --build-arg VITE_SUPABASE_ANON_KEY="your-anon-key" \
-  -t medtechservice-web .
-docker run --rm -p 8080:80 medtechservice-web
+docker build -t medtechservice-web .
+docker run --rm -p 8080:80 \
+  -e VITE_SUPABASE_URL="https://your-supabase.example" \
+  -e VITE_SUPABASE_ANON_KEY="your-anon-key" \
+  medtechservice-web
 ```
