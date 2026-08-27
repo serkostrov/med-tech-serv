@@ -34,14 +34,14 @@ SPA собирается в статику и отдаётся через nginx.
 
 ### 2. Переменные окружения (Dokploy Environment)
 
-Задайте в Environment приложения (с доступом **на этапе сборки** — Vite вшивает их в бандл):
+Задайте в **Environment** приложения (обычные runtime-переменные контейнера — достаточно):
 
 | Переменная | Назначение |
 |---|---|
 | `VITE_SUPABASE_URL` | URL Supabase API |
 | `VITE_SUPABASE_ANON_KEY` | Публичный anon-ключ |
 
-В Dockerfile переменные не прописаны: их подставляет окружение сборки Dokploy.
+При старте контейнера `docker/entrypoint.sh` пишет `/config.js`, и SPA читает значения оттуда. Пересобирать образ из‑за смены URL/ключа не нужно — достаточно Redeploy / Restart.
 
 Публичный anon-ключ допустим на клиенте; service role и другие секреты **не** передавайте во фронт.
 
@@ -66,10 +66,11 @@ SPA собирается в статику и отдаётся через nginx.
 ### 5. Локальная проверка образа (не на общей рабочей ВМ)
 
 ```bash
-export VITE_SUPABASE_URL="https://your-supabase.example"
-export VITE_SUPABASE_ANON_KEY="your-anon-key"
 docker build -t medtechservice-web .
-docker run --rm -p 8080:80 medtechservice-web
+docker run --rm -p 8080:80 \
+  -e VITE_SUPABASE_URL="https://your-supabase.example" \
+  -e VITE_SUPABASE_ANON_KEY="your-anon-key" \
+  medtechservice-web
 ```
 
-Откройте `http://127.0.0.1:8080` и `http://127.0.0.1:8080/healthz`.
+Откройте `http://127.0.0.1:8080` и `http://127.0.0.1:8080/config.js` — там должны быть ваши значения.
