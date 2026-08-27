@@ -32,16 +32,16 @@ SPA собирается в статику и отдаётся через nginx.
 - **Port:** `80`
 - **Healthcheck path (если есть в UI):** `/healthz`
 
-### 2. Переменные на этапе сборки
+### 2. Переменные окружения (Dokploy Environment)
 
-Vite вшивает `VITE_*` в бандл, поэтому они нужны **на build**, не только в runtime:
+Задайте в Environment приложения (с доступом **на этапе сборки** — Vite вшивает их в бандл):
 
-| Переменная | Где |
+| Переменная | Назначение |
 |---|---|
-| `VITE_SUPABASE_URL` | Build args / Environment (Available at build time) |
-| `VITE_SUPABASE_ANON_KEY` | Build args / Environment (Available at build time) |
+| `VITE_SUPABASE_URL` | URL Supabase API |
+| `VITE_SUPABASE_ANON_KEY` | Публичный anon-ключ |
 
-В Dockerfile они принимаются как `ARG` и попадают в `ENV` перед `npm run build`.
+В Dockerfile переменные не прописаны: их подставляет окружение сборки Dokploy.
 
 Публичный anon-ключ допустим на клиенте; service role и другие секреты **не** передавайте во фронт.
 
@@ -66,10 +66,9 @@ Vite вшивает `VITE_*` в бандл, поэтому они нужны **�
 ### 5. Локальная проверка образа (не на общей рабочей ВМ)
 
 ```bash
-docker build \
-  --build-arg VITE_SUPABASE_URL="https://your-supabase.example" \
-  --build-arg VITE_SUPABASE_ANON_KEY="your-anon-key" \
-  -t medtechservice-web .
+export VITE_SUPABASE_URL="https://your-supabase.example"
+export VITE_SUPABASE_ANON_KEY="your-anon-key"
+docker build -t medtechservice-web .
 docker run --rm -p 8080:80 medtechservice-web
 ```
 
