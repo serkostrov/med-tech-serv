@@ -30,6 +30,8 @@ describe("available task actions", () => {
     assert.deepEqual(codes("engineer", "in_progress"), []);
     assert.deepEqual(codes("engineer", "in_progress", { hasClosure: true }), ["submit_for_review"]);
     assert.deepEqual(codes("warehouse", "new"), []);
+    assert.deepEqual(codes("admin", "assigned"), ["accept", "cancel"]);
+    assert.deepEqual(codes("admin", "in_progress", { hasClosure: true }), ["submit_for_review", "cancel"]);
     assert.deepEqual(codes("admin", "under_review", { hasClosure: true, closureVerified: true }), [
       "close", "return_for_rework", "cancel"
     ]);

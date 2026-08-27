@@ -41,11 +41,11 @@ export function availableTaskActions(
     && canTransitionTaskStatusForRole(role, status, "assigned")) {
     actions.push({ code: "assign", label: "Назначить инженера", targetStatus: "assigned" });
   }
-  if (role === "engineer" && status === "assigned"
+  if (hasPermission(storedRole, "tasks.accept") && status === "assigned"
     && canTransitionTaskStatusForRole(role, status, "in_progress")) {
     actions.push({ code: "accept", label: "Принять задачу", targetStatus: "in_progress" });
   }
-  if (role === "engineer" && status === "in_progress" && context.hasClosure
+  if (hasPermission(storedRole, "tasks.close") && status === "in_progress" && context.hasClosure
     && canTransitionTaskStatusForRole(role, status, "under_review")) {
     actions.push({ code: "submit_for_review", label: "Передать на проверку", targetStatus: "under_review" });
   }

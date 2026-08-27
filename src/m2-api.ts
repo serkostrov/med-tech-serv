@@ -167,6 +167,7 @@ export interface TaskCardResponse {
   readonly parts: readonly TaskPartPosition[];
   readonly canEditOverview?: boolean;
   readonly canEditParts: boolean;
+  readonly canUploadFiles?: boolean;
   readonly files: readonly EquipmentFileResponse[];
   readonly journal: readonly {
     readonly id: string;
@@ -1427,6 +1428,114 @@ export class M2ApiClient {
     return this.loadTask(id);
   }
 
+  public async updateTaskResult(id: string, input: {
+    readonly callReason: string;
+    readonly workDescription: string;
+    readonly recommendations: string;
+    readonly userRemarks: string;
+    readonly workCompleted: boolean;
+    readonly apparatusApproved: boolean;
+    readonly customerHasNoClaims: boolean;
+    readonly continuedInPrimary: boolean;
+    readonly actFileId?: string;
+  }): Promise<TaskCardResponse> {
+    const { error } = await this.db().from("tasks").update({
+      call_reason: input.callReason || null,
+      work_description: input.workDescription || null,
+      recommendations: input.recommendations || null,
+      user_remarks: input.userRemarks || null,
+      work_completed: input.workCompleted,
+      apparatus_approved: input.apparatusApproved,
+      customer_has_no_claims: input.customerHasNoClaims,
+      continued_in_primary: input.continuedInPrimary
+    }).eq("id", id);
+    throwIfError(error);
+    if (input.actFileId) {
+      const actor = await this.actorId();
+      const { data: existing, error: existingError } = await this.db()
+        .from("task_closures")
+        .select("task_id, verified_by, verified_at")
+        .eq("task_id", id)
+        .maybeSingle();
+      throwIfError(existingError);
+      if (existing && optionalText(asRow(existing), "verified_by")) {
+        const { error: actError } = await this.db().from("task_closures").update({
+          act_file_id: input.actFileId
+        }).eq("task_id", id);
+        throwIfError(actError);
+      } else {
+        const { error: closureError } = await this.db().from("task_closures").upsert({
+          task_id: id,
+          act_file_id: input.actFileId,
+          submitted_by: actor,
+          submitted_at: new Date().toISOString(),
+          verified_by: null,
+          verified_at: null,
+          verification_comment: null
+        });
+        throwIfError(closureError);
+      }
+    }
+    return this.taskCard(id);
+  }
+
+  public async uploadTaskFiles(
+    id: string,
+    files: readonly File[],
+    kind: "act" | "photo" | "video" | "document" = "document"
+  ): Promise<readonly EquipmentFileResponse[]> {
+    const actor = await this.actorId();
+    const uploadedIds: string[] = [];
+    for (const file of files) {
+      const key = `tasks/${id}/${crypto.randomUUID()}-${file.name}`;
+      const { error: storageError } = await this.db().storage.from("medtech-files").upload(key, file, {
+        contentType: file.type || "application/octet-stream",
+        upsert: false
+      });
+      throwIfError(storageError, "Не удалось загрузить файл");
+      const { data, error } = await this.db().from("files").insert({
+        kind,
+        task_id: id,
+        storage_key: key,
+        original_name: file.name,
+        content_type: file.type || "application/octet-stream",
+        byte_size: file.size,
+        uploaded_by: actor,
+        is_financial: false
+      }).select("id").single();
+      throwIfError(error);
+      uploadedIds.push(text(asRow(data), "id"));
+    }
+    if (kind === "act" && uploadedIds[0]) {
+      const actorId = await this.actorId();
+      const { data: existing, error: existingError } = await this.db()
+        .from("task_closures")
+        .select("task_id, verified_by")
+        .eq("task_id", id)
+        .maybeSingle();
+      throwIfError(existingError);
+      if (existing && optionalText(asRow(existing), "verified_by")) {
+        const { error: actError } = await this.db().from("task_closures").update({
+          act_file_id: uploadedIds[0]
+        }).eq("task_id", id);
+        throwIfError(actError);
+      } else {
+        const { error: closureError } = await this.db().from("task_closures").upsert({
+          task_id: id,
+          act_file_id: uploadedIds[0],
+          submitted_by: actorId,
+          submitted_at: new Date().toISOString(),
+          verified_by: null,
+          verified_at: null,
+          verification_comment: null
+        });
+        throwIfError(closureError);
+      }
+    }
+    const card = await this.taskCard(id);
+    return card.files;
+  }
+
   public async maintenancePlans(
     year: number,
     view: "equipment" | "engineer" | "organization",
@@ -1632,6 +1741,7 @@ export class M2ApiClient {
       }),
       canEditOverview: !terminal && canWrite,
       canEditParts: !terminal && canWrite,
+      canUploadFiles: !terminal && session.permissions?.includes("files.write") === true,
       files: mappedFiles,
       journal: (journal.data ?? []).map((item) => {
         const row = asRow(item);

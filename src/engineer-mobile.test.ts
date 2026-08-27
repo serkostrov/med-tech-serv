@@ -10,14 +10,18 @@ describe("мобильный список инженера", () => {
     ]);
     const engineerSection = app.slice(
       app.indexOf("function EngineerTaskCard"),
-      app.indexOf("function EngineerNotifications")
+      app.indexOf("function EngineerWorkspace")
     );
 
     assert.match(engineerSection, /m2Api\.engineerTasks\(\)/u);
+    assert.match(engineerSection, /m2Api\.taskCard\(/u);
+    assert.match(engineerSection, /onClick=\{\(\) => onOpen\(task\.id\)\}/u);
     assert.match(engineerSection, /mobile-task-card--new/u);
-    assert.match(engineerSection, /aria-label="Профиль инженера"[\s\S]*Инженер/u);
+    assert.match(engineerSection, /className=\{`mobile-task-card/u);
+    assert.doesNotMatch(engineerSection, /engineer-identity|Профиль инженера|Открыть задачу/u);
     assert.doesNotMatch(engineerSection, /цена|сумма|плательщик|финансовые поля/iu);
-    assert.match(styles, /\.mobile-task-card \.button\s*\{[\s\S]*?min-height:\s*48px;[\s\S]*?touch-action:\s*manipulation;/u);
+    assert.match(styles, /\.mobile-task-card\s*\{[\s\S]*?cursor:\s*pointer;/u);
+    assert.match(styles, /\.mobile-task-card\s*\{[\s\S]*?touch-action:\s*manipulation;/u);
     assert.match(styles, /@media \(max-width:\s*700px\)[\s\S]*?\.mobile-task-list\s*\{[\s\S]*?grid-template-columns:\s*1fr;/u);
   });
 });

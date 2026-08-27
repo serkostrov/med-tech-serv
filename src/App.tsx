@@ -402,6 +402,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [actionDialog, setActionDialog] = useState<"cancel" | "return_for_rework" | null>(null);
   const [actOpen, setActOpen] = useState(false);
   const [actRowsEditing, setActRowsEditing] = useState(false);
+  const [resultEditing, setResultEditing] = useState(false);
   const [overviewEditing, setOverviewEditing] = useState(false);
   const [detailTab, setDetailTab] = useState<"overview" | "result" | "materials" | "history">(initialTab);
   const task = card.task;
@@ -535,6 +536,72 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     }
   };
 
+  const saveResult = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setBusy(true);
+    setFormError(null);
+    try {
+      const data = new FormData(event.currentTarget);
+      const existingActId = card.closure?.actFileId ?? card.files.find((file) => file.kind === "act")?.id;
+      const actFiles = data.getAll("actPhoto").filter((item): item is File => item instanceof File && item.size > 0);
+      let actFileId = existingActId;
+      if (actFiles.length) {
+        const uploaded = await m2Api.uploadTaskFiles(task.id, actFiles, "act");
+        actFileId = [...uploaded].reverse().find((file) => file.kind === "act")?.id ?? actFileId;
+      }
+      await m2Api.updateTaskResult(task.id, {
+        callReason: String(data.get("callReason") ?? "").trim(),
+        workDescription: String(data.get("workDescription") ?? "").trim(),
+        recommendations: String(data.get("recommendations") ?? "").trim(),
+        userRemarks: String(data.get("userRemarks") ?? "").trim(),
+        workCompleted: data.get("workCompleted") === "on",
+        apparatusApproved: data.get("apparatusApproved") === "on",
+        customerHasNoClaims: data.get("customerHasNoClaims") === "on",
+        continuedInPrimary: data.get("continuedInPrimary") === "on",
+        ...(actFileId ? { actFileId } : {})
+      });
+      setResultEditing(false);
+      await onChanged();
+    } catch (saveError) {
+      const text = saveError instanceof Error ? saveError.message : "Не получилось сохранить результат";
+      setFormError(text);
+      toast.error(text);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const uploadTaskMaterials = async (event: ChangeEvent<HTMLInputElement>, kind?: "act" | "photo" | "video" | "document") => {
+    const selected = [...(event.target.files ?? [])];
+    event.target.value = "";
+    if (!selected.length) return;
+    setBusy(true);
+    try {
+      const groups = new Map<"act" | "photo" | "video" | "document", File[]>();
+      for (const file of selected) {
+        const resolved = kind ?? (
+          file.type.startsWith("video/") ? "video"
+            : file.type.startsWith("image/") ? "photo"
+              : "document"
+        );
+        const bucket = groups.get(resolved) ?? [];
+        bucket.push(file);
+        groups.set(resolved, bucket);
+      }
+      for (const [fileKind, files] of groups) {
+        await m2Api.uploadTaskFiles(task.id, files, fileKind);
+      }
+      await onChanged();
+    } catch (uploadError) {
+      toast.error(uploadError instanceof Error ? uploadError.message : "Не получилось загрузить файлы");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const canEditResult = card.canEditParts === true;
+  const canUploadFiles = card.canUploadFiles === true || canEditResult;
+
   const workTypeLabel = card.workType?.name ? `${card.workType.name}${task.workModifier ? ` · ${task.workModifier}` : ""}` : "—";
   const meterLabel = task.meterReading ?? card.closure?.meterReading;
   const contactDetails = [task.customer?.contactPhone, task.customer?.contactEmail].filter(Boolean).join(" · ");
@@ -610,7 +677,14 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       onReturn={async (comment) => { await perform("return_for_rework", comment); }}
     /> : null}
     {detailTab === "result" ? <section className="card task-result-card">
-      <CardHeader action={<Button onClick={() => setActRowsEditing(true)} variant="secondary">Редактировать акт</Button>} meta="Поля акта и закрытия" title="Результат работ" />
+      <CardHeader
+        action={<>
+          {canEditResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant="secondary">Редактировать результат</Button> : null}
+          <Button onClick={() => setActRowsEditing(true)} variant="secondary">Редактировать акт</Button>
+        </>}
+        meta="Поля акта и закрытия"
+        title="Результат работ"
+      />
       <div className="task-result-body">
         <dl className="task-narrative-list">
           <div><dt>Причина вызова</dt><dd className={task.callReason ? undefined : "is-empty"}>{task.callReason ?? "Не заполнено"}</dd></div>
@@ -626,6 +700,28 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         </div>
       </div>
     </section> : null}
+    <DialogForm
+      busy={busy}
+      description="Эти данные попадут в акт и нужны, чтобы передать задачу на проверку."
+      error={formError}
+      key={`result-edit-${task.id}-${resultEditing ? "open" : "closed"}`}
+      onOpenChange={setResultEditing}
+      onSubmit={saveResult}
+      open={resultEditing}
+      size="lg"
+      submitLabel="Сохранить результат"
+      title="Результат работ"
+    >
+      <label className="field-wide">Причина вызова<textarea defaultValue={task.callReason ?? ""} maxLength={2000} name="callReason" required rows={3} /></label>
+      <label className="field-wide">Описание работ<textarea defaultValue={task.workDescription ?? ""} maxLength={4000} name="workDescription" required rows={4} /></label>
+      <label className="field-wide">Рекомендации<textarea defaultValue={task.recommendations ?? ""} maxLength={2000} name="recommendations" rows={3} /></label>
+      <label className="field-wide">Замечания пользователя<textarea defaultValue={task.userRemarks ?? ""} maxLength={2000} name="userRemarks" rows={3} /></label>
+      <label className="field-check"><input defaultChecked={task.workCompleted ?? card.closure?.workCompleted === true} name="workCompleted" type="checkbox" /><span>Работы выполнены полностью</span></label>
+      <label className="field-check"><input defaultChecked={task.apparatusApproved ?? card.closure?.apparatusApproved === true} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>
+      <label className="field-check"><input defaultChecked={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims === true} name="customerHasNoClaims" type="checkbox" /><span>Претензий нет</span></label>
+      <label className="field-check"><input defaultChecked={task.continuedInPrimary === true} name="continuedInPrimary" type="checkbox" /><span>Продолжение первичной заявки</span></label>
+      <label className="field-wide field-file">Фото акта{card.closure?.actFileId || card.files.some((file) => file.kind === "act") ? <small>Уже есть — можно заменить новым снимком</small> : <small>Нужно для передачи на проверку (JPEG/PNG/WebP)</small>}<span className="field-file__control"><input accept="image/jpeg,image/png,image/webp,image/heic,image/heif" name="actPhoto" type="file" /></span></label>
+    </DialogForm>
     <Dialog footer={<><Button onClick={() => setActRowsEditing(false)} variant="secondary">Сохранить строки</Button><Button onClick={() => setActOpen(true)}>Открыть акт</Button></>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Данные печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
       <h3>Оборудование</h3>
       <div className="work-act-row-editor__list">{actEquipmentRows.map((item, index) => <div className="work-act-row-editor__equipment" key={`equipment-${index}`}><input aria-label={`Наименование прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="Наименование прибора" value={item.name} /><input aria-label={`Серийный номер прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, serialNumber: event.target.value } : row))} placeholder="Серийный номер" value={item.serialNumber} /><input aria-label={`Показание счётчика прибора ${index + 1}`} inputMode="decimal" onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => {
@@ -647,33 +743,44 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <button className="task-parts-add" onClick={() => setActWorkRows((current) => [...current, { name: "" }])} type="button">Добавить вид работ</button>
     </section></Dialog>
     {detailTab === "materials" ? <div className="task-card-columns">
-      <section className="card">
-        <CardHeader meta={`${card.files.length} файлов`} title="Файлы" />
+      <section className="card task-materials-card">
+        <CardHeader meta={formatRussianCount(card.files.length, ["файл", "файла", "файлов"])} title="Файлы" />
         <div className="task-card-panel">
-          {card.files.length > 0 ? <div className="task-card-list">{card.files.map((file) => <a href={file.url ?? "#"} key={file.id}><strong>{file.originalName}</strong><span>{FILE_KIND_LABELS[file.kind] ?? "Файл"} · {(file.byteSize / 1024).toFixed(1)} КБ</span></a>)}</div> : <div className="task-empty"><Icon name="open" size={22} /><p>Файлов пока нет. Инженер приложит акт и фото при закрытии.</p></div>}
+          {card.files.length > 0
+            ? <div className="task-card-list">{card.files.map((file) => <a href={file.url ?? "#"} key={file.id}><strong>{file.originalName}</strong><span>{FILE_KIND_LABELS[file.kind] ?? "Файл"} · {(file.byteSize / 1024).toFixed(1)} КБ</span></a>)}</div>
+            : <div className="task-empty task-empty--compact"><Icon name="open" size={18} /><div><strong>Файлов пока нет</strong><p>Добавьте фото акта и фотофиксацию</p></div></div>}
+          {canUploadFiles ? <div className="task-materials-actions">
+            <label className="task-materials-action"><input accept="image/jpeg,image/png,image/webp,image/heic,image/heif" disabled={busy} onChange={(event) => void uploadTaskMaterials(event, "act")} type="file" /><span>Фото акта</span></label>
+            <label className="task-materials-action"><input accept="image/*" disabled={busy} multiple onChange={(event) => void uploadTaskMaterials(event, "photo")} type="file" /><span>Фото</span></label>
+            <label className="task-materials-action"><input accept="video/*" disabled={busy} multiple onChange={(event) => void uploadTaskMaterials(event, "video")} type="file" /><span>Видео</span></label>
+          </div> : null}
         </div>
       </section>
-      <section className="card task-parts-card">
-        <CardHeader action={card.canEditParts ? <Button onClick={() => setPartsEditing((value) => !value)} variant="secondary">{partsEditing ? "Отменить" : "Редактировать"}</Button> : undefined} meta={`${card.parts.length} позиций`} title="Использованные запчасти" />
-        {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : <div className="task-card-panel">
-          {card.parts.length > 0 ? <div className="task-card-list">{card.parts.map((part) => <div key={part.id}><strong>{part.articleNumber} · {part.name}</strong><span>{part.quantity} шт. · {part.condition === "G" ? "Г · гарантийная" : part.condition === "N" ? "Н · новая" : "Б · б/у"}</span></div>)}</div> : <div className="task-empty"><Icon name="info" size={22} /><p>Запчасти не указаны. Добавьте позиции, если на выезде использовали детали.</p></div>}
-          {card.canEditParts ? <button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button> : null}
-        </div>}
+      <section className="card task-materials-card">
+        <CardHeader meta={formatRussianCount(card.parts.length, ["позиция", "позиции", "позиций"])} title="Запчасти" />
+        {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
+        <div className="task-card-panel">
+          {card.parts.length > 0
+            ? <div className="task-card-list">{card.parts.map((part) => <div key={part.id}><strong>{part.articleNumber} · {part.name}</strong><span>{part.quantity} шт. · {part.condition === "G" ? "Г · гарантийная" : part.condition === "N" ? "Н · новая" : "Б · б/у"}</span></div>)}</div>
+            : <div className="task-empty task-empty--compact"><Icon name="info" size={18} /><div><strong>Запчастей пока нет</strong><p>Укажите детали, если использовали на выезде</p></div></div>}
+          {card.canEditParts ? <div className="task-materials-actions">
+            <button className="task-materials-action" onClick={addPartDraft} type="button">Добавить</button>
+            {card.parts.length > 0 ? <button className="task-materials-action" onClick={() => setPartsEditing(true)} type="button">Изменить</button> : null}
+          </div> : null}
+        </div>
       </section>
     </div> : null}
     {detailTab === "history" ? <section className="card">
       <CardHeader meta="Кто, что и когда" title="Журнал задачи" />
-      {card.journal.length > 0 ? <div className="task-journal">{card.journal.map((event) => {
+      {card.journal.length > 0 ? <div className="history-feed">{card.journal.map((event) => {
         const description = taskJournalDescription(event);
-        return <article className="task-journal__item" key={event.id}>
-          <div aria-hidden="true" className="task-journal__rail"><span className="task-journal__dot" /></div>
-          <div className="task-journal__content">
-            <header>
-              <time dateTime={event.occurredAt}>{formatTaskDate(event.occurredAt, true)}</time>
-              <strong>{event.actorName ?? "Автоматически"}</strong>
-              {event.toStatus ? <p className="task-journal__status"><span>{TASK_STATUS_LABELS[event.fromStatus ?? ""] ?? "—"}</span><span aria-hidden="true">→</span><span>{TASK_STATUS_LABELS[event.toStatus] ?? "—"}</span></p> : <p>{description}</p>}
-            </header>
-            {event.comment ? <p className="task-journal__note">{event.comment}</p> : null}
+        return <article className="history-feed__item" key={event.id}>
+          <div aria-hidden="true" className="history-feed__rail"><span className="history-feed__dot" /></div>
+          <div className="history-feed__body">
+            <time dateTime={event.occurredAt}>{formatTaskDate(event.occurredAt, true)}</time>
+            <strong className="history-feed__actor">{event.actorName ?? "Автоматически"}</strong>
+            {event.toStatus ? <div className="history-feed__status"><span className="history-feed__chip history-feed__chip--muted">{TASK_STATUS_LABELS[event.fromStatus ?? ""] ?? "—"}</span><span aria-hidden="true" className="history-feed__arrow">→</span><StatusBadge tone={taskStatusTone(event.toStatus)}>{TASK_STATUS_LABELS[event.toStatus] ?? event.toStatus}</StatusBadge></div> : <p className="history-feed__text">{description}</p>}
+            {event.comment ? <p className="history-feed__note">{event.comment}</p> : null}
           </div>
         </article>;
       })}</div> : <div className="task-empty"><Icon name="clock" size={22} /><p>Записей в журнале пока нет. Действия по задаче появятся здесь.</p></div>}
@@ -1187,14 +1294,20 @@ function AssignmentHistorySection({
   return (
     <section className="card equipment-card-section">
       <CardHeader meta={formatRussianCount(events.length, ["запись", "записи", "записей"])} title={title} />
-      <div className="equipment-card-section__list">
-        {events.map((event) => <article key={event.id}>
-          <time dateTime={event.occurredAt}>{formatEquipmentAssignmentDate(event.occurredAt)}</time>
-          <strong>{formatEquipmentAssignmentChange(event)}</strong>
-          <span>{event.comment || event.description || "Без комментария"}</span>
-        </article>)}
-        {events.length === 0 ? <p>{empty}</p> : null}
-      </div>
+      {events.length > 0 ? <div className="history-feed">{events.map((event) => {
+        const previous = event.previousValue?.name?.trim();
+        const next = event.newValue?.name?.trim();
+        const hasTransition = Boolean(previous || next);
+        return <article className="history-feed__item" key={event.id}>
+          <div aria-hidden="true" className="history-feed__rail"><span className="history-feed__dot" /></div>
+          <div className="history-feed__body">
+            <time dateTime={event.occurredAt}>{formatEquipmentAssignmentDate(event.occurredAt)}</time>
+            <strong className="history-feed__actor">{event.author?.name ?? "Система"}</strong>
+            {hasTransition ? <div className="history-feed__status"><span className="history-feed__chip history-feed__chip--muted">{previous || "—"}</span><span aria-hidden="true" className="history-feed__arrow">→</span><span className="history-feed__chip">{next || "не указано"}</span></div> : <p className="history-feed__text">{formatEquipmentAssignmentChange(event)}</p>}
+            {event.comment || event.description ? <p className="history-feed__note">{event.comment || event.description}</p> : null}
+          </div>
+        </article>;
+      })}</div> : <div className="task-empty"><Icon name="clock" size={22} /><p>{empty}</p></div>}
     </section>
   );
 }
@@ -1286,14 +1399,15 @@ function EquipmentCard({
       {detailTab === "payers" ? <AssignmentHistorySection empty="Смен плательщика пока нет. Они появятся после смены плательщика." events={payerChanges} title="История плательщиков" /> : null}
       {detailTab === "meters" ? <section className="card equipment-card-section">
           <CardHeader meta={`${record.meterReadings.length} из ${record.meterReadingsTotal}`} title="Показания счётчика" />
-          <div className="equipment-card-section__list">
-            {record.meterReadings.map((reading) => <article key={reading.id}>
+          {record.meterReadings.length > 0 ? <div className="history-feed">{record.meterReadings.map((reading) => <article className="history-feed__item" key={reading.id}>
+            <div aria-hidden="true" className="history-feed__rail"><span className="history-feed__dot" /></div>
+            <div className="history-feed__body">
               <time dateTime={reading.measuredAt}>{formatEquipmentAssignmentDate(reading.measuredAt)}</time>
-              <strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong>
-              <span>Задача: {reading.taskId} · {reading.author.name}</span>
-            </article>)}
-            {record.meterReadings.length === 0 ? <p>Показаний счётчика пока нет. Они появятся после принятого закрытия задачи.</p> : null}
-          </div>
+              <strong className="history-feed__actor">{reading.author.name}</strong>
+              <p className="history-feed__text history-feed__text--emphasis">{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</p>
+              <p className="history-feed__note">Задача: {reading.taskId}</p>
+            </div>
+          </article>)}</div> : <div className="task-empty"><Icon name="clock" size={22} /><p>Показаний счётчика пока нет. Они появятся после принятого закрытия задачи.</p></div>}
           {record.meterReadings.length < record.meterReadingsTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreMeterReadings()} variant="secondary">Показать ещё показания</Button> : null}
         </section> : null}
       {detailTab === "files" ? <section className="card equipment-card-section">
@@ -1305,20 +1419,20 @@ function EquipmentCard({
         </section> : null}
       {detailTab === "history" ? <section className="card equipment-history" aria-labelledby="equipment-history-title">
           <CardHeader action={!readOnly ? <Button icon="plus" onClick={() => setManualOpen(true)} variant="secondary">Добавить прошлое событие</Button> : undefined} headingId="equipment-history-title" meta={`${record.history.length} из ${record.historyTotal} · новые сверху`} title="История прибора" />
-        <div className="equipment-history__list">
-          {record.history.map((event) => <article className="equipment-history__event" key={event.id}>
+        {record.history.length > 0 ? <div className="history-feed">{record.history.map((event) => <article className="history-feed__item" key={event.id}>
+          <div aria-hidden="true" className="history-feed__rail"><span className="history-feed__dot" /></div>
+          <div className="history-feed__body history-feed__body--rich">
             <time dateTime={event.occurredAt}>{formatEquipmentAssignmentDate(event.occurredAt)}</time>
-            <div>
+            <strong className="history-feed__actor">{event.author?.name ?? "Система"}</strong>
+            <div className="history-feed__main">
               <span className={`equipment-history__kind equipment-history__kind--${event.eventType}`}>{equipmentHistoryEventLabel(event.eventType)}</span>
-              <h3>{event.summary}</h3>
-              <small>Клиент: {event.client || "не указан"}</small>
-              <p className={event.description ? undefined : "equipment-history__description--empty"}>{equipmentHistoryDescription(event)}</p>
-              {event.attachment ? <small>Файл: {event.attachment.name}</small> : null}
-              {event.author ? <small>Автор: {event.author.name}</small> : null}
+              <strong className="history-feed__title">{event.summary}</strong>
             </div>
-          </article>)}
-          {record.history.length === 0 ? <p className="equipment-history__empty">Истории пока нет. Закрытые задачи, перемещения и прошлые события появятся здесь.</p> : null}
-        </div>
+            <p className="history-feed__note">Клиент: {event.client || "не указан"}</p>
+            <p className={`history-feed__note${event.description ? "" : " history-feed__note--empty"}`}>{equipmentHistoryDescription(event)}</p>
+            {event.attachment ? <p className="history-feed__note">Файл: {event.attachment.name}</p> : null}
+          </div>
+        </article>)}</div> : <div className="task-empty"><Icon name="clock" size={22} /><p>Истории пока нет. Закрытые задачи, перемещения и прошлые события появятся здесь.</p></div>}
         {record.history.length < record.historyTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreHistory()} variant="secondary">Показать ещё события</Button> : null}
       </section> : null}
       <ManualEquipmentHistoryForm onAdd={async (draft) => { await onAddManual(draft); setManualOpen(false); }} onOpenChange={setManualOpen} open={manualOpen} record={record} />
@@ -1969,22 +2083,58 @@ function engineerTaskCount(count: number): string {
   return `${count} ${noun}`;
 }
 
-function EngineerTaskCard({ task }: { readonly task: EngineerTaskListItem }) {
+function EngineerTaskCard({ task, onOpen }: {
+  readonly task: EngineerTaskListItem;
+  readonly onOpen: (id: string) => void;
+}) {
   const equipment = [task.equipment.manufacturer, task.equipment.model].filter(Boolean).join(" ");
-  return <article className={`mobile-task-card${task.isNew ? " mobile-task-card--new" : ""}`}>
-    <div className="mobile-task-card__top"><div className="mobile-task-card__badges">{task.isNew ? <span className="new-task-label">Новая</span> : null}<StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge></div>{task.isOverdue ? <span className="urgent-label">Просрочена</span> : task.priority === "urgent" ? <span className="urgent-label">Срочная</span> : null}</div>
-    <p className="mobile-task-card__number">{task.number}</p><h2>{task.title}</h2>
-    <div className="mobile-task-card__site"><strong>{task.site.name}</strong><address>{task.site.address}</address></div>
-    <dl className="detail-list"><div><dt>Период</dt><dd>{engineerPeriod(task.dates.periodFrom, task.dates.periodTo)}</dd></div><div><dt>Вызов</dt><dd>{engineerDate(task.dates.call)}</dd></div>{task.dates.visit ? <div><dt>Выезд</dt><dd>{engineerDate(task.dates.visit)}</dd></div> : null}<div><dt>Прибор</dt><dd>{equipment || "Прибор не указан"}<span>S/N {task.equipment.serialNumber}</span></dd></div></dl>
-    <Button type="button" variant="secondary">Открыть задачу</Button>
-  </article>;
+  const serial = task.equipment.serialNumber?.trim();
+  return <button
+    className={`mobile-task-card${task.isNew ? " mobile-task-card--new" : ""}`}
+    onClick={() => onOpen(task.id)}
+    type="button"
+  >
+    <div className="mobile-task-card__top">
+      <div className="mobile-task-card__badges">
+        {task.isNew ? <span className="new-task-label">Новая</span> : null}
+        <StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge>
+      </div>
+      {task.isOverdue ? <span className="urgent-label">Просрочена</span> : task.priority === "urgent" ? <span className="urgent-label">Срочная</span> : null}
+    </div>
+    <div className="mobile-task-card__heading">
+      <span className="mobile-task-card__number">{task.number}</span>
+      <strong className="mobile-task-card__title">{task.title}</strong>
+    </div>
+    <div className="mobile-task-card__site">
+      <strong>{task.site.name}</strong>
+      {task.site.address ? <span>{task.site.address}</span> : null}
+    </div>
+    <dl className="mobile-task-card__meta">
+      <div><dt>Период</dt><dd>{engineerPeriod(task.dates.periodFrom, task.dates.periodTo)}</dd></div>
+      <div><dt>Вызов</dt><dd>{engineerDate(task.dates.call)}</dd></div>
+      {task.dates.visit ? <div><dt>Выезд</dt><dd>{engineerDate(task.dates.visit)}</dd></div> : null}
+      <div><dt>Прибор</dt><dd>{equipment || "Не указан"}{serial ? <span>S/N {serial}</span> : null}</dd></div>
+    </dl>
+  </button>;
 }
 
-function EngineerTasks({ user }: { readonly user: ApiSessionUser }) {
+function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
+  readonly user: ApiSessionUser;
+  readonly initialTaskId: string | undefined;
+  readonly onTaskRouteChange: (taskId?: string) => void;
+}) {
   const [page, setPage] = useState<EngineerTaskListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
+  const openTask = async (id: string, updateRoute = true) => {
+    const loaded = await m2Api.taskCard(id);
+    setSelectedTaskId(id);
+    setTaskCard(loaded);
+    if (updateRoute) onTaskRouteChange(id);
+  };
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -1998,25 +2148,53 @@ function EngineerTasks({ user }: { readonly user: ApiSessionUser }) {
     });
     return () => { active = false; };
   }, [reload]);
-  const initials = user.fullName.split(" ").map((part) => part[0]).join("").slice(0, 2);
+  useEffect(() => {
+    if (initialTaskId && initialTaskId === selectedTaskId && taskCard) return;
+    if (!initialTaskId) {
+      setSelectedTaskId(null);
+      setTaskCard(null);
+      return;
+    }
+    void openTask(initialTaskId, false)
+      .catch((loadError: unknown) => {
+        setSelectedTaskId(null);
+        setTaskCard(null);
+        toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
+      });
+  }, [initialTaskId]);
+  if (selectedTaskId && taskCard) {
+    return <TaskCard
+      card={taskCard}
+      onBack={() => { setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); }}
+      onChanged={async () => {
+        setReload((value) => value + 1);
+        await openTask(selectedTaskId, false);
+      }}
+      onOpenRelated={async (id) => { await openTask(id); }}
+    />;
+  }
   return <>
     <PageIntro description="Ваши выезды: адрес, прибор и сроки." title="Мои задачи" />
-    <section aria-label="Профиль инженера" className="engineer-identity"><span className="avatar">{initials}</span><div><strong>{user.fullName}</strong><span>Инженер</span></div></section>
     <section aria-busy={loading} aria-labelledby="engineer-task-list-title"><div className="section-heading"><div><h2 id="engineer-task-list-title">Назначенные выезды</h2></div>{page ? <span className="muted">{engineerTaskCount(page.total)}</span> : null}</div>
       {loading ? <div className="mobile-task-list" role="status"><span className="sr-only">Загрузка задач…</span><div className="mobile-task-skeleton" /><div className="mobile-task-skeleton" /></div> : null}
       {!loading && error ? <div className="mobile-task-error" role="alert"><strong>Список не загрузился</strong><span>{error}</span><Button onClick={() => setReload((value) => value + 1)} variant="secondary">Повторить</Button></div> : null}
       {!loading && !error && page?.items.length === 0 ? <ResourceState description="Когда координатор назначит задачу, она появится здесь." status="empty" title="Назначенных выездов пока нет" /> : null}
-      {!loading && !error && page ? <div className="mobile-task-list">{page.items.map((task) => <EngineerTaskCard key={task.id} task={task} />)}</div> : null}
+      {!loading && !error && page ? <div className="mobile-task-list">{page.items.map((task) => <EngineerTaskCard key={task.id} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} task={task} />)}</div> : null}
     </section>
   </>;
 }
 
-function EngineerWorkspace({ view, user }: { readonly view: NavigationId; readonly user: ApiSessionUser }) {
+function EngineerWorkspace({ view, user, taskRouteId, onTaskRouteChange }: {
+  readonly view: NavigationId;
+  readonly user: ApiSessionUser;
+  readonly taskRouteId: string | undefined;
+  readonly onTaskRouteChange: (taskId?: string) => void;
+}) {
   switch (view) {
-    case "tasks": return <EngineerTasks user={user} />;
+    case "tasks": return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} user={user} />;
     case "equipment": return <EquipmentPage engineer />;
     case "notifications": return <NotificationsPage />;
-    default: return <EngineerTasks user={user} />;
+    default: return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} user={user} />;
   }
 }
 
@@ -2180,7 +2358,7 @@ function App() {
     >
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
       {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
-      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace user={sessionUser} view={activeView} /> : null}
+      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
       {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace view={activeView} /> : null}
       {navigation.length > 0 && role === "admin" ? <AdminWorkspace onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
     </AppShell>
