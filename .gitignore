@@ -1,0 +1,14 @@
+node_modules/
+dist/
+dist-server/
+coverage/
+playwright-report/
+test-results/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+supabase/.temp
+supabase/.branches
