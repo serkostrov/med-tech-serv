@@ -21,50 +21,38 @@ npx supabase db reset
 
 ## Деплой на Dokploy
 
-SPA собирается в статику и отдаётся через nginx. В репозитории есть `Dockerfile` и `docker/nginx.conf`.
+### Application
 
-### 1. Application в Dokploy
-
-- **Provider:** Git (этот репозиторий)
 - **Build Type:** `Dockerfile`
 - **Dockerfile path:** `Dockerfile`
 - **Docker context:** `.`
 - **Port:** `80`
-- **Healthcheck path (если есть в UI):** `/healthz`
 
-### 2. Переменные окружения (Dokploy Environment)
+### Build Arguments (обязательно)
 
-Задайте в **Environment** приложения (обычный runtime контейнера):
+Vite вшивает переменные **только при сборке**. В Dokploy задайте их как **Build Arguments** (или Environment с галочкой *Available at build time*):
 
-| Переменная | Назначение |
+| Имя | Значение |
 |---|---|
-| `VITE_SUPABASE_URL` | URL Supabase API |
-| `VITE_SUPABASE_ANON_KEY` | Публичный anon-ключ (RLS) |
+| `VITE_SUPABASE_URL` | URL вашего Supabase |
+| `VITE_SUPABASE_ANON_KEY` | anon key |
 
-При старте `entrypoint` вшивает значения в `index.html`. Отдельного `/config.js` нет (будет 404).
+Без них сборка упадёт с явной ошибкой в логах Dokploy.
 
-После смены env достаточно **Redeploy/Restart**. Build Arguments не обязательны.
+После смены URL/ключа нужен **полный Redeploy (rebuild)**, не только Restart.
 
-### 3. Домен и Supabase Auth
+### После деплоя
 
-После выдачи домена приложения (свой или `*.sslip.io`):
+1. Supabase Auth → Site URL и Redirect URLs = домен фронта.
+2. Миграции применить к production-БД.
+3. `/config.js` не используется (404).
 
-1. В Supabase Auth → URL Configuration добавьте Site URL и Redirect URLs на этот домен.
-2. Убедитесь, что CORS/домен API уже разрешает запросы с этого origin (обычно через URL проекта Supabase).
-3. Примените миграции к production-БД до или вместе с выкладкой UI.
-
-### 4. Альтернатива без своего Dockerfile
-
-Можно использовать **Nixpacks** + **Static**, но тогда `VITE_*` нужны на этапе сборки. Для Dokploy Environment удобнее `Dockerfile` из репозитория.
-
-### 5. Локальная проверка образа (не на общей рабочей ВМ)
+### Локальная проверка образа
 
 ```bash
-docker build -t medtechservice-web .
-docker run --rm -p 8080:80 \
-  -e VITE_SUPABASE_URL="https://your-supabase.example" \
-  -e VITE_SUPABASE_ANON_KEY="your-anon-key" \
-  medtechservice-web
+docker build \
+  --build-arg VITE_SUPABASE_URL="https://your-supabase.example" \
+  --build-arg VITE_SUPABASE_ANON_KEY="your-anon-key" \
+  -t medtechservice-web .
+docker run --rm -p 8080:80 medtechservice-web
 ```
-
-Проверка: `http://127.0.0.1:8080/config.js` → 404; вход на `http://127.0.0.1:8080` должен открываться без ошибки env.
