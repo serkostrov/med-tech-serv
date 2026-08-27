@@ -3159,14 +3159,36 @@ td .resource-state {
 }
 
 .task-card-columns > .card {
-  display: flex;
-  flex-direction: column;
-  min-height: 100%;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  height: 100%;
+  margin-top: 0;
 }
 
-.task-card-columns .task-empty,
+.task-card-columns > .card + .card {
+  margin-top: 0;
+}
+
+.task-card-columns > .card > .card-header {
+  min-height: 52px;
+}
+
+.task-card-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  height: 100%;
+  padding: 12px 16px 16px;
+}
+
+.task-card-columns .task-card-list,
+.task-card-columns .task-empty {
+  flex: 1 1 auto;
+}
+
 .task-card-columns .task-card-list {
-  flex: 1;
+  padding: 0;
 }
 
 .task-workflow-bar {
@@ -3210,10 +3232,14 @@ td .resource-state {
 }
 
 .task-empty {
-  display: grid;
-  justify-items: start;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: flex-start;
   gap: 8px;
-  margin: 8px 16px 16px;
+  box-sizing: border-box;
+  min-height: 148px;
+  margin: 0;
   padding: 20px 16px;
   border: 1px dashed var(--color-border);
   border-radius: var(--radius-md);
@@ -3223,12 +3249,21 @@ td .resource-state {
 
 .task-empty p {
   margin: 0;
+  max-width: 36ch;
   font-size: 13px;
   line-height: 1.45;
 }
 
+.card > .task-empty {
+  margin: 12px 16px 16px;
+}
+
 .task-parts-card {
   overflow: hidden;
+}
+
+.task-card-panel > .task-parts-add {
+  margin-top: 0;
 }
 
 .task-parts-add {
