@@ -32,18 +32,18 @@ SPA собирается в статику и отдаётся через nginx.
 - **Port:** `80`
 - **Healthcheck path (если есть в UI):** `/healthz`
 
-### 2. Переменные на этапе сборки (Dokploy)
+### 2. Переменные окружения (Dokploy Environment)
 
-Vite вшивает `VITE_*` в JS-бандл при `npm run build`. Отдельного публичного файла с env нет.
-
-В Dokploy → Environment / Build Arguments задайте **на этапе сборки**:
+Задайте в **Environment** приложения (обычный runtime контейнера):
 
 | Переменная | Назначение |
 |---|---|
 | `VITE_SUPABASE_URL` | URL Supabase API |
-| `VITE_SUPABASE_ANON_KEY` | Публичный anon-ключ (защищается RLS) |
+| `VITE_SUPABASE_ANON_KEY` | Публичный anon-ключ (RLS) |
 
-Anon-ключ по дизайну Supabase доступен клиенту; service role во фронт не передавайте.
+При старте `entrypoint` вшивает значения в `index.html`. Отдельного `/config.js` нет (будет 404).
+
+После смены env достаточно **Redeploy/Restart**. Build Arguments не обязательны.
 
 ### 3. Домен и Supabase Auth
 
@@ -55,22 +55,16 @@ Anon-ключ по дизайну Supabase доступен клиенту; serv
 
 ### 4. Альтернатива без своего Dockerfile
 
-Можно использовать **Nixpacks** + **Static**:
-
-- Build command: `npm ci && npm run build`
-- Publish directory: `dist`
-- **Is Static SPA:** включено (чтобы `/tasks/:id` открывались с nginx `try_files`)
-
-Рекомендуемый путь для production — `Dockerfile` из репозитория.
+Можно использовать **Nixpacks** + **Static**, но тогда `VITE_*` нужны на этапе сборки. Для Dokploy Environment удобнее `Dockerfile` из репозитория.
 
 ### 5. Локальная проверка образа (не на общей рабочей ВМ)
 
 ```bash
-docker build \
-  --build-arg VITE_SUPABASE_URL="https://your-supabase.example" \
-  --build-arg VITE_SUPABASE_ANON_KEY="your-anon-key" \
-  -t medtechservice-web .
-docker run --rm -p 8080:80 medtechservice-web
+docker build -t medtechservice-web .
+docker run --rm -p 8080:80 \
+  -e VITE_SUPABASE_URL="https://your-supabase.example" \
+  -e VITE_SUPABASE_ANON_KEY="your-anon-key" \
+  medtechservice-web
 ```
 
-Откройте `http://127.0.0.1:8080` и `http://127.0.0.1:8080/healthz`.
+Проверка: `http://127.0.0.1:8080/config.js` → 404; вход на `http://127.0.0.1:8080` должен открываться без ошибки env.
