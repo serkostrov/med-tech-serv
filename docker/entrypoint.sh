@@ -34,6 +34,8 @@ awk '
   { print }
 ' "$HTML" > "$tmp"
 mv "$tmp" "$HTML"
+# mktemp даёт 0600 — worker nginx не сможет открыть index.html
+chmod 644 "$HTML"
 rm -f /tmp/medtech-env.snippet
 
 exec nginx -g "daemon off;"
