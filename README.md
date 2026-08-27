@@ -32,18 +32,18 @@ SPA собирается в статику и отдаётся через nginx.
 - **Port:** `80`
 - **Healthcheck path (если есть в UI):** `/healthz`
 
-### 2. Переменные окружения (Dokploy Environment)
+### 2. Переменные на этапе сборки (Dokploy)
 
-Задайте в **Environment** приложения (обычные runtime-переменные контейнера — достаточно):
+Vite вшивает `VITE_*` в JS-бандл при `npm run build`. Отдельного публичного файла с env нет.
+
+В Dokploy → Environment / Build Arguments задайте **на этапе сборки**:
 
 | Переменная | Назначение |
 |---|---|
 | `VITE_SUPABASE_URL` | URL Supabase API |
-| `VITE_SUPABASE_ANON_KEY` | Публичный anon-ключ |
+| `VITE_SUPABASE_ANON_KEY` | Публичный anon-ключ (защищается RLS) |
 
-При старте контейнера `docker/entrypoint.sh` пишет `/config.js`, и SPA читает значения оттуда. Пересобирать образ из‑за смены URL/ключа не нужно — достаточно Redeploy / Restart.
-
-Публичный anon-ключ допустим на клиенте; service role и другие секреты **не** передавайте во фронт.
+Anon-ключ по дизайну Supabase доступен клиенту; service role во фронт не передавайте.
 
 ### 3. Домен и Supabase Auth
 
@@ -66,11 +66,11 @@ SPA собирается в статику и отдаётся через nginx.
 ### 5. Локальная проверка образа (не на общей рабочей ВМ)
 
 ```bash
-docker build -t medtechservice-web .
-docker run --rm -p 8080:80 \
-  -e VITE_SUPABASE_URL="https://your-supabase.example" \
-  -e VITE_SUPABASE_ANON_KEY="your-anon-key" \
-  medtechservice-web
+docker build \
+  --build-arg VITE_SUPABASE_URL="https://your-supabase.example" \
+  --build-arg VITE_SUPABASE_ANON_KEY="your-anon-key" \
+  -t medtechservice-web .
+docker run --rm -p 8080:80 medtechservice-web
 ```
 
-Откройте `http://127.0.0.1:8080` и `http://127.0.0.1:8080/config.js` — там должны быть ваши значения.
+Откройте `http://127.0.0.1:8080` и `http://127.0.0.1:8080/healthz`.
