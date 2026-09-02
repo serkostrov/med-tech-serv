@@ -340,6 +340,36 @@ function related(row: Row, key: string): Row {
   return asRow(value);
 }
 
+function mapPayerOption(row: Row): PayerOption {
+  const requisites = asRow(row.requisites);
+  return {
+    id: text(row, "id"),
+    name: text(row, "name"),
+    isActive: row.is_active !== false,
+    ...(optionalText(requisites, "inn") ? { inn: text(requisites, "inn") } : {}),
+    ...(optionalText(requisites, "kpp") ? { kpp: text(requisites, "kpp") } : {})
+  };
+}
+
+function mapOptionalPayer(value: unknown): PayerOption | undefined {
+  if (value == null) return undefined;
+  const row = Array.isArray(value) ? asRow(value[0]) : asRow(value);
+  if (!row.id) return undefined;
+  return mapPayerOption(row);
+}
+
+function mapContactOption(row: Row): SiteOption["contacts"][number] {
+  return {
+    id: text(row, "id"),
+    fullName: text(row, "full_name"),
+    phone: optionalText(row, "phone"),
+    email: optionalText(row, "email"),
+    isPrimary: row.is_primary === true,
+    isActive: row.is_active !== false,
+    ...(optionalText(row, "payer_id") ? { payerId: text(row, "payer_id") } : {})
+  };
+}
+
 export function publicApiErrorMessage(message: string | undefined, fallback = "Не получилось выполнить запрос"): string {
   const text = message?.trim() ?? "";
   if (!text) return fallback;
@@ -1095,30 +1125,62 @@ export class M2ApiClient {
   }
 
   public async listSites(includeInactive = false): Promise<readonly SiteOption[]> {
-    let request = this.db().from("sites").select("id, name, address, type, is_active, organization_id, site_contacts(id, full_name, phone, email, position, is_primary, is_active)").order("name");
-    if (!includeInactive) request = request.eq("is_active", true);
-    const { data, error } = await request;
-    throwIfError(error);
-    return (data ?? []).map((item) => {
+    const selectFull = "id, name, address, type, is_active, organization_id, notes, site_contacts(id, full_name, phone, email, position, is_primary, is_active, payer_id, payer:payers!payer_id(id, name, is_active, requisites)), site_payers(payers(id, name, is_active, requisites))";
+    const selectWithSitePayers = "id, name, address, type, is_active, organization_id, notes, site_contacts(id, full_name, phone, email, position, is_primary, is_active), site_payers(payers(id, name, is_active, requisites))";
+    const selectBasic = "id, name, address, type, is_active, organization_id, notes, site_contacts(id, full_name, phone, email, position, is_primary, is_active)";
+    const load = async (select: string) => {
+      let request = this.db().from("sites").select(select).order("name");
+      if (!includeInactive) request = request.eq("is_active", true);
+      return request;
+    };
+    let primary = await load(selectFull);
+    let rows: readonly unknown[] = primary.data ?? [];
+    let loadError = primary.error;
+    if (loadError && /payer_id|site_contacts_payer|payers!payer_id/i.test(loadError.message)) {
+      primary = await load(selectWithSitePayers);
+      rows = primary.data ?? [];
+      loadError = primary.error;
+    }
+    if (loadError && /site_payers/i.test(loadError.message)) {
+      const secondary = await load(selectBasic);
+      rows = secondary.data ?? [];
+      loadError = secondary.error;
+    }
+    throwIfError(loadError);
+    return rows.map((item) => {
       const row = asRow(item);
       const contacts = Array.isArray(row.site_contacts) ? row.site_contacts : [];
+      const sitePayers = Array.isArray(row.site_payers) ? row.site_payers : [];
+      const payersFromLinks = sitePayers.flatMap((link) => {
+        const payer = asRow(asRow(link).payers);
+        if (!payer.id) return [];
+        return [mapPayerOption(payer)];
+      });
+      const payerById = new Map(payersFromLinks.map((payer) => [payer.id, payer]));
       return {
         id: text(row, "id"),
         name: text(row, "name"),
         address: text(row, "address"),
         type: text(row, "type") === "group_company" ? "group_company" : "medical_facility",
         isActive: row.is_active !== false,
+        ...(optionalText(row, "notes") ? { notes: text(row, "notes") } : {}),
         contacts: contacts.map((contact) => {
           const contactRow = asRow(contact);
+          const linkedPayer = mapOptionalPayer(contactRow.payer);
+          if (linkedPayer) payerById.set(linkedPayer.id, linkedPayer);
           return {
             id: text(contactRow, "id"),
             fullName: text(contactRow, "full_name"),
             phone: optionalText(contactRow, "phone"),
             email: optionalText(contactRow, "email"),
             isPrimary: contactRow.is_primary === true,
-            isActive: contactRow.is_active !== false
+            isActive: contactRow.is_active !== false,
+            ...(optionalText(contactRow, "payer_id") ? { payerId: text(contactRow, "payer_id") } : linkedPayer ? { payerId: linkedPayer.id } : {}),
+            ...(linkedPayer?.inn ? { inn: linkedPayer.inn } : {}),
+            ...(linkedPayer?.kpp ? { kpp: linkedPayer.kpp } : {})
           };
-        })
+        }),
+        payers: [...payerById.values()]
       };
     });
   }
@@ -1128,17 +1190,17 @@ export class M2ApiClient {
     if (!includeInactive) request = request.eq("is_active", true);
     const { data, error } = await request;
     throwIfError(error);
-    return (data ?? []).map((item) => {
-      const row = asRow(item);
-      const requisites = asRow(row.requisites);
-      return {
-        id: text(row, "id"),
-        name: text(row, "name"),
-        isActive: row.is_active !== false,
-        ...(optionalText(requisites, "inn") ? { inn: text(requisites, "inn") } : {}),
-        ...(optionalText(requisites, "kpp") ? { kpp: text(requisites, "kpp") } : {})
-      };
-    });
+    return (data ?? []).map((item) => mapPayerOption(asRow(item)));
+  }
+
+  public async linkPayerToSite(siteId: string, payerId: string): Promise<void> {
+    const { error } = await this.db().from("site_payers").upsert({ site_id: siteId, payer_id: payerId }, { onConflict: "site_id,payer_id" });
+    throwIfError(error);
+  }
+
+  public async unlinkPayerFromSite(siteId: string, payerId: string): Promise<void> {
+    const { error } = await this.db().from("site_payers").delete().eq("site_id", siteId).eq("payer_id", payerId);
+    throwIfError(error);
   }
 
   public async createSite(input: Readonly<Record<string, unknown>>): Promise<SiteOption> {
@@ -1146,7 +1208,8 @@ export class M2ApiClient {
       name: input.name,
       address: input.address ?? "",
       type: input.type ?? "medical_facility",
-      organization_id: input.organizationId ?? null
+      organization_id: input.organizationId ?? null,
+      notes: input.notes ?? null
     }).select("id").single();
     throwIfError(error);
     const sites = await this.listSites(true);
@@ -1160,6 +1223,7 @@ export class M2ApiClient {
     if (input.name !== undefined) patch.name = input.name;
     if (input.address !== undefined) patch.address = input.address;
     if (input.type !== undefined) patch.type = input.type;
+    if (input.notes !== undefined) patch.notes = input.notes;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
     const { error } = await this.db().from("sites").update(patch).eq("id", id);
     throwIfError(error);
@@ -1173,24 +1237,22 @@ export class M2ApiClient {
   }
 
   public async createContact(siteId: string, input: Readonly<Record<string, unknown>>): Promise<SiteOption["contacts"][number]> {
-    const { data, error } = await this.db().from("site_contacts").insert({
+    const payload: Row = {
       site_id: siteId,
       full_name: input.fullName ?? input.full_name,
       phone: input.phone ?? null,
       email: input.email ?? null,
       position: input.position ?? null,
       is_primary: input.isPrimary === true
-    }).select("id, full_name, phone, email, position, is_primary, is_active").single();
-    throwIfError(error);
-    const row = asRow(data);
-    return {
-      id: text(row, "id"),
-      fullName: text(row, "full_name"),
-      phone: optionalText(row, "phone"),
-      email: optionalText(row, "email"),
-      isPrimary: row.is_primary === true,
-      isActive: row.is_active !== false
     };
+    if (input.payerId !== undefined) payload.payer_id = input.payerId || null;
+    let { data, error } = await this.db().from("site_contacts").insert(payload).select("id, full_name, phone, email, position, is_primary, is_active, payer_id").single();
+    if (error && /payer_id/i.test(error.message)) {
+      delete payload.payer_id;
+      ({ data, error } = await this.db().from("site_contacts").insert(payload).select("id, full_name, phone, email, position, is_primary, is_active").single());
+    }
+    throwIfError(error);
+    return mapContactOption(asRow(data));
   }
 
   public async updateContact(_siteId: string, contactId: string, input: Readonly<Record<string, unknown>>): Promise<SiteOption["contacts"][number]> {
@@ -1201,50 +1263,140 @@ export class M2ApiClient {
     if (input.position !== undefined) patch.position = input.position;
     if (input.isPrimary !== undefined) patch.is_primary = input.isPrimary;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
-    const { data, error } = await this.db().from("site_contacts").update(patch).eq("id", contactId).select("id, full_name, phone, email, position, is_primary, is_active").single();
+    if (input.payerId !== undefined) patch.payer_id = input.payerId || null;
+    let { data, error } = await this.db().from("site_contacts").update(patch).eq("id", contactId).select("id, full_name, phone, email, position, is_primary, is_active, payer_id").single();
+    if (error && /payer_id/i.test(error.message)) {
+      delete patch.payer_id;
+      ({ data, error } = await this.db().from("site_contacts").update(patch).eq("id", contactId).select("id, full_name, phone, email, position, is_primary, is_active").single());
+    }
     throwIfError(error);
-    const row = asRow(data);
-    return {
-      id: text(row, "id"),
-      fullName: text(row, "full_name"),
-      phone: optionalText(row, "phone"),
-      email: optionalText(row, "email"),
-      isPrimary: row.is_primary === true,
-      isActive: row.is_active !== false
-    };
+    return mapContactOption(asRow(data));
   }
 
   public async removeContact(siteId: string, contactId: string): Promise<{ readonly mode: "deactivated"; readonly after: SiteOption["contacts"][number] }> {
     return { mode: "deactivated", after: await this.updateContact(siteId, contactId, { isActive: false }) };
   }
 
-  public async createPayer(input: Readonly<Record<string, unknown>>): Promise<{ readonly id: string; readonly name: string; readonly isActive: boolean; readonly requisites: { readonly inn?: string; readonly kpp?: string } }> {
-    const { data, error } = await this.db().from("payers").insert({
-      name: input.name,
-      requisites: { inn: input.inn, kpp: input.kpp }
-    }).select("id, name, is_active, requisites").single();
-    throwIfError(error);
-    const row = asRow(data);
-    const requisites = asRow(row.requisites);
-    return {
-      id: text(row, "id"),
-      name: text(row, "name"),
-      isActive: row.is_active !== false,
+  /** Единый человек площадки: контакт + плательщик с теми же ФИО/реквизитами. */
+  public async createSitePerson(siteId: string, input: {
+    readonly fullName: string;
+    readonly phone?: string;
+    readonly email?: string;
+    readonly inn?: string;
+    readonly kpp?: string;
+  }): Promise<void> {
+    const payer = await this.createPayer({
+      name: input.fullName,
       requisites: {
-        ...(optionalText(requisites, "inn") ? { inn: text(requisites, "inn") } : {}),
-        ...(optionalText(requisites, "kpp") ? { kpp: text(requisites, "kpp") } : {})
-      }
-    };
+        ...(input.inn ? { inn: input.inn } : {}),
+        ...(input.kpp ? { kpp: input.kpp } : {})
+      },
+      siteId
+    });
+    await this.createContact(siteId, {
+      fullName: input.fullName,
+      ...(input.phone ? { phone: input.phone } : {}),
+      ...(input.email ? { email: input.email } : {}),
+      payerId: payer.id
+    });
   }
 
-  public async updatePayer(id: string, input: Readonly<Record<string, unknown>>): Promise<unknown> {
+  public async updateSitePerson(siteId: string, person: {
+    readonly contactId?: string;
+    readonly payerId?: string;
+    readonly fullName: string;
+    readonly phone?: string;
+    readonly email?: string;
+    readonly inn?: string;
+    readonly kpp?: string;
+  }): Promise<void> {
+    const requisites = {
+      ...(person.inn ? { inn: person.inn } : {}),
+      ...(person.kpp ? { kpp: person.kpp } : {})
+    };
+    let payerId = person.payerId;
+    if (payerId) {
+      await this.updatePayer(payerId, { name: person.fullName, requisites });
+      await this.linkPayerToSite(siteId, payerId);
+    } else {
+      const created = await this.createPayer({ name: person.fullName, requisites, siteId });
+      payerId = created.id;
+    }
+    if (person.contactId) {
+      await this.updateContact(siteId, person.contactId, {
+        fullName: person.fullName,
+        phone: person.phone || null,
+        email: person.email || null,
+        payerId
+      });
+      return;
+    }
+    await this.createContact(siteId, {
+      fullName: person.fullName,
+      ...(person.phone ? { phone: person.phone } : {}),
+      ...(person.email ? { email: person.email } : {}),
+      payerId
+    });
+  }
+
+  public async setSitePersonActive(siteId: string, person: {
+    readonly contactId?: string;
+    readonly payerId?: string;
+  }, isActive: boolean): Promise<void> {
+    if (person.contactId) {
+      if (isActive) await this.updateContact(siteId, person.contactId, { isActive: true });
+      else await this.removeContact(siteId, person.contactId);
+    }
+    if (person.payerId) {
+      if (isActive) await this.updatePayer(person.payerId, { isActive: true });
+      else await this.removePayer(person.payerId);
+    }
+  }
+
+  public async adoptOrphanPayer(siteId: string, payerId: string): Promise<void> {
+    const payer = (await this.listPayers(true)).find((item) => item.id === payerId);
+    if (!payer) throw new M2ApiError(404, "Плательщик не найден");
+    await this.linkPayerToSite(siteId, payerId);
+    await this.createContact(siteId, {
+      fullName: payer.name,
+      payerId
+    });
+  }
+
+  public async createPayer(input: Readonly<Record<string, unknown>>): Promise<PayerOption> {
+    const requisitesSource = asRow(input.requisites ?? input);
+    const inn = optionalText(requisitesSource, "inn") ?? optionalText(input, "inn");
+    const kpp = optionalText(requisitesSource, "kpp") ?? optionalText(input, "kpp");
+    const { data, error } = await this.db().from("payers").insert({
+      name: input.name,
+      requisites: {
+        ...(inn ? { inn } : {}),
+        ...(kpp ? { kpp } : {})
+      }
+    }).select("id, name, is_active, requisites").single();
+    throwIfError(error);
+    const payer = mapPayerOption(asRow(data));
+    const siteId = optionalText(input, "siteId");
+    if (siteId) await this.linkPayerToSite(siteId, payer.id);
+    return payer;
+  }
+
+  public async updatePayer(id: string, input: Readonly<Record<string, unknown>>): Promise<PayerOption> {
     const patch: Row = {};
     if (input.name !== undefined) patch.name = input.name;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
-    if (input.inn !== undefined || input.kpp !== undefined) patch.requisites = { inn: input.inn, kpp: input.kpp };
-    const { error } = await this.db().from("payers").update(patch).eq("id", id);
+    const requisitesSource = input.requisites !== undefined ? asRow(input.requisites) : input;
+    if (input.requisites !== undefined || input.inn !== undefined || input.kpp !== undefined) {
+      const inn = optionalText(requisitesSource, "inn") ?? optionalText(input, "inn");
+      const kpp = optionalText(requisitesSource, "kpp") ?? optionalText(input, "kpp");
+      patch.requisites = {
+        ...(inn ? { inn } : {}),
+        ...(kpp ? { kpp } : {})
+      };
+    }
+    const { data, error } = await this.db().from("payers").update(patch).eq("id", id).select("id, name, is_active, requisites").single();
     throwIfError(error);
-    return {};
+    return mapPayerOption(asRow(data));
   }
 
   public async removePayer(id: string): Promise<unknown> {

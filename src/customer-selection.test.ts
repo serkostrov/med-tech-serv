@@ -12,7 +12,8 @@ const sites: readonly SiteOption[] = [
     contacts: [
       { id: "contact-one", fullName: "Мария Тестова", phone: "+7 000 000-00-01", email: "maria@example.test", isPrimary: true, isActive: true },
       { id: "contact-two", fullName: "Павел Тестов", phone: "+7 000 000-00-02", email: "pavel@example.test", isPrimary: false, isActive: true }
-    ]
+    ],
+    payers: []
   },
   {
     id: "site-group",
@@ -20,7 +21,8 @@ const sites: readonly SiteOption[] = [
     address: "г. Тестовый, пр. Учебный, д. 2",
     type: "group_company",
     isActive: true,
-    contacts: []
+    contacts: [],
+    payers: []
   }
 ];
 

@@ -1931,7 +1931,7 @@ function ReferencesWorkspace({ notificationTemplates = false }: { readonly notif
 
 function CustomersPage() {
   return <>
-    <PageIntro description="Площадки, контакты и плательщики для заявок и счетов." title="Клиенты" />
+    <PageIntro description="Площадки и люди в них — для выезда и для счетов." title="Клиенты" />
     <CustomerReferencesPage />
   </>;
 }

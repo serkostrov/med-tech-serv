@@ -7,6 +7,9 @@ export interface ContactOption {
   readonly email?: string;
   readonly isPrimary: boolean;
   readonly isActive: boolean;
+  readonly payerId?: string;
+  readonly inn?: string;
+  readonly kpp?: string;
 }
 
 export interface SiteOption {
@@ -17,6 +20,7 @@ export interface SiteOption {
   readonly isActive: boolean;
   readonly notes?: string;
   readonly contacts: readonly ContactOption[];
+  readonly payers: readonly PayerOption[];
 }
 
 export interface PayerOption {

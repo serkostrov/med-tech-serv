@@ -5902,8 +5902,7 @@ td .resource-state {
   gap: 12px;
 }
 .reference-workspace-grid__wide { grid-column: 1 / -1; }
-.reference-workspace-grid .card,
-.customer-references > .card {
+.reference-workspace-grid .card {
   display: flex;
   min-width: 0;
   min-height: 320px;
@@ -5911,34 +5910,229 @@ td .resource-state {
   margin: 0;
   flex-direction: column;
 }
-.reference-workspace-grid .card + .card,
-.customer-references > .card + .card { margin-top: 0; }
+.reference-workspace-grid .card + .card { margin-top: 0; }
 .reference-workspace-grid .resource-state,
-.reference-workspace-grid .table-scroll,
-.customer-references .resource-state,
-.customer-references .table-scroll {
+.reference-workspace-grid .table-scroll {
   flex: 1 1 auto;
   min-height: 0;
 }
-.reference-workspace-grid .table-scroll,
-.customer-references .table-scroll { overflow: auto; }
-.reference-workspace-grid .data-table,
-.customer-references .data-table { min-width: 0; }
-.reference-workspace-grid .data-table td,
-.customer-references .data-table td { vertical-align: top; }
+.reference-workspace-grid .table-scroll { overflow: auto; }
+.reference-workspace-grid .data-table { min-width: 0; }
+.reference-workspace-grid .data-table td { vertical-align: top; }
 
 .customer-references {
   display: grid;
-  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
-  grid-template-areas:
-    "sites contacts"
-    "payers payers";
-  align-items: stretch;
+  gap: 16px;
+}
+
+.customer-references__toolbar {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.customer-references__hint {
+  margin: 0;
+  max-width: 42rem;
+  color: var(--color-ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.customer-site-list {
+  display: grid;
   gap: 12px;
 }
-.customer-references__sites { grid-area: sites; }
-.customer-references__contacts { grid-area: contacts; }
-.customer-references__payers { grid-area: payers; }
+
+.customer-site-card {
+  margin: 0;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 14px;
+  background: var(--color-surface, #fff);
+  overflow: hidden;
+}
+
+.customer-site-card--inactive {
+  opacity: 0.78;
+}
+
+.customer-site-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 16px;
+  background: #f7fafb;
+  border-bottom: 1px solid var(--color-border-soft);
+}
+
+.customer-site-card__toggle {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  min-width: 0;
+  flex: 1;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.customer-site-card__toggle:hover .customer-site-card__title strong {
+  color: var(--color-accent);
+}
+
+.customer-site-card__chevron {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  margin-top: 7px;
+  border-right: 2px solid var(--color-ink-soft);
+  border-bottom: 2px solid var(--color-ink-soft);
+  transform: rotate(-45deg);
+  transition: transform 0.15s ease;
+}
+
+.customer-site-card__chevron.is-open {
+  margin-top: 5px;
+  transform: rotate(45deg);
+}
+
+.customer-site-card__title {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.customer-site-card__title strong {
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.3;
+}
+
+.customer-site-card__title small {
+  color: var(--color-ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.customer-site-card__meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.customer-site-card__count {
+  color: var(--color-ink-soft);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.customer-site-card__people {
+  display: grid;
+  gap: 12px;
+  padding: 12px 16px 16px;
+}
+
+.customer-site-card__empty {
+  margin: 0;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: #f8fafb;
+  color: var(--color-ink-soft);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.customer-site-card__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.customer-people-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.customer-person {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 11px;
+  background: #fff;
+}
+
+.customer-person.is-inactive {
+  opacity: 0.62;
+}
+
+.customer-person__body {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.customer-person__line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.customer-person__line strong {
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.customer-person p {
+  margin: 0;
+  color: var(--color-ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.customer-orphans {
+  padding: 16px;
+}
+
+.customer-orphans__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.customer-orphans__header h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.customer-orphans__header p {
+  margin: 0;
+  color: var(--color-ink-soft);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.customer-people-list--orphan .customer-person {
+  background: #fff;
+}
 
 .permission-matrix { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 24px; padding: 0; border: 0; }
 .permission-matrix > legend { width: 100%; margin-bottom: 4px; color: var(--color-ink); font-size: 14px; font-weight: 650; }
@@ -5958,23 +6152,9 @@ td .resource-state {
 .analytics-title h2 { margin: 0; font-size: 14px; }
 .analytics-title span { color: var(--color-ink-soft); font-size: 12px; }
 
-@media (min-width: 1180px) {
-  .customer-references {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
-    grid-template-areas: "sites contacts payers";
-  }
-}
-
 @media (max-width: 980px) {
   .reference-workspace-grid { grid-template-columns: 1fr; }
   .reference-workspace-grid__wide { grid-column: auto; }
-  .customer-references {
-    grid-template-columns: 1fr;
-    grid-template-areas:
-      "sites"
-      "contacts"
-      "payers";
-  }
   .permission-matrix { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .equipment-overview__stats,
   .equipment-overview__details,
@@ -5983,6 +6163,13 @@ td .resource-state {
   .detail-list.equipment-overview__details > div {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+  .customer-site-card__header {
+    flex-direction: column;
+  }
+  .customer-site-card__meta {
+    width: 100%;
+    justify-content: flex-start;
   }
 }
 
