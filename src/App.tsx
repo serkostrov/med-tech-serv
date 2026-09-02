@@ -1091,13 +1091,34 @@ function EquipmentPassportForm({
   readonly onOpenChange: (open: boolean) => void;
   readonly onSave: (record: EquipmentUiRecord, files: readonly File[]) => Promise<void>;
 }) {
-  const firstManufacturer = references.manufacturers[0];
-  const [manufacturerId, setManufacturerId] = useState(record?.manufacturerId || firstManufacturer?.id || "");
-  const firstModel = references.models.find((item) => item.manufacturerId === manufacturerId);
-  const [modelId, setModelId] = useState(record?.modelId || firstModel?.id || "");
+  const [manufacturerId, setManufacturerId] = useState(record?.manufacturerId ?? "");
+  const [modelId, setModelId] = useState(record?.modelId ?? "");
   const [selectedFiles, setSelectedFiles] = useState<readonly File[]>([]);
   const [error, setError] = useState<string | null>(null);
   const availableModels = references.models.filter((item) => item.manufacturerId === manufacturerId);
+
+  useEffect(() => {
+    if (!open) return;
+    if (record) {
+      setManufacturerId(record.manufacturerId ?? "");
+      setModelId(record.modelId ?? "");
+      setSelectedFiles([]);
+      setError(null);
+      return;
+    }
+    const nextManufacturerId = references.manufacturers[0]?.id ?? "";
+    const nextModelId = references.models.find((item) => item.manufacturerId === nextManufacturerId)?.id ?? "";
+    setManufacturerId(nextManufacturerId);
+    setModelId(nextModelId);
+    setSelectedFiles([]);
+    setError(null);
+  }, [open, record, references]);
+
+  useEffect(() => {
+    if (!manufacturerId || record) return;
+    if (availableModels.some((item) => item.id === modelId)) return;
+    setModelId(availableModels[0]?.id ?? "");
+  }, [availableModels, manufacturerId, modelId, record]);
 
   const changeManufacturer = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextManufacturerId = event.target.value;
