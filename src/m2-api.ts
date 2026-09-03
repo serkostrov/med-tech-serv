@@ -388,6 +388,9 @@ export function publicApiErrorMessage(message: string | undefined, fallback = "�
   if (/tasks_engineer_required_after_assignment/iu.test(text)) {
     return "Для этого статуса нужно назначить инженера.";
   }
+  if (/invalid input syntax for type uuid|22P02/iu.test(text)) {
+    return "Некорректное значение фильтра. Сбросьте фильтры и выберите значение из списка.";
+  }
   if (/[а-яё]/iu.test(text)) return text;
   if (/more than one relationship was found|Could not embed/iu.test(text)) {
     return "Не получилось загрузить связанные данные. Обновите страницу.";
@@ -907,13 +910,42 @@ export class M2ApiClient {
     const offset = query.offset ?? 0;
     let request = this.db().from("equipment").select(EQUIPMENT_SELECT, { count: "exact" }).order("serial_number").range(offset, offset + limit - 1);
     if (query.status) request = request.eq("status_code", query.status);
-    if (query.site) request = request.eq("current_site_id", query.site);
-    if (query.payer) request = request.eq("current_payer_id", query.payer);
-    if (query.manufacturer) request = request.eq("manufacturer_id", query.manufacturer);
-    if (query.search?.trim()) request = request.ilike("serial_number", `%${query.search.trim()}%`);
+    if (query.site) {
+      const siteId = await this.resolveFilterId("sites", query.site);
+      if (!siteId) return paged([], 0, limit, offset);
+      request = request.eq("current_site_id", siteId);
+    }
+    if (query.payer) {
+      const payerId = await this.resolveFilterId("payers", query.payer);
+      if (!payerId) return paged([], 0, offset, offset);
+      request = request.eq("current_payer_id", payerId);
+    }
+    if (query.manufacturer) {
+      const manufacturerId = await this.resolveFilterId("manufacturers", query.manufacturer);
+      if (!manufacturerId) return paged([], 0, offset, offset);
+      request = request.eq("manufacturer_id", manufacturerId);
+    }
+    if (query.search?.trim()) {
+      const term = query.search.trim().replace(/[%_]/gu, "");
+      if (term) request = request.or(`serial_number.ilike.%${term}%,notes.ilike.%${term}%`);
+    }
     const { data, error, count } = await request;
     throwIfError(error);
     return paged((data ?? []).map((item) => mapEquipment(asRow(item))), count ?? 0, limit, offset);
+  }
+
+  /** Фильтр мог прийти id или отображаемым именем (старый Select без value). */
+  private async resolveFilterId(
+    table: "manufacturers" | "sites" | "payers",
+    value: string | undefined
+  ): Promise<string | undefined> {
+    const raw = value?.trim();
+    if (!raw) return undefined;
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(raw)) return raw;
+    const { data, error } = await this.db().from(table).select("id").ilike("name", raw).limit(1);
+    throwIfError(error);
+    const id = optionalText(asRow(data?.[0]), "id");
+    return id;
   }
 
   public async listEquipment(): Promise<readonly EquipmentApiRecord[]> {

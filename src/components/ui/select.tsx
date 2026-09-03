@@ -29,7 +29,13 @@ function collectOptions(children: React.ReactNode): SelectOption[] {
     if (!React.isValidElement<{ value?: string | number; disabled?: boolean; children?: React.ReactNode }>(child)) return;
     if (child.type !== "option") return;
     const label = optionLabel(child.props.children);
-    const value = child.props.value === undefined ? label : String(child.props.value);
+    // Без value React/кастомный Select раньше подставлял текст — id-фильтры ломались (uuid ≠ «Beckman Coulter»).
+    const key = typeof child.key === "string" ? child.key : undefined;
+    const value = child.props.value !== undefined
+      ? String(child.props.value)
+      : key && key !== label
+        ? key
+        : label;
     options.push({
       value,
       label,

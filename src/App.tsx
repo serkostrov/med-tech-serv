@@ -1674,10 +1674,10 @@ function EquipmentPage({ engineer = false }: { readonly engineer?: boolean }) {
           {initialLoading ? null : <span className="muted search-hint">{total} приборов</span>}
         </div>
         <div className="equipment-registry-filters" aria-label="Фильтры списка приборов">
-          <label>Производитель<Select onChange={(event) => changeFilter("manufacturer", event.target.value)} value={filters.manufacturer}><option value="">Все производители</option>{references.manufacturers.map((value) => <option key={value.id}>{value.name}</option>)}</Select></label>
+          <label>Производитель<Select onChange={(event) => changeFilter("manufacturer", event.target.value)} value={filters.manufacturer}><option value="">Все производители</option>{references.manufacturers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></label>
           <label>Статус<Select onChange={(event) => changeFilter("status", event.target.value)} value={filters.status}><option value="">Все статусы</option>{references.statuses.map((value) => <option key={value.code} value={value.code}>{value.name}</option>)}</Select></label>
-          <label>Площадка<Select onChange={(event) => changeFilter("site", event.target.value)} value={filters.site}><option value="">Все площадки</option>{sites.map((value) => <option key={value.id}>{value.name}</option>)}</Select></label>
-          <label>Плательщик<Select onChange={(event) => changeFilter("payer", event.target.value)} value={filters.payer}><option value="">Все плательщики</option>{payers.map((value) => <option key={value.id}>{value.name}</option>)}</Select></label>
+          <label>Площадка<Select onChange={(event) => changeFilter("site", event.target.value)} value={filters.site}><option value="">Все площадки</option>{sites.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></label>
+          <label>Плательщик<Select onChange={(event) => changeFilter("payer", event.target.value)} value={filters.payer}><option value="">Все плательщики</option>{payers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></label>
           <Button onClick={() => { setFilters(EMPTY_EQUIPMENT_REGISTRY_FILTERS); setPageIndex(0); }} variant="secondary">Сбросить</Button>
         </div>
       </section>

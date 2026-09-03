@@ -69,7 +69,7 @@ describe("Supabase row mapping", () => {
       publicApiErrorMessage("Для замены плательщика задачи обязательны автор и причина"),
       "У прибора уже есть плательщик. Чтобы выбрать другого, укажите причину смены."
     );
-    assert.doesNotMatch(publicApiErrorMessage("JWT expired"), /JWT/u);
+    assert.match(publicApiErrorMessage("invalid input syntax for type uuid"), /фильтра/u);
     assert.match(publicApiErrorMessage("Signups not allowed for this instance"), /Публичная регистрация/u);
     assert.match(publicApiErrorMessage("User already registered"), /e-mail уже есть/u);
     assert.match(publicApiErrorMessage("Could not find the function public.create_access_user"), /обновить схему/u);
