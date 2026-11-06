@@ -93,6 +93,8 @@ export interface TaskApiRecord {
   readonly maintenancePlanId?: string;
   readonly siteId?: string;
   readonly siteContactId?: string;
+  readonly initiatorContactId?: string;
+  readonly initiatorName?: string;
   readonly payerId?: string;
   readonly equipmentId?: string;
   readonly engineerId?: string;
@@ -129,6 +131,10 @@ export interface TaskApiRecord {
     readonly contactPhone?: string;
     readonly contactEmail?: string;
     readonly payerName?: string;
+  };
+  readonly initiator?: {
+    readonly contactId?: string;
+    readonly fullName?: string;
   };
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -432,6 +438,25 @@ function throwIfError(error: { readonly message?: string } | null, fallback = "�
   if (error) throw new M2ApiError(400, publicApiErrorMessage(error.message, fallback));
 }
 
+/** Любой uuid-подобный id (в т.ч. v7), без жёсткой проверки version/variant. */
+function isFilterUuid(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu.test(value);
+}
+
+function normalizeFilterValue(value: string | undefined): string | undefined {
+  const raw = value?.trim().replace(/^(?:\.\$?)+/u, "");
+  return raw || undefined;
+}
+
+function escapeIlikePattern(value: string): string {
+  return value.replace(/\\/gu, "\\\\").replace(/[%_]/gu, "\\$&");
+}
+
+/** Убирает метасимволы PostgREST из поисковой строки внутри `.or(...)`. */
+function escapePostgrestSearchTerm(value: string): string {
+  return value.trim().replace(/[%_,.()\\]/gu, "");
+}
+
 function paged<Item>(items: readonly Item[], total: number, limit: number, offset: number): ApiPage<Item> {
   return { items, total, limit, offset };
 }
@@ -451,6 +476,23 @@ const EQUIPMENT_SELECT = `
 
 const TASK_SELECT = `
   id, number, title, status_code, work_type_code, work_modifier, hours, priority,
+  is_maintenance_plan, maintenance_plan_id, site_id, site_contact_id, initiator_contact_id,
+  initiator_name, payer_id, equipment_id,
+  engineer_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
+  work_started_at, work_finished_at, contract_id, primary_task_id, reason_code,
+  call_reason, work_description, recommendations, user_remarks, meter_reading,
+  work_completed, apparatus_approved, customer_has_no_claims, continued_in_primary,
+  cancellation_reason, rework_comment, created_at, updated_at,
+  site:sites!site_id(name, address),
+  payer:payers!payer_id(name),
+  contact:site_contacts!site_contact_id(full_name, phone, email),
+  initiator_contact:site_contacts!initiator_contact_id(full_name),
+  contract:contracts(number),
+  status:task_statuses(code, name)
+`;
+
+const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
+  id, number, title, status_code, work_type_code, work_modifier, hours, priority,
   is_maintenance_plan, maintenance_plan_id, site_id, site_contact_id, payer_id, equipment_id,
   engineer_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
   work_started_at, work_finished_at, contract_id, primary_task_id, reason_code,
@@ -463,6 +505,9 @@ const TASK_SELECT = `
   contract:contracts(number),
   status:task_statuses(code, name)
 `;
+
+/** После 0007 в tasks появляются initiator_contact_id / initiator_name. Пока миграции нет — select без них. */
+let tasksInitiatorContactAvailable: boolean | null = null;
 
 export function mapEquipment(row: Row): EquipmentApiRecord {
   const manufacturer = related(row, "manufacturer");
@@ -497,6 +542,7 @@ export function mapTask(row: Row): TaskApiRecord {
   const site = related(row, "site");
   const payer = related(row, "payer");
   const contact = related(row, "contact");
+  const initiatorContact = related(row, "initiator_contact");
   const contract = related(row, "contract");
   const periodTo = optionalText(row, "deadline_to");
   const status = text(row, "status_code");
@@ -504,6 +550,8 @@ export function mapTask(row: Row): TaskApiRecord {
   const hours = numberValue(row.hours);
   const meterReading = numberValue(row.meter_reading);
   const workModifier = text(row, "work_modifier");
+  const initiatorContactId = optionalText(row, "initiator_contact_id");
+  const initiatorName = optionalText(row, "initiator_name") ?? optionalText(initiatorContact, "full_name");
   return {
     id: text(row, "id"),
     number: text(row, "number"),
@@ -517,6 +565,8 @@ export function mapTask(row: Row): TaskApiRecord {
     maintenancePlanId: optionalText(row, "maintenance_plan_id"),
     siteId: optionalText(row, "site_id"),
     siteContactId: optionalText(row, "site_contact_id"),
+    initiatorContactId,
+    ...(initiatorName ? { initiatorName } : {}),
     payerId: optionalText(row, "payer_id"),
     equipmentId: optionalText(row, "equipment_id"),
     engineerId: optionalText(row, "engineer_id"),
@@ -551,6 +601,9 @@ export function mapTask(row: Row): TaskApiRecord {
       contactEmail: optionalText(contact, "email"),
       payerName: optionalText(payer, "name")
     },
+    ...(initiatorContactId || initiatorName
+      ? { initiator: { ...(initiatorContactId ? { contactId: initiatorContactId } : {}), ...(initiatorName ? { fullName: initiatorName } : {}) } }
+      : {}),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
   };
@@ -599,11 +652,43 @@ export class M2ApiClient {
     return data.user.id;
   }
 
+  private isMissingInitiatorContactSchema(error: {
+    readonly message?: string;
+    readonly code?: string;
+    readonly details?: string;
+    readonly hint?: string;
+  } | null): boolean {
+    if (!error) return false;
+    const blob = [error.message, error.code, error.details, error.hint].filter(Boolean).join(" ");
+    return /initiator_contact|initiator_name|PGRST204|PGRST200|42703|schema cache|does not exist|Could not find.*column|Could not find.*relationship/iu.test(blob);
+  }
+
+  private taskSelect(): string {
+    return tasksInitiatorContactAvailable === false ? TASK_SELECT_WITHOUT_INITIATOR_CONTACT : TASK_SELECT;
+  }
+
+  private markInitiatorContactUnavailable(): void {
+    tasksInitiatorContactAvailable = false;
+  }
+
+  private markInitiatorContactAvailable(): void {
+    if (tasksInitiatorContactAvailable == null) tasksInitiatorContactAvailable = true;
+  }
+
   private async loadTask(id: string): Promise<TaskApiRecord> {
-    const { data, error } = await this.db().from("tasks").select(TASK_SELECT).eq("id", id).maybeSingle();
-    throwIfError(error);
-    if (!data) throw new M2ApiError(404, "Задача не найдена");
-    return mapTask(asRow(data));
+    const select = this.taskSelect();
+    const primary = await this.db().from("tasks").select(select).eq("id", id).maybeSingle();
+    if (primary.error && select === TASK_SELECT) {
+      this.markInitiatorContactUnavailable();
+      const fallback = await this.db().from("tasks").select(TASK_SELECT_WITHOUT_INITIATOR_CONTACT).eq("id", id).maybeSingle();
+      throwIfError(fallback.error);
+      if (!fallback.data) throw new M2ApiError(404, "Задача не найдена");
+      return mapTask(asRow(fallback.data));
+    }
+    throwIfError(primary.error);
+    if (!primary.data) throw new M2ApiError(404, "Задача не найдена");
+    if (select === TASK_SELECT) this.markInitiatorContactAvailable();
+    return mapTask(asRow(primary.data));
   }
 
   private async loadEquipment(id: string): Promise<EquipmentApiRecord> {
@@ -926,12 +1011,20 @@ export class M2ApiClient {
       request = request.eq("manufacturer_id", manufacturerId);
     }
     if (query.search?.trim()) {
-      const term = query.search.trim().replace(/[%_]/gu, "");
-      if (term) request = request.or(`serial_number.ilike.%${term}%,notes.ilike.%${term}%`);
+      const term = escapePostgrestSearchTerm(query.search);
+      if (term) {
+        request = request.or(
+          [`serial_number.ilike.%${term}%`, `notes.ilike.%${term}%`].join(",")
+        );
+      }
     }
     const { data, error, count } = await request;
+    // Старый Select мог прислать подпись вместо uuid — не роняем список, показываем пусто.
+    if (error && /invalid input syntax for type uuid|22P02/iu.test(error.message)) {
+      return paged([], 0, limit, offset);
+    }
     throwIfError(error);
-    return paged((data ?? []).map((item) => mapEquipment(asRow(item))), count ?? 0, limit, offset);
+    return paged((data ?? []).map((item) => mapEquipment(asRow(item))), count ?? 0, offset, offset);
   }
 
   /** Фильтр мог прийти id или отображаемым именем (старый Select без value). */
@@ -939,13 +1032,13 @@ export class M2ApiClient {
     table: "manufacturers" | "sites" | "payers",
     value: string | undefined
   ): Promise<string | undefined> {
-    const raw = value?.trim();
+    const raw = normalizeFilterValue(value);
     if (!raw) return undefined;
-    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(raw)) return raw;
-    const { data, error } = await this.db().from(table).select("id").ilike("name", raw).limit(1);
-    throwIfError(error);
-    const id = optionalText(asRow(data?.[0]), "id");
-    return id;
+    if (isFilterUuid(raw)) return raw;
+    const { data, error } = await this.db().from(table).select("id").ilike("name", escapeIlikePattern(raw)).limit(1);
+    // Ошибка справочника не должна ронять весь список приборов.
+    if (error) return undefined;
+    return optionalText(asRow(data?.[0]), "id");
   }
 
   public async listEquipment(): Promise<readonly EquipmentApiRecord[]> {
@@ -1079,7 +1172,25 @@ export class M2ApiClient {
       notes: input.notes ?? null
     }).select("id").single();
     throwIfError(error);
-    return this.loadEquipment(text(asRow(data), "id"));
+    const id = text(asRow(data), "id");
+    const siteId = typeof input.siteId === "string" ? input.siteId.trim() : "";
+    const payerId = typeof input.payerId === "string" ? input.payerId.trim() : "";
+    const happenedAt = new Date().toISOString();
+    if (siteId) {
+      await this.changeEquipmentAssignment(id, "site_change", {
+        targetId: siteId,
+        occurredAt: happenedAt,
+        comment: "Площадка при создании прибора"
+      });
+    }
+    if (payerId) {
+      await this.changeEquipmentAssignment(id, "payer_change", {
+        targetId: payerId,
+        occurredAt: happenedAt,
+        comment: "Плательщик при создании прибора"
+      });
+    }
+    return this.loadEquipment(id);
   }
 
   public async updateEquipment(id: string, input: Readonly<Record<string, unknown>>): Promise<EquipmentApiRecord> {
@@ -1099,7 +1210,7 @@ export class M2ApiClient {
     id: string,
     kind: "site_change" | "payer_change",
     input: { readonly targetId: string; readonly occurredAt: string; readonly comment: string }
-  ): Promise<unknown> {
+  ): Promise<EquipmentApiRecord> {
     const actor = await this.actorId();
     const fn = kind === "site_change" ? "change_equipment_site" : "change_equipment_payer";
     const args = kind === "site_change"
@@ -1107,7 +1218,7 @@ export class M2ApiClient {
       : { p_equipment_id: id, p_new_payer_id: input.targetId, p_happened_at: input.occurredAt, p_comment: input.comment, p_changed_by: actor };
     const { error } = await this.db().rpc(fn, args);
     throwIfError(error);
-    return {};
+    return this.loadEquipment(id);
   }
 
   public async addEquipmentHistory(id: string, input: Readonly<Record<string, unknown>>): Promise<EquipmentHistoryEvent> {
@@ -1453,16 +1564,36 @@ export class M2ApiClient {
     const offset = query.offset ?? 0;
     const ascending = query.sort === "deadline_asc" || query.sort === "updated_asc";
     const sortColumn = query.sort?.startsWith("deadline") ? "deadline_to" : "updated_at";
-    let request = this.db().from("tasks").select(TASK_SELECT, { count: "exact" }).order(sortColumn, { ascending }).range(offset, offset + limit - 1);
-    if (query.status) request = request.eq("status_code", query.status);
-    if (query.engineerId) request = request.eq("engineer_id", query.engineerId);
-    if (query.siteId) request = request.eq("site_id", query.siteId);
-    if (query.workTypeCode) request = request.eq("work_type_code", query.workTypeCode);
-    if (query.priority) request = request.eq("priority", query.priority);
-    if (query.search?.trim()) request = request.or(`number.ilike.%${query.search.trim()}%,title.ilike.%${query.search.trim()}%`);
-    const { data, error, count } = await request;
+    const applyTaskFilters = <T extends { eq: (column: string, value: string) => T; or: (filters: string) => T }>(request: T): T => {
+      let next = request;
+      if (query.status) next = next.eq("status_code", query.status);
+      if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
+      if (query.siteId) next = next.eq("site_id", query.siteId);
+      if (query.workTypeCode) next = next.eq("work_type_code", query.workTypeCode);
+      if (query.priority) next = next.eq("priority", query.priority);
+      if (query.search?.trim()) next = next.or(`number.ilike.%${query.search.trim()}%,title.ilike.%${query.search.trim()}%`);
+      return next;
+    };
+    const select = this.taskSelect();
+    const primary = await applyTaskFilters(
+      this.db().from("tasks").select(select, { count: "exact" }).order(sortColumn, { ascending }).range(offset, offset + limit - 1)
+    );
+    let rows = primary.data;
+    let error = primary.error;
+    let count = primary.count;
+    if (error && select === TASK_SELECT) {
+      this.markInitiatorContactUnavailable();
+      const fallback = await applyTaskFilters(
+        this.db().from("tasks").select(TASK_SELECT_WITHOUT_INITIATOR_CONTACT, { count: "exact" }).order(sortColumn, { ascending }).range(offset, offset + limit - 1)
+      );
+      rows = fallback.data as typeof rows;
+      error = fallback.error;
+      count = fallback.count;
+    } else if (!error && select === TASK_SELECT) {
+      this.markInitiatorContactAvailable();
+    }
     throwIfError(error);
-    const items = (data ?? []).map((item) => mapTask(asRow(item)));
+    const items = (rows ?? []).map((item) => mapTask(asRow(item)));
     const { count: newCount } = await this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "new");
     const { count: reviewCount } = await this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "under_review");
     return {
@@ -1565,7 +1696,8 @@ export class M2ApiClient {
     if (!input.equipmentId || !siteId || !payerId) {
       throw new M2ApiError(400, "Укажите прибор с площадкой и плательщиком в паспорте.");
     }
-    const { data, error } = await this.db().from("tasks").insert({
+    const callReason = typeof input.callReason === "string" ? input.callReason.trim() : "";
+    const payload = {
       title: input.title,
       work_type_code: String(input.workTypeCode || "diagnostics"),
       priority: input.priority ?? "planned",
@@ -1574,18 +1706,30 @@ export class M2ApiClient {
       equipment_id: input.equipmentId,
       site_id: siteId,
       site_contact_id: input.siteContactId ?? null,
+      initiator_contact_id: input.initiatorContactId ?? null,
       payer_id: payerId,
       engineer_id: input.engineerId ?? null,
       deadline_from: input.periodFrom ?? null,
       deadline_to: input.periodTo ?? null,
       call_date: input.callDate ?? new Date().toISOString().slice(0, 10),
       visit_date: input.visitDate ?? null,
+      call_reason: callReason || null,
       created_by: actor,
       ...(input.payerOverrideReason ? {
         payer_override_reason: input.payerOverrideReason,
         payer_overridden_by: actor
       } : {})
-    }).select("id").single();
+    };
+    let { data, error } = await this.db().from("tasks").insert(payload).select("id").single();
+    if (error && this.isMissingInitiatorContactSchema(error) && input.initiatorContactId) {
+      throw new M2ApiError(400, "Поле «Инициатор» ещё не доступно в базе. Примените миграцию 0007.");
+    }
+    if (error && (this.isMissingInitiatorContactSchema(error) || /initiator_contact/iu.test(error.message ?? ""))) {
+      this.markInitiatorContactUnavailable();
+      const { initiator_contact_id: _, ...withoutInitiator } = payload;
+      void _;
+      ({ data, error } = await this.db().from("tasks").insert(withoutInitiator).select("id").single());
+    }
     throwIfError(error, "Не получилось создать задачу");
     return this.loadTask(text(asRow(data), "id"));
   }
@@ -1850,8 +1994,19 @@ export class M2ApiClient {
     const task = await this.loadTask(id);
     const session = await this.session();
     const canSeeFinance = session.permissions?.includes("finance.read") === true;
-    const [parts, files, journal, engineer, workType, reason, closure, statusRow] = await Promise.all([
-      this.db().from("task_parts").select("id, article_number_snapshot, name_snapshot, quantity, part_condition").eq("task_id", id).order("position"),
+    let parts: { data: unknown[] | null; error: { message?: string } | null } = await this.db()
+      .from("task_parts")
+      .select("id, article_number_snapshot, name_snapshot, quantity, part_condition, for_sale")
+      .eq("task_id", id)
+      .order("position");
+    if (parts.error && /for_sale/iu.test(parts.error.message ?? "")) {
+      parts = await this.db()
+        .from("task_parts")
+        .select("id, article_number_snapshot, name_snapshot, quantity, part_condition")
+        .eq("task_id", id)
+        .order("position");
+    }
+    const [files, journal, engineer, workType, reason, closure, statusRow] = await Promise.all([
       this.db().from("files").select(FILE_SELECT).eq("task_id", id).order("created_at"),
       this.db().from("task_status_history").select("id, from_status, to_status, comment, changed_at, changed_by").eq("task_id", id).order("changed_at", { ascending: false }),
       task.engineerId ? this.db().from("users").select("id, full_name").eq("id", task.engineerId).maybeSingle() : Promise.resolve({ data: null, error: null }),
@@ -1920,7 +2075,8 @@ export class M2ApiClient {
           articleNumber: text(row, "article_number_snapshot"),
           name: text(row, "name_snapshot"),
           quantity: numberValue(row.quantity) ?? 0,
-          condition: text(row, "part_condition") as TaskPartPosition["condition"]
+          condition: text(row, "part_condition") as TaskPartPosition["condition"],
+          ...(row.for_sale === true ? { forSale: true } : {})
         };
       }),
       canEditOverview: !terminal && canWrite,
@@ -1956,7 +2112,7 @@ export class M2ApiClient {
       const { data: parts, error: partsError } = await this.db().from("parts").select("id, article_number").in("article_number", articles);
       throwIfError(partsError);
       const partIdByArticle = new Map((parts ?? []).map((item) => [text(asRow(item), "article_number"), text(asRow(item), "id")]));
-      const { error } = await this.db().from("task_parts").insert(items.map((item, index) => {
+      const rowsWithSale = items.map((item, index) => {
         const partId = partIdByArticle.get(item.articleNumber);
         if (!partId) throw new M2ApiError(400, `Номенклатура ${item.articleNumber} не найдена`);
         return {
@@ -1966,9 +2122,17 @@ export class M2ApiClient {
           article_number_snapshot: item.articleNumber,
           name_snapshot: item.name,
           quantity: item.quantity,
+          for_sale: item.forSale === true,
           position: index
         };
-      }));
+      });
+      let { error } = await this.db().from("task_parts").insert(rowsWithSale);
+      if (error && /for_sale/iu.test(error.message ?? "")) {
+        ({ error } = await this.db().from("task_parts").insert(rowsWithSale.map(({ for_sale: _, ...row }) => {
+          void _;
+          return row;
+        })));
+      }
       throwIfError(error);
     }
     const card = await this.taskCard(id);

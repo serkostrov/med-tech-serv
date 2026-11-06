@@ -43,7 +43,7 @@ export function WorkAct({ act, onBack }: { readonly act: WorkActModel; readonly 
   const equipmentBlankRows = Math.max(0, 5 - act.equipment.length);
   const partBlankRows = Math.max(0, 5 - act.parts.length);
   return <div className="work-act-print-root">
-    <EntityDetailToolbar actions={<Button onClick={() => window.print()}>Печать</Button>} backLabel="К задаче" currentLabel="Акт" onBack={onBack} parentLabel="Задача" />
+    <EntityDetailToolbar actions={<Button onClick={() => window.print()}>Печать</Button>} backLabel="К задаче" onBack={onBack} />
     <article className="work-act-document" aria-label={`Акт выполненных работ ${act.number}`}>
       <header className="work-act-company">
         <strong>{act.company.name}</strong>

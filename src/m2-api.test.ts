@@ -41,6 +41,28 @@ describe("Supabase row mapping", () => {
     assert.equal(task.customer?.siteName, "Клиника");
   });
 
+  it("maps initiator and client contacts from the customers directory", () => {
+    const task = mapTask({
+      id: "task-2",
+      number: "З-000002",
+      title: "Ремонт",
+      status_code: "new",
+      site_contact_id: "contact-client",
+      initiator_contact_id: "contact-initiator",
+      initiator_name: "Петров Пётр",
+      created_at: "2020-01-01T00:00:00.000Z",
+      updated_at: "2020-01-01T00:00:00.000Z",
+      site: { name: "Клиника", address: "Москва" },
+      contact: { full_name: "Иванов Иван", phone: "+7", email: "a@b.c" },
+      initiator_contact: { full_name: "Петров Пётр" }
+    });
+    assert.equal(task.siteContactId, "contact-client");
+    assert.equal(task.customer?.contactFullName, "Иванов Иван");
+    assert.equal(task.initiatorContactId, "contact-initiator");
+    assert.equal(task.initiatorName, "Петров Пётр");
+    assert.equal(task.initiator?.fullName, "Петров Пётр");
+  });
+
   it("keeps M2ApiError status for UI notices", () => {
     const error = new M2ApiError(409, "Прибор с таким S/N уже существует");
     assert.equal(error.status, 409);
@@ -70,6 +92,7 @@ describe("Supabase row mapping", () => {
       "У прибора уже есть плательщик. Чтобы выбрать другого, укажите причину смены."
     );
     assert.match(publicApiErrorMessage("invalid input syntax for type uuid"), /фильтра/u);
+    assert.match(publicApiErrorMessage("invalid input syntax for type uuid: \"Beckman Coulter\""), /фильтра/u);
     assert.match(publicApiErrorMessage("Signups not allowed for this instance"), /Публичная регистрация/u);
     assert.match(publicApiErrorMessage("User already registered"), /e-mail уже есть/u);
     assert.match(publicApiErrorMessage("Could not find the function public.create_access_user"), /обновить схему/u);
@@ -90,5 +113,15 @@ describe("Supabase row mapping", () => {
     assert.match(source, /author:users!created_by\(full_name\)/u);
     assert.doesNotMatch(source, /payer:payers\(/u);
     assert.doesNotMatch(source, /engineer:users\(/u);
+  });
+
+  it("resolves equipment filters by id or name and does not crash on bad uuid", async () => {
+    const source = await readFile(new URL("./m2-api.ts", import.meta.url), "utf8");
+    assert.match(source, /resolveFilterId\("manufacturers"/u);
+    assert.match(source, /normalizeFilterValue/u);
+    assert.match(source, /isFilterUuid/u);
+    assert.match(source, /escapeIlikePattern/u);
+    assert.match(source, /invalid input syntax for type uuid\|22P02/u);
+    assert.match(source, /return paged\(\[\], 0, limit, offset\)/u);
   });
 });

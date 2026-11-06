@@ -133,6 +133,7 @@ export interface TaskPartPosition {
   readonly name: string;
   readonly quantity: number;
   readonly condition: "G" | "N" | "B";
+  readonly forSale?: boolean;
 }
 
 export interface TaskPartsResponse {

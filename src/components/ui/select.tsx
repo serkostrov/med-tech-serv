@@ -23,15 +23,22 @@ function optionLabel(children: React.ReactNode): string {
   return "";
 }
 
-function collectOptions(children: React.ReactNode): SelectOption[] {
+/** React.Children может отдать key с префиксом `.` / `.$` — для value фильтра нужен чистый id. */
+function optionKeyValue(key: string | null | undefined): string | undefined {
+  if (typeof key !== "string" || !key) return undefined;
+  const cleaned = key.replace(/^(?:\.\$?)+/u, "");
+  return cleaned || undefined;
+}
+
+export function collectSelectOptions(children: React.ReactNode): SelectOption[] {
   const options: SelectOption[] = [];
   React.Children.forEach(children, (child) => {
     if (!React.isValidElement<{ value?: string | number; disabled?: boolean; children?: React.ReactNode }>(child)) return;
     if (child.type !== "option") return;
     const label = optionLabel(child.props.children);
-    // Без value React/кастомный Select раньше подставлял текст — id-фильтры ломались (uuid ≠ «Beckman Coulter»).
-    const key = typeof child.key === "string" ? child.key : undefined;
-    const value = child.props.value !== undefined
+    // Без явного value раньше подставлялся текст опции — uuid-фильтры ломались («Beckman Coulter» ≠ id).
+    const key = optionKeyValue(child.key);
+    const value = child.props.value !== undefined && child.props.value !== null
       ? String(child.props.value)
       : key && key !== label
         ? key
@@ -74,18 +81,18 @@ const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
     },
     ref
   ) => {
-    const options = React.useMemo(() => collectOptions(children), [children]);
+    const options = React.useMemo(() => collectSelectOptions(children), [children]);
     const isControlled = value !== undefined;
     const [uncontrolled, setUncontrolled] = React.useState(() => String(defaultValue ?? ""));
     const requested = isControlled ? String(value) : uncontrolled;
     const matched = options.find((option) => option.value === requested);
-    const fallback = matched ? undefined : options.find((option) => !option.disabled) ?? options[0];
-    const current = matched?.value ?? fallback?.value ?? requested;
-
-    React.useEffect(() => {
-      if (isControlled || matched || !fallback || fallback.value === uncontrolled) return;
-      setUncontrolled(fallback.value);
-    }, [fallback, isControlled, matched, uncontrolled]);
+    // Если снаружи пришла подпись («Beckman Coulter») вместо value/id — берём id опции.
+    const matchedByLabel = matched
+      ? undefined
+      : options.find((option) => option.label === requested && option.value !== requested);
+    const resolved = matched ?? matchedByLabel;
+    const fallback = resolved ? undefined : options.find((option) => !option.disabled) ?? options[0];
+    const current = resolved?.value ?? fallback?.value ?? requested;
 
     const emitChange = (next: string) => {
       if (!isControlled) setUncontrolled(next);
@@ -94,6 +101,24 @@ const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
         currentTarget: { value: next, name: name ?? "" }
       } as React.ChangeEvent<HTMLSelectElement>);
     };
+
+    React.useEffect(() => {
+      if (isControlled || matched || !fallback || fallback.value === uncontrolled) return;
+      setUncontrolled(fallback.value);
+    }, [fallback, isControlled, matched, uncontrolled]);
+
+    // Если снаружи пришла подпись вместо id — один раз отдадим id, чтобы фильтры/формы не слали текст в uuid-поля.
+    React.useEffect(() => {
+      if (!isControlled || !matchedByLabel) return;
+      emitChange(matchedByLabel.value);
+    }, [isControlled, matchedByLabel?.value]);
+
+    // Контролируемое пустое/битое value при уже загруженных опциях — подтянуть fallback в родителя.
+    React.useEffect(() => {
+      if (!isControlled || matched || matchedByLabel || !fallback) return;
+      if (fallback.value === requested) return;
+      emitChange(fallback.value);
+    }, [isControlled, matched, matchedByLabel, fallback?.value, requested]);
 
     return (
       <div className={cn("ui-select", className)}>

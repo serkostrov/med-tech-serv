@@ -37,7 +37,8 @@ describe("shared UI architecture", () => {
   it("opens directories on the service catalogs tab", async () => {
     const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
     assert.match(app, /case "customers": return <CustomersPage \/>/u);
-    assert.match(app, /useState<"catalogs" \| "notifications">\("catalogs"\)/u);
+    assert.match(app, /useState<"catalogs" \| "equipment" \| "notifications">\("catalogs"\)/u);
+    assert.match(app, /value: "equipment" as const, label: "Приборы"/u);
     assert.doesNotMatch(app, /notificationTemplates \? "notifications"/u);
     assert.doesNotMatch(app, /value: "customers", label: "Площадки и плательщики"/u);
   });
@@ -160,16 +161,37 @@ describe("shared UI architecture", () => {
   });
 
   it("uses a searchable equipment combobox when creating a task", async () => {
-    const [app, css] = await Promise.all([
+    const [app, picker, css] = await Promise.all([
       readFile(new URL("./App.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./EquipmentFolderPicker.tsx", import.meta.url), "utf8"),
       readFile(new URL("./styles.css", import.meta.url), "utf8")
     ]);
-    assert.match(app, /equipment-combobox/u);
+    assert.match(app, /EquipmentFolderPicker/u);
     assert.match(app, /Сменить/u);
-    assert.match(app, /filterEquipmentOptions/u);
+    assert.match(picker, /equipment-combobox/u);
+    assert.match(picker, /equipment-folder/u);
+    assert.match(picker, /Новый/u);
+    assert.match(picker, /AddEquipmentDialog/u);
+  });
+
+  it("lets coordinators attach warehouse parts when creating a task", async () => {
+    const [app, picker, css] = await Promise.all([
+      readFile(new URL("./App.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./PartsMultiPicker.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./styles.css", import.meta.url), "utf8")
+    ]);
+    assert.match(app, /PartsMultiPicker/u);
+    assert.match(app, /replaceTaskParts/u);
+    assert.match(picker, /parts-multi-picker/u);
+    assert.match(picker, /не списываем/u);
+    assert.match(picker, /Гарантийный/u);
+    assert.match(picker, /Для продажи/u);
+    assert.match(css, /\.parts-multi-picker__chip/u);
+    assert.match(css, /\.parts-multi-picker__flags/u);
     assert.doesNotMatch(app, /searchEquipmentBySerial/u);
     assert.doesNotMatch(app, />Найти</u);
     assert.match(css, /\.equipment-combobox__list/u);
+    assert.match(css, /\.equipment-folder__row/u);
     assert.match(css, /\.equipment-picker__selected/u);
   });
 });

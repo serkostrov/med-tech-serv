@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type KeyboardEvent } from "react";
+import React, { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
 import type { BulkTaskCommandResponse, EngineerTaskListItem, EngineerTaskListResponse, EquipmentHistoryEvent, EquipmentMeterReading, MailInboxRecord, NotificationJournalRecord, NotificationTemplateResponse, TaskPartPosition } from "./types.js";
 import {
   getDefaultView,
@@ -56,8 +56,12 @@ import {
 } from "./OperationsPages.js";
 import { TaskBoard } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
+import { EquipmentTreePage } from "./EquipmentTreePage.js";
+import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
+import { PartsMultiPicker, type SelectedTaskPart } from "./PartsMultiPicker.js";
 import { AccessAdminPage } from "./AccessAdminPage.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
+import { sitePeople } from "./site-people.js";
 import {
   Button,
   IconButton,
@@ -176,43 +180,70 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
   );
 }
 
-function equipmentSearchHaystack(item: EquipmentApiRecord): string {
-  return [item.serialNumber, item.manufacturer, item.model, item.site, item.organization, item.payer]
-    .filter(Boolean)
-    .join(" ")
-    .toLocaleLowerCase("ru-RU");
-}
-
-function filterEquipmentOptions(items: readonly EquipmentApiRecord[], query: string): readonly EquipmentApiRecord[] {
-  const normalized = query.trim().toLocaleLowerCase("ru-RU");
-  if (!normalized) return items;
-  return items.filter((item) => equipmentSearchHaystack(item).includes(normalized));
-}
-
-function TaskCreationForm({ open, equipment, workTypes, initialTitle = "", initialWorkTypeCode, onOpenChange, onCreated }: {
+function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = "", initialWorkTypeCode, onOpenChange, onCreated, onEquipmentAttached }: {
   readonly open: boolean;
   readonly equipment: readonly EquipmentApiRecord[];
+  readonly sites: readonly SiteOption[];
   readonly workTypes: readonly ReferenceCatalogValue[];
   readonly initialTitle?: string;
   readonly initialWorkTypeCode?: string;
   readonly onOpenChange: (open: boolean) => void;
   readonly onCreated: (task: TaskApiRecord) => Promise<void>;
+  readonly onEquipmentAttached?: (device: EquipmentApiRecord) => void;
 }) {
   const activeWorkTypes = workTypes.filter((item) => item.isActive);
   const defaultWorkType = initialWorkTypeCode || activeWorkTypes[0]?.code || activeWorkTypes[0]?.id || "diagnostics";
   const [equipmentId, setEquipmentId] = useState("");
   const [workTypeCode, setWorkTypeCode] = useState(defaultWorkType);
   const [priority, setPriority] = useState<"planned" | "urgent">("planned");
+  const [initiatorContactId, setInitiatorContactId] = useState("");
+  const [siteContactId, setSiteContactId] = useState("");
   const [callDate, setCallDate] = useState("");
   const [periodFrom, setPeriodFrom] = useState("");
   const [periodTo, setPeriodTo] = useState("");
-  const [equipmentQuery, setEquipmentQuery] = useState("");
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [highlightIndex, setHighlightIndex] = useState(0);
+  const [selectedParts, setSelectedParts] = useState<readonly SelectedTaskPart[]>([]);
+  const [partsWarranty, setPartsWarranty] = useState(false);
+  const [partsForSale, setPartsForSale] = useState(false);
+  const [pickingEquipment, setPickingEquipment] = useState(true);
+  const [createdEquipment, setCreatedEquipment] = useState<EquipmentApiRecord | null>(null);
   const [busy, setBusy] = useState(false);
-  const pickerRef = useRef<HTMLDivElement | null>(null);
-  const selectedEquipment = equipment.find((item) => item.id === equipmentId);
-  const filteredEquipment = useMemo(() => filterEquipmentOptions(equipment, equipmentQuery), [equipment, equipmentQuery]);
+  const equipmentOptions = useMemo(() => {
+    if (!createdEquipment) return equipment;
+    const index = equipment.findIndex((item) => item.id === createdEquipment.id);
+    if (index < 0) return [...equipment, createdEquipment];
+    return equipment.map((item, i) => (i === index ? createdEquipment : item));
+  }, [equipment, createdEquipment]);
+  const selectedEquipment = equipmentOptions.find((item) => item.id === equipmentId) ?? (
+    createdEquipment?.id === equipmentId ? createdEquipment : undefined
+  );
+  const contactChoices = useMemo(() => {
+    const choices: {
+      readonly contactId: string;
+      readonly siteId: string;
+      readonly siteName: string;
+      readonly payerId?: string;
+      readonly fullName: string;
+      readonly isPrimary: boolean;
+    }[] = [];
+    for (const site of sites.filter((item) => item.isActive)) {
+      for (const person of sitePeople(site)) {
+        if (!person.isActive || !person.contactId) continue;
+        choices.push({
+          contactId: person.contactId,
+          siteId: site.id,
+          siteName: site.name,
+          ...(person.payerId ? { payerId: person.payerId } : {}),
+          fullName: person.fullName,
+          isPrimary: person.isPrimary
+        });
+      }
+    }
+    return choices;
+  }, [sites]);
+  const showSiteInContactLabel = useMemo(
+    () => new Set(contactChoices.map((item) => item.siteId)).size > 1,
+    [contactChoices]
+  );
 
   useEffect(() => {
     if (!open) return;
@@ -220,58 +251,140 @@ function TaskCreationForm({ open, equipment, workTypes, initialTitle = "", initi
   }, [defaultWorkType, open]);
 
   useEffect(() => {
-    if (!pickerOpen) return;
-    const onPointerDown = (event: MouseEvent) => {
-      if (pickerRef.current && !pickerRef.current.contains(event.target as Node)) setPickerOpen(false);
-    };
-    document.addEventListener("mousedown", onPointerDown);
-    return () => document.removeEventListener("mousedown", onPointerDown);
-  }, [pickerOpen]);
+    if (!open) return;
+    setPickingEquipment(!equipmentId);
+  }, [open, equipmentId]);
 
   useEffect(() => {
-    setHighlightIndex(0);
-  }, [equipmentQuery, pickerOpen]);
+    if (open) return;
+    setSelectedParts([]);
+    setPartsWarranty(false);
+    setPartsForSale(false);
+    setCreatedEquipment(null);
+    setEquipmentId("");
+    setInitiatorContactId("");
+    setSiteContactId("");
+    setPickingEquipment(true);
+  }, [open]);
 
   const applyEquipment = (device: EquipmentApiRecord | undefined) => {
     setEquipmentId(device?.id ?? "");
+    const primary = device?.siteId
+      ? contactChoices.find((item) => item.siteId === device.siteId && item.isPrimary)
+        ?? contactChoices.find((item) => item.siteId === device.siteId)
+      : undefined;
+    setInitiatorContactId("");
+    setSiteContactId(primary?.contactId ?? "");
+  };
+
+  const rememberEquipment = (device: EquipmentApiRecord, contacts?: { readonly initiatorContactId?: string; readonly siteContactId?: string }) => {
+    setCreatedEquipment(device);
+    setEquipmentId(device.id);
+    setPickingEquipment(false);
+    if (contacts) {
+      setInitiatorContactId(contacts.initiatorContactId ?? "");
+      setSiteContactId(contacts.siteContactId ?? "");
+    } else {
+      const primary = device.siteId
+        ? contactChoices.find((item) => item.siteId === device.siteId && item.isPrimary)
+          ?? contactChoices.find((item) => item.siteId === device.siteId)
+        : undefined;
+      setInitiatorContactId("");
+      setSiteContactId(primary?.contactId ?? "");
+    }
+    onEquipmentAttached?.(device);
   };
 
   const selectEquipment = (device: EquipmentApiRecord) => {
-    applyEquipment(device);
-    setEquipmentQuery("");
-    setPickerOpen(false);
+    rememberEquipment(device);
   };
 
   const changeEquipment = () => {
     applyEquipment(undefined);
-    setEquipmentQuery("");
-    setPickerOpen(true);
+    setPickingEquipment(true);
   };
 
-  const onEquipmentKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
-    if (event.key === "ArrowDown") {
-      event.preventDefault();
-      setPickerOpen(true);
-      setHighlightIndex((current) => Math.min(current + 1, Math.max(filteredEquipment.length - 1, 0)));
+  const resolvePayerId = (choice: (typeof contactChoices)[number]): string | undefined => {
+    if (choice.payerId) return choice.payerId;
+    return sites.find((item) => item.id === choice.siteId)?.payers.find((item) => item.isActive)?.id;
+  };
+
+  const ensureEquipmentForContact = async (choice: (typeof contactChoices)[number]): Promise<EquipmentApiRecord | null> => {
+    if (!selectedEquipment) return null;
+    const payerId = resolvePayerId(choice);
+    if (!payerId) {
+      toast.warning("У выбранного человека нет плательщика. Укажите его в справочнике «Клиенты».");
+      return null;
+    }
+    let device = selectedEquipment;
+    const happenedAt = localDateTimeToIso(localDateTimeInputValue());
+    if (device.siteId !== choice.siteId) {
+      device = await m2Api.changeEquipmentAssignment(device.id, "site_change", {
+        targetId: choice.siteId,
+        occurredAt: happenedAt,
+        comment: "Площадка по клиенту при создании задачи"
+      });
+    }
+    if (device.payerId !== payerId) {
+      device = await m2Api.changeEquipmentAssignment(device.id, "payer_change", {
+        targetId: payerId,
+        occurredAt: happenedAt,
+        comment: "Плательщик по клиенту при создании задачи"
+      });
+    }
+    return device;
+  };
+
+  const selectClient = async (contactId: string) => {
+    if (!contactId) {
+      setSiteContactId("");
       return;
     }
-    if (event.key === "ArrowUp") {
-      event.preventDefault();
-      setPickerOpen(true);
-      setHighlightIndex((current) => Math.max(current - 1, 0));
+    const choice = contactChoices.find((item) => item.contactId === contactId);
+    if (!choice || busy) return;
+    setBusy(true);
+    try {
+      const device = await ensureEquipmentForContact(choice);
+      if (!device) return;
+      const initiatorSameSite = !initiatorContactId
+        || contactChoices.find((item) => item.contactId === initiatorContactId)?.siteId === choice.siteId;
+      rememberEquipment(device, {
+        siteContactId: contactId,
+        ...(initiatorSameSite ? { initiatorContactId } : {})
+      });
+    } catch (assignError) {
+      toast.error(assignError instanceof Error ? assignError.message : "Не получилось сохранить клиента");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const selectInitiator = async (contactId: string) => {
+    if (!contactId) {
+      setInitiatorContactId("");
       return;
     }
-    if (event.key === "Enter") {
-      const highlighted = filteredEquipment[highlightIndex];
-      if (pickerOpen && highlighted) {
-        event.preventDefault();
-        selectEquipment(highlighted);
+    const choice = contactChoices.find((item) => item.contactId === contactId);
+    if (!choice || busy) return;
+    if (siteContactId) {
+      const client = contactChoices.find((item) => item.contactId === siteContactId);
+      if (client && client.siteId !== choice.siteId) {
+        toast.warning("Инициатор должен быть с той же площадки, что и клиент");
+        return;
       }
-      return;
     }
-    if (event.key === "Escape") {
-      event.preventDefault();
-      setPickerOpen(false);
+    setBusy(true);
+    try {
+      const device = await ensureEquipmentForContact(choice);
+      if (!device) return;
+      rememberEquipment(device, {
+        initiatorContactId: contactId,
+        siteContactId: siteContactId || choice.contactId
+      });
+    } catch (assignError) {
+      toast.error(assignError instanceof Error ? assignError.message : "Не получилось сохранить инициатора");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -285,10 +398,12 @@ function TaskCreationForm({ open, equipment, workTypes, initialTitle = "", initi
     const title = String(data.get("title") ?? "").trim();
     if (!title) return fail("Укажите название задачи");
     if (!selectedEquipment) return fail("Выберите прибор из списка");
-    if (!selectedEquipment.siteId) return fail("У прибора нет площадки. Укажите место установки в паспорте прибора.");
-    if (!selectedEquipment.payerId) return fail("У прибора нет плательщика. Укажите плательщика в паспорте прибора.");
+    if (!selectedEquipment.siteId || !selectedEquipment.payerId) {
+      return fail("Выберите клиента или инициатора — так задаются площадка и плательщик прибора");
+    }
     if (!periodFrom || !periodTo) return fail("Укажите период выполнения: даты «с» и «по»");
     if (periodFrom > periodTo) return fail("Начало периода не может быть позже конца");
+    const comment = String(data.get("comment") ?? "").trim();
     setBusy(true);
     try {
       const task = await m2Api.createTask({
@@ -298,10 +413,22 @@ function TaskCreationForm({ open, equipment, workTypes, initialTitle = "", initi
         equipmentId: selectedEquipment.id,
         siteId: selectedEquipment.siteId,
         payerId: selectedEquipment.payerId,
+        ...(initiatorContactId ? { initiatorContactId } : {}),
+        ...(siteContactId ? { siteContactId } : {}),
         periodFrom: taskCalendarDate(periodFrom),
         periodTo: taskCalendarDate(periodTo),
-        ...(callDate ? { callDate: taskCalendarDate(callDate) } : {})
+        ...(callDate ? { callDate: taskCalendarDate(callDate) } : {}),
+        ...(comment ? { callReason: comment } : {})
       });
+      if (selectedParts.length > 0) {
+        await m2Api.replaceTaskParts(task.id, selectedParts.map((part) => ({
+          articleNumber: part.articleNumber,
+          name: part.name,
+          quantity: part.quantity,
+          condition: partsWarranty ? "G" : "N",
+          ...(partsForSale ? { forSale: true } : {})
+        })));
+      }
       await onCreated(task);
     } catch (createError) {
       toast.error(createError instanceof Error ? createError.message : "Не получилось создать задачу");
@@ -310,7 +437,13 @@ function TaskCreationForm({ open, equipment, workTypes, initialTitle = "", initi
     }
   };
 
-  return <DialogForm busy={busy} description="Площадка и плательщик берутся из паспорта прибора. Задайте их там, если ещё не указаны." onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title="Новая задача">
+  const contactPlaceholder = !selectedEquipment
+    ? "Сначала выберите прибор"
+    : contactChoices.length === 0
+      ? "Нет людей в справочнике «Клиенты»"
+      : "Не выбран";
+
+  return <DialogForm busy={busy} description="Инициатор и клиент — люди из справочника «Клиенты». Выбор сохраняет площадку и плательщика в паспорте прибора." onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title="Новая задача">
       <label className="field-wide">Название задачи *<input autoFocus defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, диагностика анализатора" required /></label>
       <label>Вид работ *<Select onChange={(event) => setWorkTypeCode(event.target.value)} required value={workTypeCode}>{activeWorkTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
       <label className="task-priority-check">
@@ -324,9 +457,10 @@ function TaskCreationForm({ open, equipment, workTypes, initialTitle = "", initi
           <small>Реакция до 24 ч · иначе плановая</small>
         </span>
       </label>
+      <label className="field-wide">Комментарий<textarea maxLength={2000} name="comment" placeholder="Кратко опишите суть обращения" rows={3} /></label>
       <div className="equipment-picker field-wide">
         <span className="equipment-picker__label">Прибор *</span>
-        {selectedEquipment ? (
+        {selectedEquipment && !pickingEquipment ? (
           <div className="equipment-picker__selected">
             <p className="equipment-picker__result">
               <strong>{selectedEquipment.manufacturer} {selectedEquipment.model}</strong>
@@ -335,50 +469,48 @@ function TaskCreationForm({ open, equipment, workTypes, initialTitle = "", initi
             <Button onClick={changeEquipment} type="button" variant="secondary">Сменить</Button>
           </div>
         ) : (
-          <div className="equipment-combobox" ref={pickerRef}>
-            <input
-              aria-autocomplete="list"
-              aria-controls="equipment-combobox-list"
-              aria-expanded={pickerOpen}
-              aria-label="Поиск прибора"
-              onChange={(event) => {
-                setEquipmentQuery(event.target.value);
-                setPickerOpen(true);
-              }}
-              onFocus={() => setPickerOpen(true)}
-              onKeyDown={onEquipmentKeyDown}
-              placeholder="S/N, модель или производитель"
-              role="combobox"
-              type="search"
-              value={equipmentQuery}
-            />
-            {pickerOpen ? (
-              <ul className="equipment-combobox__list" id="equipment-combobox-list" role="listbox">
-                {filteredEquipment.length === 0 ? <li className="equipment-combobox__empty">Приборов по этому запросу нет</li> : null}
-                {filteredEquipment.map((item, index) => (
-                  <li key={item.id} role="presentation">
-                    <button
-                      aria-selected={index === highlightIndex}
-                      className={index === highlightIndex ? "is-active" : undefined}
-                      onClick={() => selectEquipment(item)}
-                      onMouseEnter={() => setHighlightIndex(index)}
-                      role="option"
-                      type="button"
-                    >
-                      <strong>{item.manufacturer} {item.model}</strong>
-                      <span>S/N {item.serialNumber} · {item.site ?? item.organization ?? "площадка не указана"}</span>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : null}
-            <p className="equipment-picker__hint">Начните вводить S/N или модель — список отфильтруется.</p>
-          </div>
+          <EquipmentFolderPicker equipment={equipmentOptions} onSelect={selectEquipment} />
         )}
-        {selectedEquipment && (!selectedEquipment.siteId || !selectedEquipment.payerId) ? (
-          <p className="form-hint">Сначала укажите { !selectedEquipment.siteId && !selectedEquipment.payerId ? "площадку и плательщика" : !selectedEquipment.siteId ? "площадку" : "плательщика"} в паспорте прибора.</p>
-        ) : null}
       </div>
+      <div className="equipment-picker field-wide">
+        <span className="equipment-picker__label">Запчасти</span>
+        <PartsMultiPicker
+          forSale={partsForSale}
+          onChange={setSelectedParts}
+          onForSaleChange={setPartsForSale}
+          onWarrantyChange={setPartsWarranty}
+          value={selectedParts}
+          warranty={partsWarranty}
+        />
+      </div>
+      <label>Инициатор
+        <Select
+          disabled={!selectedEquipment || contactChoices.length === 0}
+          onChange={(event) => void selectInitiator(event.target.value)}
+          value={initiatorContactId}
+        >
+          <option value="">{contactPlaceholder}</option>
+          {contactChoices.map((person) => (
+            <option key={`initiator-${person.contactId}`} value={person.contactId}>
+              {showSiteInContactLabel ? `${person.fullName} · ${person.siteName}` : person.fullName}
+            </option>
+          ))}
+        </Select>
+      </label>
+      <label>Клиент
+        <Select
+          disabled={!selectedEquipment || contactChoices.length === 0}
+          onChange={(event) => void selectClient(event.target.value)}
+          value={siteContactId}
+        >
+          <option value="">{contactPlaceholder}</option>
+          {contactChoices.map((person) => (
+            <option key={`client-${person.contactId}`} value={person.contactId}>
+              {showSiteInContactLabel ? `${person.fullName} · ${person.siteName}` : person.fullName}
+            </option>
+          ))}
+        </Select>
+      </label>
       <div className="dialog-form-row-3">
         <label>Дата вызова<DatePicker onChange={setCallDate} value={callDate} /></label>
         <label>Период с *<DatePicker onChange={setPeriodFrom} required value={periodFrom} /></label>
@@ -395,8 +527,14 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   readonly onOpenRelated: (id: string) => Promise<void>;
   readonly initialTab?: "overview" | "result" | "materials" | "history";
 }) {
-  const [suggestions, setSuggestions] = useState<readonly { readonly engineerId: string; readonly fullName: string }[]>([]);
+  const [suggestions, setSuggestions] = useState<readonly {
+    readonly engineerId: string;
+    readonly fullName: string;
+    readonly isAvailable: boolean;
+    readonly previouslyWorkedWithEquipment: boolean;
+  }[]>([]);
   const [engineerId, setEngineerId] = useState("");
+  const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [actionDialog, setActionDialog] = useState<"cancel" | "return_for_rework" | null>(null);
@@ -437,8 +575,15 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     if (!canAssign || !card.equipment) return;
     void m2Api.taskAssignmentSuggestions(task.id, card.equipment.manufacturer, card.equipment.model)
       .then((items) => {
-        setSuggestions(items);
-        setEngineerId(items[0]?.engineerId ?? "");
+        const ranked = [...items].sort((left, right) => {
+          if (left.previouslyWorkedWithEquipment !== right.previouslyWorkedWithEquipment) {
+            return left.previouslyWorkedWithEquipment ? -1 : 1;
+          }
+          if (left.isAvailable !== right.isAvailable) return left.isAvailable ? -1 : 1;
+          return left.fullName.localeCompare(right.fullName, "ru");
+        });
+        setSuggestions(ranked);
+        setEngineerId(ranked[0]?.engineerId ?? "");
       })
       .catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить список инженеров"));
   }, [task.id, canAssign, card.equipment?.id]);
@@ -450,6 +595,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       if (code === "assign") {
         if (!engineerId) throw new Error("Выберите инженера");
         await m2Api.assignTask(task.id, engineerId);
+        setAssignDialogOpen(false);
       } else if (code === "verify_closure") {
         await m2Api.acceptTaskClosure(task.id, "Проверено координатором");
       } else if (code === "cancel") {
@@ -620,6 +766,33 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <CardHeader action={overviewHeaderActions} meta="Основные параметры" title="О задаче" />
       <div className="task-card-grid">
         <div className="task-overview-groups">
+          <div className="task-field-group task-field-group--equipment">
+            <h3>Прибор</h3>
+            {card.equipment ? (
+              <dl className="task-field-grid">
+                <div>
+                  <dt>Модель</dt>
+                  <dd>{card.equipment.manufacturer} {card.equipment.model}</dd>
+                </div>
+                <div>
+                  <dt>S/N</dt>
+                  <dd>{card.equipment.serialNumber}</dd>
+                </div>
+                <div>
+                  <dt>Статус</dt>
+                  <dd>
+                    <span className="task-equipment-status">{card.equipment.statusName ?? card.equipment.status}</span>
+                  </dd>
+                </div>
+                <div>
+                  <dt>Площадка</dt>
+                  <dd className={card.equipment.site ? undefined : "is-empty"}>{card.equipment.site ?? "Место не указано"}</dd>
+                </div>
+              </dl>
+            ) : (
+              <p className="task-equipment-empty">Прибор не найден</p>
+            )}
+          </div>
           <div className="task-field-group">
             <h3>Сроки и работы</h3>
             <dl className="task-field-grid">
@@ -636,7 +809,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             <h3>Клиент и исполнитель</h3>
             <dl className="task-field-grid">
               <div><dt>Площадка</dt><dd className={task.customer?.siteName ? undefined : "is-empty"}>{task.customer?.siteName ?? "—"}{task.customer?.address ? <small>{task.customer.address}</small> : null}</dd></div>
-              <div><dt>Контакт</dt><dd className={task.customer?.contactFullName ? undefined : "is-empty"}>{task.customer?.contactFullName ?? "—"}{contactDetails ? <small>{contactDetails}</small> : null}</dd></div>
+              <div><dt>Инициатор</dt><dd className={task.initiator?.fullName || task.initiatorName ? undefined : "is-empty"}>{task.initiator?.fullName ?? task.initiatorName ?? "—"}</dd></div>
+              <div><dt>Клиент</dt><dd className={task.customer?.contactFullName ? undefined : "is-empty"}>{task.customer?.contactFullName ?? "—"}{contactDetails ? <small>{contactDetails}</small> : null}</dd></div>
               <div><dt>Плательщик</dt><dd className={task.customer?.payerName ? undefined : "is-empty"}>{task.customer?.payerName ?? "—"}</dd></div>
               <div><dt>Инженер</dt><dd className={card.engineer ? undefined : "is-empty"}>{card.engineer?.fullName ?? "Не назначен"}</dd></div>
               <div><dt>Договор</dt><dd className={task.contractNumber || task.contractId ? undefined : "is-empty"}>{task.contractNumber ?? task.contractId ?? "—"}</dd></div>
@@ -652,19 +826,12 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             </dl>
           </div>
           {canAssign || workflowActions.length > 0 ? <div className="task-workflow-bar">
-            {canAssign ? <div className="assignment-control"><Select aria-label="Инженер" onChange={(event) => setEngineerId(event.target.value)} value={engineerId}><option value="">Выберите инженера</option>{suggestions.map((item) => <option key={item.engineerId} value={item.engineerId}>{item.fullName}</option>)}</Select><Button disabled={busy || !engineerId} onClick={() => void perform("assign")}>Назначить инженера</Button></div> : null}
+            {canAssign ? <div className="assignment-control">
+              <Button disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)}>Назначить инженера</Button>
+            </div> : null}
             {workflowActions.map((action) => <Button disabled={busy} key={action.code} onClick={() => action.code === "return_for_rework" ? setActionDialog(action.code) : void perform(action.code)} variant={action.code === "return_for_rework" ? "secondary" : "primary"}>{action.label}</Button>)}
           </div> : null}
         </div>
-        <aside className="task-equipment-panel">
-          <h3>Прибор</h3>
-          {card.equipment ? <>
-            <strong>{card.equipment.manufacturer} {card.equipment.model}</strong>
-            <span>S/N {card.equipment.serialNumber}</span>
-            <span className="task-equipment-panel__status">{card.equipment.statusName ?? card.equipment.status}</span>
-            <span>{card.equipment.site ?? "Место не указано"}</span>
-          </> : <span className="is-empty">Прибор не найден</span>}
-        </aside>
       </div>
     </section> : null}
     {detailTab === "overview" && task.status === "under_review" ? <ClosureReview
@@ -761,7 +928,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
         <div className="task-card-panel">
           {card.parts.length > 0
-            ? <div className="task-card-list">{card.parts.map((part) => <div key={part.id}><strong>{part.articleNumber} · {part.name}</strong><span>{part.quantity} шт. · {part.condition === "G" ? "Г · гарантийная" : part.condition === "N" ? "Н · новая" : "Б · б/у"}</span></div>)}</div>
+            ? <div className="task-card-list">{card.parts.map((part) => <div key={part.id}><strong>{part.articleNumber} · {part.name}</strong><span>{part.quantity} шт. · {part.condition === "G" ? "Г · гарантийная" : part.condition === "N" ? "Н · новая" : "Б · б/у"}{part.forSale ? " · для продажи" : ""}</span></div>)}</div>
             : <div className="task-empty task-empty--compact"><Icon name="info" size={18} /><div><strong>Запчастей пока нет</strong><p>Укажите детали, если использовали на выезде</p></div></div>}
           {card.canEditParts ? <div className="task-materials-actions">
             <button className="task-materials-action" onClick={addPartDraft} type="button">Добавить</button>
@@ -787,6 +954,44 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     </section> : null}
     <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<textarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
+    <Dialog
+      busy={busy}
+      description="Выберите инженера для назначения на задачу."
+      footer={<>
+        <Button disabled={busy} onClick={() => setAssignDialogOpen(false)} variant="secondary">Отмена</Button>
+        <Button busy={busy} disabled={!engineerId} onClick={() => void perform("assign")}>Назначить</Button>
+      </>}
+      onOpenChange={setAssignDialogOpen}
+      open={assignDialogOpen}
+      title="Выбор инженера"
+    >
+      {suggestions.length === 0 ? (
+        <p className="form-hint">Инженеров пока нет. Добавьте их в разделе «Инженеры».</p>
+      ) : (
+        <div className="engineer-picker" role="listbox" aria-label="Инженеры">
+          {suggestions.map((item) => {
+            const selected = item.engineerId === engineerId;
+            const hints = [
+              item.previouslyWorkedWithEquipment ? "опыт с прибором" : null,
+              item.isAvailable ? "свободен" : "занят"
+            ].filter(Boolean).join(" · ");
+            return (
+              <button
+                aria-selected={selected}
+                className={`engineer-picker__option${selected ? " is-selected" : ""}`}
+                key={item.engineerId}
+                onClick={() => setEngineerId(item.engineerId)}
+                role="option"
+                type="button"
+              >
+                <strong>{item.fullName}</strong>
+                <span>{hints}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </Dialog>
   </>;
 }
 
@@ -988,7 +1193,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
         ) : null}
       </div>
 
-      <TaskCreationForm equipment={equipment} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} key={mailDraft?.id ?? "manual-task"} onOpenChange={(open) => { setFormOpen(open); if (!open) setMailDraft(null); }} onCreated={async (task) => { if (mailDraft) await m2Api.updateMailInbox(mailDraft.id, { status: "converted", taskId: task.id }); await reloadTasks(); setFormOpen(false); setMailDraft(null); await openTask(task.id); }} open={formOpen} workTypes={workTypes} />
+      <TaskCreationForm equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) setMailDraft(null); }} onCreated={async (task) => { if (mailDraft) await m2Api.updateMailInbox(mailDraft.id, { status: "converted", taskId: task.id }); await reloadTasks(); setFormOpen(false); setMailDraft(null); await openTask(task.id); }} open={formOpen} workTypes={workTypes} />
 
       {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
 
@@ -1932,21 +2137,25 @@ function AdminReferencesPage() {
 }
 
 function ReferencesWorkspace({ notificationTemplates = false }: { readonly notificationTemplates?: boolean }) {
-  const [section, setSection] = useState<"catalogs" | "notifications">("catalogs");
+  const [section, setSection] = useState<"catalogs" | "equipment" | "notifications">("catalogs");
+  const tabItems = [
+    { value: "catalogs" as const, label: "Сервис" },
+    { value: "equipment" as const, label: "Приборы" },
+    ...(notificationTemplates ? [{ value: "notifications" as const, label: "Шаблоны писем" }] : [])
+  ];
   return <>
-    <PageIntro description="Виды работ, статусы и модели приборов." title="Справочники" />
-    {notificationTemplates ? (
-      <PageTabs<"catalogs" | "notifications">
-        items={[
-          { value: "catalogs", label: "Сервис и приборы" },
-          { value: "notifications", label: "Шаблоны писем" }
-        ]}
-        label="Разделы справочников"
-        onValueChange={setSection}
-        value={section}
-      />
-    ) : null}
-    {section === "notifications" && notificationTemplates ? <NotificationTemplatesPage /> : <AdminReferencesPage />}
+    <PageIntro description="Сервисные справочники и ветвление приборов: категория → производитель → название → S/N." title="Справочники" />
+    <PageTabs<"catalogs" | "equipment" | "notifications">
+      items={tabItems}
+      label="Разделы справочников"
+      onValueChange={setSection}
+      value={section}
+    />
+    {section === "notifications" && notificationTemplates
+      ? <NotificationTemplatesPage />
+      : section === "equipment"
+        ? <EquipmentTreePage />
+        : <AdminReferencesPage />}
   </>;
 }
 

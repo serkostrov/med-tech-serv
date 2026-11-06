@@ -666,7 +666,15 @@ export function DialogForm({
       size={size}
       title={title}
     >
-      <form className="dialog-form" id={formId} onSubmit={(event) => void onSubmit(event)}>
+      <form
+        className="dialog-form"
+        id={formId}
+        onSubmit={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          void onSubmit(event);
+        }}
+      >
         {error ? <div className="form-error" role="alert">{error}</div> : null}
         {children}
       </form>
