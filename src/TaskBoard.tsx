@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, type DragEvent, type UIEvent } from "react";
 import type { EquipmentApiRecord, ReferenceCatalogValue, TaskApiRecord } from "./m2-api.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES, TASK_STATUS_TRANSITIONS } from "./domain/task-status.js";
-import { StatusBadge, toast, type StatusTone } from "./ui.js";
+import { toast, type StatusTone } from "./ui.js";
 
 const COLUMN_PAGE_SIZE = 12;
 
@@ -26,6 +26,21 @@ function isCompletedBoardStatus(status: ReferenceCatalogValue): boolean {
   const code = status.code ?? status.id;
   if (code === "closed" || code === "cancelled") return true;
   return (status.attributes as Readonly<Record<string, string | number | boolean | null>>)["isTerminal"] === true;
+}
+
+function initials(name: string): string {
+  return name.split(/\s+/u).filter(Boolean).slice(0, 2).map((part) => part[0]?.toUpperCase() ?? "").join("");
+}
+
+/** «Иванов Пётр Алексеевич» → «Иванов П. А.» */
+function shortName(name: string): string {
+  const [last, ...rest] = name.split(/\s+/u).filter(Boolean);
+  return [last, ...rest.map((part) => `${part[0]}.`)].join(" ");
+}
+
+function shortDate(value: string): string {
+  const date = new Date(value.length === 10 ? `${value}T00:00:00` : value);
+  return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("ru-RU", { day: "numeric", month: "short" }).replace(".", "");
 }
 
 /**
@@ -179,7 +194,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     const draggedFrom = draggedTask?.status;
     const blocked = Boolean(draggedTask && draggedFrom && draggedFrom !== code && boardDropDecision(draggedTask, draggedFrom, code, engineerMode).kind === "no");
     return <section className={`task-board__column task-board__column--${code}${dropTarget === code && !blocked ? " task-board__column--drop" : ""}${blocked ? " task-board__column--blocked" : ""}`} key={status.id} onDragEnter={() => setDropTarget(code)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }} onDrop={(event) => { event.preventDefault(); const taskId = event.dataTransfer.getData("text/plain") || draggedId; if (taskId) void move(taskId, code); }}>
-      <header><div><StatusBadge tone={tone(code, terminal)}>{status.name}</StatusBadge><strong>{total}</strong></div></header>
+      <header><div><span className="task-board__title"><span aria-hidden="true" className={`task-board__dot task-board__dot--${tone(code, terminal)}`} />{status.name}</span><strong>{total}</strong></div></header>
       <div className="task-board__cards" onScroll={(event) => handleScroll(code, event)}>
         {page?.loading ? <p className="task-board__empty">Загружаем задачи…</p> : null}
         {items.map((task) => {
@@ -187,7 +202,18 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
           const engineer = engineers.find((item) => item.id === task.engineerId);
           const isMoving = moving.has(task.id);
           return <article aria-busy={isMoving} className={`task-board-card${task.isOverdue ? " task-board-card--overdue" : ""}${draggedId === task.id ? " task-board-card--dragging" : ""}`} draggable={!isMoving} key={task.id} onDragEnd={() => { setDraggedId(null); setDropTarget(null); }} onDragStart={(event) => startDrag(event, task.id)}>
-            <button className="task-board-card__open" onClick={() => onOpen(task.id)} type="button"><span>{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span><strong>{task.title}</strong><small>{task.customer?.siteName ?? "Площадка не выбрана"}</small><dl><div><dt>Прибор</dt><dd>{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</dd></div>{hideEngineer ? null : <div><dt>Инженер</dt><dd>{task.engineerName ?? engineer?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</dd></div>}</dl></button>
+            <button className="task-board-card__open" onClick={() => onOpen(task.id)} type="button">
+              <span className="task-board-card__top">{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>
+              <strong>{task.title}</strong>
+              <small>{[task.customer?.siteName ?? "Площадка не выбрана", task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : null].filter(Boolean).join(" · ")}</small>
+              <span className="task-board-card__foot">
+                {hideEngineer ? null : (() => {
+                  const name = task.engineerName ?? engineer?.fullName;
+                  return name ? <><span aria-hidden="true" className="task-board-card__ava">{initials(name)}</span><span className="task-board-card__eng" title={name}>{shortName(name)}</span></> : <><span aria-hidden="true" className="task-board-card__ava task-board-card__ava--none">?</span><span className="task-board-card__eng task-board-card__eng--none">Не назначен</span></>;
+                })()}
+                {task.periodTo ? <span className={`task-board-card__due${task.isOverdue ? " task-board-card__due--late" : ""}`}>{task.isOverdue ? "просрочена" : `до ${shortDate(task.periodTo)}`}</span> : null}
+              </span>
+            </button>
           </article>;
         })}
         {!page?.loading && items.length === 0 ? <p className="task-board__empty">В этом статусе пока нет задач.</p> : null}

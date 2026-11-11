@@ -1,5 +1,6 @@
 import { Menu } from "lucide-react";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { subscribeActivity } from "../lib/activity.js";
 import type { NavigationId, NavigationItem } from "../navigation.js";
 import { Button, Icon, Sheet } from "../ui.js";
 
@@ -78,6 +79,7 @@ export function AppShell({
 
   return (
     <div className="app-shell">
+      <TopProgress />
       <a className="skip-link" href="#main-content">К содержимому</a>
       <aside aria-label="Основная навигация" className="sidebar">
         <div className="sidebar-brand">
@@ -113,4 +115,22 @@ export function AppShell({
       </div>
     </div>
   );
+}
+
+/** Тонкая полоса сверху, пока идут запросы к серверу. Короткие (до 200 мс) не показываем, чтобы не мигала. */
+function TopProgress() {
+  const [visible, setVisible] = useState(false);
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = subscribeActivity((active) => {
+      if (active > 0) {
+        if (!timer) timer = setTimeout(() => { setVisible(true); }, 200);
+      } else {
+        if (timer) { clearTimeout(timer); timer = undefined; }
+        setVisible(false);
+      }
+    });
+    return () => { if (timer) clearTimeout(timer); unsubscribe(); };
+  }, []);
+  return <div aria-hidden="true" className={visible ? "top-progress top-progress--on" : "top-progress"} />;
 }

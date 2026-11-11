@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import { trackRequest } from "./activity.js";
 
 export type AppSupabaseClient = SupabaseClient;
 
@@ -72,7 +73,8 @@ export function createSupabaseClient(
     );
   }
   return createClient(trimmedUrl, trimmedKey, {
-    global: { fetch: (input, init) => fetchWithReadRetry(input, init) },
+    // Каждый запрос учитывается полосой загрузки сверху экрана.
+    global: { fetch: (input, init) => trackRequest(fetchWithReadRetry(input, init)) },
     auth: {
       persistSession: true,
       autoRefreshToken: true,

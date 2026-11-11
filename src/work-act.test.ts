@@ -144,7 +144,8 @@ describe("work act model and print view", () => {
       onOpenRelated: async () => undefined
     }));
 
-    assert.match(markup, /Редактировать акт/u);
+    // Строки печатной формы правятся из печатного вида («Строки акта»), в карточке только вход в него.
+    assert.match(markup, /Акт для печати/u);
     assert.doesNotMatch(markup, /\+ Добавить прибор/u);
   });
 

@@ -1,4 +1,7 @@
 import React, {
+  Children,
+  isValidElement,
+  useEffect,
   useId,
   useRef,
   useState,
@@ -331,26 +334,48 @@ export function PageIntro({
   title,
   description,
   actions,
-  breadcrumbs
+  breadcrumbs,
+  titleAside
 }: {
   readonly eyebrow?: string;
   readonly title: string;
+  /** Пояснение не выводится: заголовок и кнопки говорят сами за себя. Остаётся подсказкой при наведении. */
   readonly description?: string;
   readonly actions?: ReactNode;
   readonly breadcrumbs?: readonly PageCrumb[];
+  /** Переключатель вида (Доска / Список) рядом с заголовком. */
+  readonly titleAside?: ReactNode;
 }) {
   return (
-    <header className={cn("page-intro mb-6 grid gap-2.5")}>
+    <header className={cn("page-intro")}>
       {breadcrumbs ? <PageBreadcrumbs items={breadcrumbs} /> : null}
-      {eyebrow ? <p className="page-intro__eyebrow text-sm font-medium text-primary">{eyebrow}</p> : null}
-      <div className="page-intro__row flex min-w-0 flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
-          {description ? <p className="page-intro__description mt-2 max-w-2xl text-[15px] leading-6 text-muted-foreground">{description}</p> : null}
+      {eyebrow ? <p className="page-intro__eyebrow">{eyebrow}</p> : null}
+      <div className="page-intro__row">
+        <div className="page-intro__title">
+          <h1 {...(description ? { title: description } : {})}>{title}</h1>
+          {titleAside}
         </div>
-        {actions ? <div className="page-intro__actions flex flex-wrap items-center gap-2 sm:justify-end">{actions}</div> : null}
+        {actions ? <div className="page-intro__actions">{actions}</div> : null}
       </div>
     </header>
+  );
+}
+
+/** Маленький переключатель вида: «Доска / Список». */
+export function ViewSwitch<Value extends string>({ label, items, value, onValueChange }: {
+  readonly label: string;
+  readonly items: readonly { readonly value: Value; readonly label: string; readonly badge?: number }[];
+  readonly value: Value;
+  readonly onValueChange: (value: Value) => void;
+}) {
+  return (
+    <div aria-label={label} className="view-switch" role="radiogroup">
+      {items.map((item) => (
+        <button aria-checked={item.value === value} className={item.value === value ? "view-switch__on" : undefined} key={item.value} onClick={() => onValueChange(item.value)} role="radio" type="button">
+          {item.label}{item.badge ? <small>{item.badge}</small> : null}
+        </button>
+      ))}
+    </div>
   );
 }
 
@@ -488,8 +513,28 @@ export function FilterBar({
   readonly resetLabel?: string;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void onSubmit(); };
+  const [panelOpen, setPanelOpen] = useState(false);
+  const [activeCount, setActiveCount] = useState(0);
+  const formRef = useRef<HTMLFormElement | null>(null);
+  // Поле поиска (класс filter-field--search) стоит в строке; остальные поля при большом
+  // количестве прячутся в панель «Фильтры», чтобы не занимать пол-экрана.
+  const all = Children.toArray(children);
+  const search = all.find((node) => isValidElement<{ className?: string }>(node) && typeof node.props.className === "string" && node.props.className.includes("filter-field--search"));
+  const rest = all.filter((node) => node !== search);
+  const collapsed = rest.length > 3;
+  // Сколько условий выбрано: поле считается выбранным, если в нём текст или значение
+  // отличается от первого пункта списка («Все», «Сначала обновлённые»).
+  useEffect(() => {
+    const fieldsInForm = [...(formRef.current?.querySelectorAll<HTMLElement>(".filter-bar__field") ?? [])];
+    const count = fieldsInForm.filter((field) => [...field.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input:not([type=hidden]), select")].some((control) => {
+      if (control instanceof HTMLSelectElement) return control.options.length > 0 && control.value !== (control.options[0]?.value ?? "");
+      return control.value.trim() !== "";
+    })).length;
+    setActiveCount(count);
+  });
+  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setPanelOpen(false); void onSubmit(); };
   const submitMobile = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void Promise.resolve(onSubmit()).then(() => setMobileOpen(false)); };
+  const fields = rest.map((node, index) => <div className="filter-bar__field" key={index}>{node}</div>);
   const actions = (
     <div className="filter-bar__actions">
       {onReset ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null}
@@ -497,15 +542,26 @@ export function FilterBar({
     </div>
   );
   return (
-    <section aria-busy={loading} aria-label="Фильтры" className="filter-bar">
-      <form className="filter-bar__desktop" onReset={() => onReset?.()} onSubmit={submit}>
-        <div className="filter-bar__fields">{children}</div>
-        {actions}
+    <section aria-busy={loading} aria-label="Фильтры" className={cn("filter-bar", "filter-bar--v2", collapsed ? "filter-bar--collapsible" : "")}>
+      <form className="filter-bar__desktop" onReset={() => { onReset?.(); setPanelOpen(false); }} onSubmit={submit} ref={formRef}>
+        <div className="filter-bar__row">
+          {search ? <div className="filter-bar__search">{search}</div> : null}
+          {collapsed
+            ? <Button aria-expanded={panelOpen} className={cn("filter-bar__toggle", activeCount ? "filter-bar__toggle--active" : "")} icon="filter" onClick={() => setPanelOpen((open) => !open)} variant="secondary">
+                {activeCount ? `Фильтры · ${activeCount}` : "Фильтры"}
+              </Button>
+            : <div className="filter-bar__inline">{fields}</div>}
+          {collapsed ? <>{onReset && activeCount ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null}{search ? <Button busy={loading} busyLabel="Ищем…" type="submit" variant="secondary">Найти</Button> : null}</> : actions}
+        </div>
+        {collapsed ? <div className="filter-bar__panel" hidden={!panelOpen}>
+          <div className="filter-bar__fields">{fields}</div>
+          {actions}
+        </div> : null}
       </form>
       <Button className="filter-bar__mobile-trigger" icon="filter" onClick={() => setMobileOpen(true)} variant="secondary">Фильтры</Button>
       <Sheet description={`Укажите, что показать в списке, и нажмите «${submitLabel}».`} onOpenChange={setMobileOpen} open={mobileOpen} title="Фильтры">
         <form className="filter-bar__mobile-form" onReset={() => onReset?.()} onSubmit={submitMobile}>
-          <div className="filter-bar__fields">{children}</div>
+          <div className="filter-bar__fields">{search}{rest}</div>
           {actions}
         </form>
       </Sheet>
@@ -542,12 +598,19 @@ export function ResourceState({
     "filtered-empty": "Измените поиск или сбросьте фильтры.",
     error: "Попробуйте ещё раз. Если не поможет, обновите страницу."
   };
-  const iconName = icon ?? (status === "error" ? "info" : status === "empty" ? "plus" : "search");
+  const iconName = icon ?? (status === "error" ? "info" : status === "empty" ? "open" : "search");
+  // Загрузка: серые строки по форме будущего списка вместо надписи, экран не прыгает.
+  if (status === "loading") {
+    return (
+      <div aria-busy="true" className="resource-state resource-state--loading resource-state--skeleton" role="status">
+        <span className="sr-only">{title ?? labels.loading}</span>
+        {[0, 1, 2, 3, 4].map((row) => <div className="skeleton-row" key={row}><Skeleton className="skeleton-row__a" /><Skeleton className="skeleton-row__b" /><Skeleton className="skeleton-row__c" /></div>)}
+      </div>
+    );
+  }
   return (
-    <div aria-busy={status === "loading"} className={"resource-state resource-state--" + status} role={status === "error" ? "alert" : "status"}>
-      {status === "loading"
-        ? <Skeleton className="resource-state__icon" />
-        : <span className="resource-state__icon"><Icon name={iconName} size={16} /></span>}
+    <div className={"resource-state resource-state--" + status} role={status === "error" ? "alert" : "status"}>
+      <span className="resource-state__icon"><Icon name={iconName} size={16} /></span>
       <strong>{title ?? labels[status]}</strong>
       <p>{description ?? details[status]}</p>
       {status === "error" && onRetry ? <Button onClick={onRetry} variant="secondary">Повторить</Button> : action}

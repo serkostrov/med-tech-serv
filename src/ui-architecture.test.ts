@@ -66,12 +66,12 @@ describe("shared UI architecture", () => {
     assert.doesNotMatch(app, /создан на сервере/u);
     assert.doesNotMatch(app, /setNotice/u);
     assert.doesNotMatch(app, /событий требуют внимания/u);
-    assert.match(app, /task-view-toolbar/u);
-    assert.match(app, /Завершенные/u);
+    assert.match(app, /<ViewSwitch/u);
+    assert.match(app, /Закрытые и отменённые/u);
     assert.match(app, /showCompleted=\{showCompletedBoard\}/u);
     assert.match(board, /showCompleted/u);
     assert.match(board, /isCompletedBoardStatus/u);
-    assert.match(css, /\.task-view-toolbar\s*>\s*\.button\s*\{[^}]*margin-left:\s*auto/su);
+    assert.match(css, /\.view-switch\s*\{/u);
     assert.match(app, /label="Разделы карточки задачи"/u);
     assert.match(app, /registryView === "list" && selectedTaskIds\.size > 0/u);
     assert.match(app, /setSelectedTaskIds\(new Set\(\)\)/u);
@@ -93,7 +93,7 @@ describe("shared UI architecture", () => {
     assert.doesNotMatch(app, /className="card equipment-passport"/u);
     assert.doesNotMatch(app, /equipment-change-form__heading/u);
     assert.match(app, /submitLabel=\{record \? "Сохранить изменения" : "Создать паспорт"\}/u);
-    assert.match(app, /footer=\{<>[\s\S]*Открыть акт для печати/u);
+    assert.match(app, /footer=\{<Button onClick=\{\(\) => setActRowsEditing\(false\)\}>Готово/u);
     assert.match(app, /form="task-parts-editor-form"/u);
   });
 

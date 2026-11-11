@@ -28,15 +28,15 @@ describe("task part card", () => {
     };
     const markup = renderToStaticMarkup(createElement(TaskCard, {
       card,
-      initialTab: "materials",
+      initialTab: "parts",
       onBack: () => undefined,
       onChanged: async () => undefined,
       onOpenRelated: async () => undefined
     }));
 
     for (const expected of [
-      "Запчасти", "TEST-PART-A · Учебный клапан", "2 шт. · Г · гарантийная",
-      "TEST-PART-B · Учебный датчик", "1.5 шт. · Б · б/у", "Добавить", "Изменить"
+      "Запчасти", "TEST-PART-A", "Учебный клапан", "Г, гарантийная",
+      "TEST-PART-B", "Учебный датчик", "1.5", "Б, б/у", "Добавить запчасть", "Изменить список"
     ]) {
       assert.ok(markup.includes(expected), expected);
     }

@@ -82,6 +82,7 @@ import {
   Input,
   MetricCard,
   PageTabs,
+  ViewSwitch,
   PageIntro,
   ResourceState,
   StatusBadge,
@@ -93,6 +94,7 @@ import { formatDisplayDate, todayIsoDate } from "./date-format.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { toTechnicalCode } from "./slug.js";
 import { AppShell } from "./components/app-shell.js";
+import { Skeleton } from "./components/ui/skeleton.js";
 
 const FILE_KIND_LABELS: Readonly<Record<string, string>> = {
   act: "Фото акта",
@@ -116,10 +118,6 @@ function formatTaskDateRange(from: string | undefined, to: string | undefined, w
   return `${formatTaskDate(from, withTime)} — ${formatTaskDate(to, withTime)}`;
 }
 
-function TaskFlag({ value }: { readonly value: boolean | undefined }) {
-  if (value === undefined) return <span className="task-flag task-flag--empty">Не заполнено</span>;
-  return <span className={`task-flag task-flag--${value ? "yes" : "no"}`}>{value ? "Да" : "Нет"}</span>;
-}
 
 function taskJournalDescription(event: TaskCardResponse["journal"][number]): string {
   if (event.description) return event.description;
@@ -129,6 +127,50 @@ function taskJournalDescription(event: TaskCardResponse["journal"][number]): str
     return `${TASK_STATUS_LABELS[event.fromStatus ?? ""] ?? "—"} → ${TASK_STATUS_LABELS[event.toStatus] ?? "—"}`;
   }
   return "Изменены данные задачи";
+}
+
+// Событие журнала простыми словами: что произошло с задачей.
+function journalTitle(event: TaskCardResponse["journal"][number]): string {
+  const from = event.fromStatus;
+  const to = event.toStatus;
+  if (!to) return taskJournalDescription(event);
+  if (!from) return "Задача создана";
+  if (to === "assigned") return from === "assigned" ? "Сменён инженер" : "Назначен инженер";
+  if (to === "in_progress") return from === "under_review" ? "Возвращена на доработку" : "Принята в работу";
+  if (to === "under_review") return "Передана на проверку";
+  if (to === "closed") return "Проверена и закрыта";
+  if (to === "cancelled") return "Отменена";
+  if (to === "new") return from === "planned" ? "Отмечена как новая" : "Задача создана";
+  return `Этап: ${TASK_STATUS_LABELS[to] ?? to}`;
+}
+
+/** История задачи лентой по дням: что произошло, кто и когда, комментарий отдельно. */
+function TaskHistory({ journal }: { readonly journal: TaskCardResponse["journal"] }) {
+  if (journal.length === 0) return <div className="task-section__empty"><p>Записей пока нет. Здесь появятся все действия по задаче.</p></div>;
+  const days = new Map<string, TaskCardResponse["journal"][number][]>();
+  for (const event of journal) {
+    const day = formatTaskDate(event.occurredAt);
+    days.set(day, [...(days.get(day) ?? []), event]);
+  }
+  return <div className="task-history">
+    {[...days.entries()].map(([day, events]) => <section className="task-history__day" key={day}>
+      <h4>{day}</h4>
+      <ol>
+        {events.map((event) => <li className="task-history__item" key={event.id}>
+          <span aria-hidden="true" className={`task-history__dot task-history__dot--${event.toStatus ? taskStatusTone(event.toStatus) : "neutral"}`} />
+          <div className="task-history__body">
+            <div className="task-history__line">
+              <strong>{journalTitle(event)}</strong>
+              {event.toStatus ? <StatusBadge tone={taskStatusTone(event.toStatus)}>{TASK_STATUS_LABELS[event.toStatus] ?? event.toStatus}</StatusBadge> : null}
+              <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time>
+            </div>
+            <span className="task-history__actor">{event.actorName ?? "Система"}</span>
+            {event.comment ? <p className="task-history__comment">{event.comment}</p> : null}
+          </div>
+        </li>)}
+      </ol>
+    </section>)}
+  </div>;
 }
 
 function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onToggle, onToggleAll, filtered = false }: {
@@ -577,7 +619,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   readonly onBack: () => void;
   readonly onChanged: () => Promise<void>;
   readonly onOpenRelated: (id: string) => Promise<void>;
-  readonly initialTab?: "overview" | "result" | "materials" | "history";
+  readonly initialTab?: "overview" | "result" | "materials" | "parts" | "history";
 }) {
   const [suggestions, setSuggestions] = useState<readonly {
     readonly engineerId: string;
@@ -594,7 +636,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [actRowsEditing, setActRowsEditing] = useState(false);
   const [resultEditing, setResultEditing] = useState(false);
   const [overviewEditing, setOverviewEditing] = useState(false);
-  const [detailTab, setDetailTab] = useState<"overview" | "result" | "materials" | "history">(initialTab);
+  // Вкладки карточки: работа и акт (результат и файлы), запчасти отдельно, история.
+  const [detailTab, setDetailTab] = useState<"work" | "parts" | "history">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : "work");
   const [resultCatalogs, setResultCatalogs] = useState<{ readonly reasons: readonly ReferenceCatalogValue[]; readonly workTypes: readonly ReferenceCatalogValue[] }>({ reasons: [], workTypes: [] });
   const task = card.task;
   type PartDraft = Omit<TaskPartPosition, "id" | "quantity"> & { readonly key: string; readonly quantity: string };
@@ -873,10 +916,12 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const contactDetails = [task.customer?.contactPhone, task.customer?.contactEmail].filter(Boolean).join(" · ");
   const canCancel = card.availableActions.some((action) => action.code === "cancel");
   const workflowActions = card.availableActions.filter((action) => action.code !== "assign" && action.code !== "cancel" && (task.status !== "under_review" || (action.code !== "verify_closure" && action.code !== "close" && action.code !== "return_for_rework")));
-  const overviewHeaderActions = (card.canEditOverview || canCancel) ? <>
-    {card.canEditOverview ? <Button onClick={() => { setFormError(null); setOverviewEditing(true); }} variant="secondary">Изменить задачу</Button> : null}
-    {canCancel ? <Button className="button--danger-outline" disabled={busy} onClick={() => setActionDialog("cancel")} variant="secondary">Отменить задачу</Button> : null}
-  </> : undefined;
+  // Править задачу целиком, видеть плательщика и договор: только координатор (tasks.write).
+  const canManageTask = card.canEditOverview === true && card.canSetWorkModifier === true;
+  const showFinance = card.canSetWorkModifier === true;
+  // Инженер добавляет файлы и запчасти, когда принял задачу; координатор в любой открытой задаче.
+  const canEditPartsNow = card.canEditParts === true && (card.canSetWorkModifier === true || task.status === "in_progress");
+  const canAddFilesNow = canUploadFiles && (card.canSetWorkModifier === true || task.status === "in_progress");
   // Что делать дальше по задаче: одна понятная подсказка и главные кнопки над вкладками.
   const hasActPhoto = Boolean(latestActFile);
   // Результат заполняет инженер задачи; координатор может дописать его за инженера.
@@ -895,14 +940,46 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
                   : task.status === "under_review" && !canCloseReview && !canReturnReview ? { title: "Задача на проверке", hint: "Координатор проверяет акт и фото. Если нужно что-то исправить, задача вернётся с комментарием." }
                     : workflowActions.length ? { title: "Следующий шаг", hint: "Выберите действие по задаче." }
                       : null;
-  if (actOpen) return <WorkAct act={buildWorkAct(card, { equipment: actEquipmentRows, works: actWorkRows })} onBack={() => setActOpen(false)} />;
+  // Строки печатной формы правятся из самой печатной формы (кнопка «Строки акта»).
+  const actRowsDialog = (
+    <Dialog description="Строки нужны только для печатной формы акта и в задаче не сохраняются. Заполните их перед печатью." footer={<Button onClick={() => setActRowsEditing(false)}>Готово</Button>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Строки печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
+      <h3>Оборудование</h3>
+      <div className="work-act-row-editor__list">{actEquipmentRows.map((item, index) => <div className="work-act-row-editor__equipment" key={`equipment-${index}`}><input aria-label={`Наименование прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="Наименование прибора" value={item.name} /><input aria-label={`Серийный номер прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, serialNumber: event.target.value } : row))} placeholder="Серийный номер" value={item.serialNumber} /><input aria-label={`Показание счётчика прибора ${index + 1}`} inputMode="decimal" onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => {
+        if (rowIndex !== index) return row;
+        const { meterReading: _meterReading, ...withoutMeter } = row;
+        return event.target.value === "" ? withoutMeter : { ...row, meterReading: Number(event.target.value) };
+      }))} placeholder="Счётчик" step="any" type="number" value={item.meterReading ?? ""} /><button aria-label={`Удалить прибор ${index + 1}`} className="task-parts-editor__remove" onClick={() => setActEquipmentRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">×</button></div>)}</div>
+      <button className="task-parts-add" onClick={() => setActEquipmentRows((current) => [...current, { name: "", serialNumber: "" }])} type="button">Добавить прибор</button>
+      <h3>Выполненные работы</h3>
+      <div className="work-act-row-editor__list">{actWorkRows.map((item, index) => <div className="work-act-row-editor__work" key={`work-${index}`}><input aria-label={`Вид работ ${index + 1}`} onChange={(event) => setActWorkRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="Вид работ" value={item.name} /><Select aria-label={`Модификатор работ ${index + 1}`} onChange={(event) => setActWorkRows((current) => current.map((row, rowIndex) => {
+        if (rowIndex !== index) return row;
+        const { modifier: _modifier, ...withoutModifier } = row;
+        return event.target.value ? { ...row, modifier: event.target.value as "G" | "N" } : withoutModifier;
+      }))} value={item.modifier ?? ""}><option value="">Без модификатора</option><option value="G">Г · гарантийные</option><option value="N">Н · неправильная эксплуатация</option></Select><input aria-label={`Часы работ ${index + 1}`} inputMode="decimal" onChange={(event) => setActWorkRows((current) => current.map((row, rowIndex) => {
+        if (rowIndex !== index) return row;
+        const { hours: _hours, ...withoutHours } = row;
+        return event.target.value === "" ? withoutHours : { ...row, hours: Number(event.target.value) };
+      }))} min="0" placeholder="Часы" step="any" type="number" value={item.hours ?? ""} /><button aria-label={`Удалить вид работ ${index + 1}`} className="task-parts-editor__remove" onClick={() => setActWorkRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">×</button></div>)}</div>
+      <button className="task-parts-add" onClick={() => setActWorkRows((current) => [...current, { name: "" }])} type="button">Добавить вид работ</button>
+    </section></Dialog>
+  );
+  if (actOpen) return <><WorkAct act={buildWorkAct(card, { equipment: actEquipmentRows, works: actWorkRows })} onBack={() => setActOpen(false)} onEditRows={() => setActRowsEditing(true)} />{actRowsDialog}</>;
   return <>
-    <EntityDetailToolbar actions={<Button onClick={() => setActOpen(true)} variant="secondary">Открыть акт</Button>} backLabel="К списку задач" onBack={onBack} />
-    <EntityDetailHeader aside={<StatusBadge tone={taskStatusTone(task.status)}>{card.status.name}</StatusBadge>} description={`${card.workType?.name ?? "Вид работ не указан"} · ${task.customer?.siteName ?? "Площадка не указана"}`} meta={task.isOverdue ? <span className="entity-detail-heading__overdue">Срок истёк</span> : undefined} title={task.title} />
+    <EntityDetailToolbar actions={<Button onClick={() => setActOpen(true)} variant="secondary">Акт для печати</Button>} backLabel="К задачам" onBack={onBack} />
+    <header className="task-head">
+      <div className="task-head__meta">
+        <span className="task-head__number">{task.number}</span>
+        <StatusBadge tone={taskStatusTone(task.status)}>{card.status.name}</StatusBadge>
+        {task.priority === "urgent" ? <span className="task-head__flag task-head__flag--urgent">Срочная</span> : null}
+        {task.isOverdue ? <span className="task-head__flag task-head__flag--late">Срок истёк</span> : null}
+      </div>
+      <h1>{task.title}</h1>
+      <p>{[card.workType?.name, task.customer?.siteName].filter(Boolean).join(" · ")}</p>
+    </header>
     {nextStep ? <section aria-label="Следующий шаг" className={`task-next-step${nextStep.tone === "warning" ? " task-next-step--warning" : ""}`}>
       <div className="task-next-step__text"><strong>{nextStep.title}</strong><span>{nextStep.hint}</span></div>
       <div className="task-next-step__actions">
-        {needsResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={workflowActions.length || !isTaskEngineer ? "secondary" : "primary"}>{!isTaskEngineer ? "Заполнить результат за инженера" : task.callReason ? "Изменить результат и фото" : "Заполнить результат и фото"}</Button> : null}
+        {needsResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={workflowActions.length || !isTaskEngineer ? "secondary" : "primary"}>{!isTaskEngineer ? "Заполнить результат за инженера" : resultFilled ? "Изменить результат и фото" : "Заполнить результат и фото"}</Button> : null}
         {canAssign ? <Button disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)}>Назначить инженера</Button> : null}
         {workflowActions.filter((action) => action.code !== "submit_for_review" || resultFilled).map((action) => <Button busy={busy} disabled={busy} key={action.code} onClick={() => void perform(action.code)}>{action.label}</Button>)}
       </div>
@@ -916,97 +993,104 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       onOpenAct={() => setActOpen(true)}
       onReturn={async (comment) => { await perform("return_for_rework", comment); }}
     /> : null}
-    <PageTabs items={[{ value: "overview", label: "Обзор" }, { value: "result", label: "Результат и акт" }, { value: "materials", label: "Файлы и запчасти", badge: card.files.length + card.parts.length }, { value: "history", label: "История", badge: card.journal.length }]} label="Разделы карточки задачи" onValueChange={setDetailTab} value={detailTab} />
-    {detailTab === "overview" ? <section className="card task-card-summary">
-      <CardHeader action={overviewHeaderActions} meta="Основные параметры" title="О задаче" />
-      <div className="task-card-grid">
-        <div className="task-overview-groups">
-          <div className="task-field-group task-field-group--equipment">
-            <h3>Прибор</h3>
-            {card.equipment ? (
-              <dl className="task-field-grid">
-                <div>
-                  <dt>Модель</dt>
-                  <dd>{card.equipment.manufacturer} {card.equipment.model}</dd>
-                </div>
-                <div>
-                  <dt>S/N</dt>
-                  <dd>{card.equipment.serialNumber}</dd>
-                </div>
-                <div>
-                  <dt>Статус</dt>
-                  <dd>
-                    <span className="task-equipment-status">{card.equipment.statusName ?? card.equipment.status}</span>
-                  </dd>
-                </div>
-                <div>
-                  <dt>Площадка</dt>
-                  <dd className={card.equipment.site ? undefined : "is-empty"}>{card.equipment.site ?? "Место не указано"}</dd>
-                </div>
+    <div className="task-layout">
+      <div className="task-layout__main">
+        {task.callReason ? <section className="task-brief" aria-label="Что случилось"><h2>Что случилось</h2><p>{task.callReason}</p></section> : null}
+        <PageTabs items={[{ value: "work", label: "Работа и акт", badge: card.files.length }, { value: "parts", label: "Запчасти", badge: card.parts.length }, { value: "history", label: "История", badge: card.journal.length }]} label="Разделы карточки задачи" onValueChange={setDetailTab} value={detailTab} />
+        {detailTab === "work" ? <div className="task-work">
+          <section className="task-section" aria-labelledby={`task-result-${task.id}`}>
+            <header className="task-section__head">
+              <h3 id={`task-result-${task.id}`}>Результат работ</h3>
+              {canEditResult && resultFilled ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant="secondary">Изменить результат</Button> : null}
+            </header>
+            {resultFilled ? <>
+              <dl className="task-doc">
+                <div><dt>Что сделано</dt><dd>{task.workDescription}</dd></div>
+                {task.recommendations ? <div><dt>Рекомендации</dt><dd>{task.recommendations}</dd></div> : null}
+                {task.userRemarks ? <div><dt>Замечания пользователя</dt><dd>{task.userRemarks}</dd></div> : null}
+                {card.reason ? <div><dt>Причина неисправности</dt><dd>{card.reason.name}</dd></div> : null}
+                {task.workModifier ? <div><dt>Гарантия</dt><dd>{task.workModifier === "G" ? "Г, гарантийная работа" : "Н, неправильная эксплуатация"}</dd></div> : null}
+                {task.hours !== undefined ? <div><dt>Часы работы</dt><dd>{task.hours}</dd></div> : null}
+                {meterLabel !== undefined ? <div><dt>Показание счётчика</dt><dd>{meterLabel}</dd></div> : null}
               </dl>
-            ) : (
-              <p className="task-equipment-empty">Прибор не найден</p>
-            )}
-          </div>
-          <div className="task-field-group">
-            <h3>Сроки и работы</h3>
-            <dl className="task-field-grid">
-              <div><dt>Вид работ</dt><dd className={card.workType?.name ? undefined : "is-empty"}>{workTypeLabel}</dd></div>
-              <div><dt>Период</dt><dd className={task.periodFrom || task.periodTo ? undefined : "is-empty"}>{formatTaskDateRange(task.periodFrom, task.periodTo)}</dd></div>
-              <div><dt>Дата вызова</dt><dd className={task.callDate ? undefined : "is-empty"}>{formatTaskDate(task.callDate)}</dd></div>
-              <div><dt>Дата выезда</dt><dd className={task.visitDate ? undefined : "is-empty"}>{formatTaskDate(task.visitDate)}</dd></div>
-              <div><dt>Окончание работ</dt><dd className={task.completedAt ? undefined : "is-empty"}>{formatTaskDate(task.completedAt, true)}</dd></div>
-              <div><dt>Время работ</dt><dd className={task.workStartedAt || task.workFinishedAt ? undefined : "is-empty"}>{formatTaskDateRange(task.workStartedAt, task.workFinishedAt, true)}</dd></div>
-              <div><dt>Часы</dt><dd className={task.hours === undefined ? "is-empty" : undefined}>{task.hours ?? "—"}</dd></div>
-            </dl>
-          </div>
-          <div className="task-field-group">
-            <h3>Клиент и исполнитель</h3>
-            <dl className="task-field-grid">
-              <div><dt>Площадка</dt><dd className={task.customer?.siteName ? undefined : "is-empty"}>{task.customer?.siteName ?? "—"}{task.customer?.address ? <small>{task.customer.address}</small> : null}</dd></div>
-              <div><dt>Инициатор</dt><dd className={task.initiator?.fullName || task.initiatorName ? undefined : "is-empty"}>{task.initiator?.fullName ?? task.initiatorName ?? "—"}</dd></div>
-              <div><dt>Клиент</dt><dd className={task.customer?.contactFullName ? undefined : "is-empty"}>{task.customer?.contactFullName ?? "—"}{contactDetails ? <small className="task-contact-links">{task.customer?.contactPhone ? <a href={`tel:${task.customer.contactPhone.replace(/[^\d+]/gu, "")}`}>{task.customer.contactPhone}</a> : null}{task.customer?.contactEmail ? <a href={`mailto:${task.customer.contactEmail}`}>{task.customer.contactEmail}</a> : null}</small> : null}</dd></div>
-              <div><dt>Плательщик</dt><dd className={task.customer?.payerName ? undefined : "is-empty"}>{task.customer?.payerName ?? "—"}</dd></div>
-              <div><dt>Инженер</dt><dd className={card.engineer ? undefined : "is-empty"}>{card.engineer?.fullName ?? "Не назначен"}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить инженера</button> : null}</dd></div>
-              <div><dt>Договор</dt><dd className={task.contractNumber || task.contractId ? undefined : "is-empty"}>{task.contractNumber ?? task.contractId ?? "—"}</dd></div>
-            </dl>
-          </div>
-          <div className="task-field-group">
-            <h3>Связи</h3>
-            <dl className="task-field-grid">
-              <div><dt>Первичная задача</dt><dd className={task.primaryTaskId ? undefined : "is-empty"}>{task.primaryTaskId ? <button className="text-button" onClick={() => void onOpenRelated(task.primaryTaskId!)} type="button">{task.primaryTaskNumber ?? task.primaryTaskId}</button> : "—"}</dd></div>
-              <div><dt>Задача-продолжение</dt><dd className={task.continuationTaskId ? undefined : "is-empty"}>{task.continuationTaskId ? <button className="text-button" onClick={() => void onOpenRelated(task.continuationTaskId!)} type="button">{task.continuationTaskNumber ?? task.continuationTaskId}</button> : "—"}</dd></div>
-              <div><dt>Из плана ТО</dt><dd><TaskFlag value={task.isMaintenancePlan} /></dd></div>
-              <div><dt>Показание счётчика</dt><dd className={meterLabel === undefined ? "is-empty" : undefined}>{meterLabel ?? "—"}</dd></div>
-            </dl>
-          </div>
-        </div>
+              <ul className="task-checks" aria-label="Отметки акта">
+                {([["Работы выполнены полностью", task.workCompleted ?? card.closure?.workCompleted], ["Аппарат исправен и допущен", task.apparatusApproved ?? card.closure?.apparatusApproved], ["Заказчик претензий не имеет", task.customerHasNoClaims ?? card.closure?.customerHasNoClaims], ["Продолжение первичной заявки", task.continuedInPrimary]] as const).map(([label, value]) => <li className={value ? "task-checks__on" : undefined} key={label}><span aria-hidden="true">{value ? "✓" : ""}</span>{label}{value ? null : <small>не отмечено</small>}</li>)}
+              </ul>
+            </> : <div className="task-section__empty">
+              <p>{task.status === "in_progress" ? (isTaskEngineer ? "Опишите, что сделано, отметьте пункты акта и приложите фото подписанного акта." : "Инженер ещё не заполнил результат.") : task.status === "assigned" || task.status === "new" || task.status === "planned" ? "Результат заполняется, когда инженер примет задачу в работу." : "Результат не заполнен."}</p>
+              {canEditResult && task.status === "in_progress" ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={isTaskEngineer ? "primary" : "secondary"}>{isTaskEngineer ? "Заполнить результат" : "Заполнить за инженера"}</Button> : null}
+            </div>}
+          </section>
+          <section className="task-section" aria-labelledby={`task-files-${task.id}`}>
+            <header className="task-section__head">
+              <h3 id={`task-files-${task.id}`}>Фото и файлы</h3>
+              {canAddFilesNow ? <div className="task-section__actions">
+                <label className={`button button--secondary task-upload-button${busy ? " is-disabled" : ""}`}><input accept="image/jpeg,image/png,image/webp,image/heic,image/heif" disabled={busy} onChange={(event) => void uploadTaskMaterials(event, "act")} type="file" />{hasActPhoto ? "Заменить фото акта" : "Загрузить фото акта"}</label>
+                <label className={`button button--primary task-upload-button${busy ? " is-disabled" : ""}`}><input accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" disabled={busy} multiple onChange={(event) => void uploadTaskMaterials(event)} type="file" /><Icon name="plus" size={16} />{busy ? "Загружаем…" : "Добавить фото и видео"}</label>
+              </div> : null}
+            </header>
+            <div className="task-files">
+              <div className="task-files__group">
+                <h4>Фото подписанного акта</h4>
+                <FileGallery emptyText={task.status === "in_progress" ? "Ещё не загружено. Без него задачу нельзя передать на проверку." : "Не загружено."} files={latestActFile ? [latestActFile] : []} />
+              </div>
+              <div className="task-files__group">
+                <h4>Фото и видео с выезда <small>{photoCount} из 10 фото, {videoCount} из 2 видео</small></h4>
+                <FileGallery emptyText="Пока нет. Можно выбрать сразу несколько файлов." files={card.files.filter((file) => file.kind === "photo" || file.kind === "video")} />
+              </div>
+              {card.files.some((file) => file.kind !== "photo" && file.kind !== "video" && file.id !== latestActFile?.id) ? <div className="task-files__group">
+                <h4>Документы, письма и прежние фото акта</h4>
+                <FileGallery files={card.files.filter((file) => file.kind !== "photo" && file.kind !== "video" && file.id !== latestActFile?.id)} />
+              </div> : null}
+            </div>
+          </section>
+        </div> : null}
+        {detailTab === "parts" ? <section className="task-section" aria-labelledby={`task-parts-${task.id}`}>
+          <header className="task-section__head">
+            <h3 id={`task-parts-${task.id}`}>Запчасти</h3>
+            {canEditPartsNow ? <div className="task-section__actions">
+              {card.parts.length > 0 ? <Button onClick={() => setPartsEditing(true)} variant="secondary">Изменить список</Button> : null}
+              <Button icon="plus" onClick={addPartDraft}>Добавить запчасть</Button>
+            </div> : null}
+          </header>
+          {card.parts.length > 0
+            ? <div className="table-scroll"><table className="data-table task-parts-table"><thead><tr><th scope="col">Артикул</th><th scope="col">Наименование</th><th className="numeric" scope="col">Количество</th><th scope="col">Состояние</th></tr></thead><tbody>
+              {card.parts.map((part) => <tr key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}{part.forSale ? <small>для продажи</small> : null}</td><td className="numeric">{part.quantity}</td><td>{part.condition === "G" ? "Г, гарантийная" : part.condition === "N" ? "Н, новая" : "Б, б/у"}</td></tr>)}
+            </tbody></table></div>
+            : <div className="task-section__empty"><p>{canEditPartsNow ? "Запчасти не добавлены. Добавьте, если использовали детали на выезде." : "Запчасти на этой задаче не использовались."}</p></div>}
+        </section> : null}
+        {detailTab === "history" ? <section className="task-section" aria-label="История задачи"><TaskHistory journal={card.journal} /></section> : null}
       </div>
-    </section> : null}
-    {detailTab === "result" ? <section className="card task-result-card">
-      <CardHeader
-        action={<>
-          {canEditResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant="secondary">Редактировать результат</Button> : null}
-          <Button onClick={() => setActRowsEditing(true)} variant="secondary">Редактировать акт</Button>
-        </>}
-        meta="Поля акта и закрытия"
-        title="Результат работ"
-      />
-      <div className="task-result-body">
-        <dl className="task-narrative-list">
-          <div><dt>Причина вызова</dt><dd className={task.callReason ? undefined : "is-empty"}>{task.callReason ?? "Не заполнено"}</dd></div>
-          <div><dt>Описание работ</dt><dd className={task.workDescription ? undefined : "is-empty"}>{task.workDescription ?? "Не заполнено"}</dd></div>
-          <div><dt>Рекомендации</dt><dd className={task.recommendations ? undefined : "is-empty"}>{task.recommendations ?? "Не заполнено"}</dd></div>
-          <div><dt>Замечания пользователя</dt><dd className={task.userRemarks ? undefined : "is-empty"}>{task.userRemarks ?? "Не заполнено"}</dd></div>
-        </dl>
-        <div className="task-flag-grid" role="list">
-          <article role="listitem"><span>Работы выполнены полностью</span><TaskFlag value={task.workCompleted ?? card.closure?.workCompleted} /></article>
-          <article role="listitem"><span>Аппарат исправен и допущен</span><TaskFlag value={task.apparatusApproved ?? card.closure?.apparatusApproved} /></article>
-          <article role="listitem"><span>Заказчик претензий не имеет</span><TaskFlag value={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims} /></article>
-          <article role="listitem"><span>Продолжение первичной заявки</span><TaskFlag value={task.continuedInPrimary} /></article>
-        </div>
-      </div>
-    </section> : null}
+      <aside className="task-layout__aside" aria-label="Свойства задачи">
+        <section className="task-props">
+          <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
+          <dl>
+            <div><dt>Инженер</dt><dd>{card.engineer?.fullName ?? <span className="is-empty">Не назначен</span>}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить</button> : canAssign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Назначить</button> : null}</dd></div>
+            <div><dt>Срок</dt><dd>{task.periodFrom || task.periodTo ? formatTaskDateRange(task.periodFrom, task.periodTo) : <span className="is-empty">Не указан</span>}</dd></div>
+            <div><dt>Срочность</dt><dd>{task.priority === "urgent" ? "Срочная" : "Плановая"}</dd></div>
+            <div><dt>Вид работ</dt><dd>{workTypeLabel}</dd></div>
+            {task.callDate ? <div><dt>Дата вызова</dt><dd>{formatTaskDate(task.callDate)}</dd></div> : null}
+            {task.visitDate ? <div><dt>Дата выезда</dt><dd>{formatTaskDate(task.visitDate)}</dd></div> : null}
+            {task.workStartedAt || task.workFinishedAt ? <div><dt>Время работ</dt><dd>{task.workStartedAt && task.workFinishedAt ? formatTaskDateRange(task.workStartedAt, task.workFinishedAt, true) : task.workStartedAt ? `с ${formatTaskDate(task.workStartedAt, true)}` : `до ${formatTaskDate(task.workFinishedAt, true)}`}</dd></div> : null}
+            {task.completedAt ? <div><dt>Окончание</dt><dd>{formatTaskDate(task.completedAt, true)}</dd></div> : null}
+          </dl>
+          <dl>
+            <div><dt>Прибор</dt><dd>{card.equipment ? <>{card.equipment.manufacturer} {card.equipment.model}<small>S/N {card.equipment.serialNumber}{card.equipment.statusName || card.equipment.status ? ` · ${card.equipment.statusName ?? card.equipment.status}` : ""}</small></> : <span className="is-empty">Не выбран</span>}</dd></div>
+            <div><dt>Площадка</dt><dd>{task.customer?.siteName ?? <span className="is-empty">Не указана</span>}{task.customer?.address ? <small>{task.customer.address}</small> : null}</dd></div>
+            {task.customer?.contactFullName || contactDetails ? <div><dt>Контакт</dt><dd>{task.customer?.contactFullName ?? ""}{contactDetails ? <small className="task-contact-links">{task.customer?.contactPhone ? <a href={`tel:${task.customer.contactPhone.replace(/[^\d+]/gu, "")}`}>{task.customer.contactPhone}</a> : null}{task.customer?.contactEmail ? <a href={`mailto:${task.customer.contactEmail}`}>{task.customer.contactEmail}</a> : null}</small> : null}</dd></div> : null}
+            {task.initiator?.fullName || task.initiatorName ? <div><dt>Обратился</dt><dd>{task.initiator?.fullName ?? task.initiatorName}</dd></div> : null}
+            {showFinance && task.customer?.payerName ? <div><dt>Плательщик</dt><dd>{task.customer.payerName}</dd></div> : null}
+            {showFinance && (task.contractNumber || task.contractId) ? <div><dt>Договор</dt><dd>{task.contractNumber ?? task.contractId}</dd></div> : null}
+          </dl>
+          {task.primaryTaskId || task.continuationTaskId || task.isMaintenancePlan ? <dl>
+            {task.primaryTaskId ? <div><dt>Первичная</dt><dd><button className="text-button" onClick={() => void onOpenRelated(task.primaryTaskId!)} type="button">{task.primaryTaskNumber ?? task.primaryTaskId}</button></dd></div> : null}
+            {task.continuationTaskId ? <div><dt>Продолжение</dt><dd><button className="text-button" onClick={() => void onOpenRelated(task.continuationTaskId!)} type="button">{task.continuationTaskNumber ?? task.continuationTaskId}</button></dd></div> : null}
+            {task.isMaintenancePlan ? <div><dt>План ТО</dt><dd>Создана по плану</dd></div> : null}
+          </dl> : null}
+          {canCancel ? <button className="task-props__cancel" disabled={busy} onClick={() => setActionDialog("cancel")} type="button">Отменить задачу</button> : null}
+        </section>
+      </aside>
+    </div>
     <DialogForm
       busy={busy}
       description="Эти данные попадут в акт и нужны, чтобы передать задачу на проверку."
@@ -1036,77 +1120,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <FileDropField accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hint={hasActPhoto ? "Фото акта уже есть, можно заменить новым" : "Обязательно для передачи на проверку: JPEG, PNG, WebP или HEIC"} name="actPhoto" title="Фото подписанного акта" />
       <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Необязательно. Можно выбрать сразу несколько: всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео).`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
-    <Dialog description="Строки нужны только для печатной формы акта и в задаче не сохраняются. Заполните их перед печатью." footer={<><Button onClick={() => setActRowsEditing(false)} variant="secondary">Готово</Button><Button onClick={() => setActOpen(true)}>Открыть акт для печати</Button></>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Строки печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
-      <h3>Оборудование</h3>
-      <div className="work-act-row-editor__list">{actEquipmentRows.map((item, index) => <div className="work-act-row-editor__equipment" key={`equipment-${index}`}><input aria-label={`Наименование прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="Наименование прибора" value={item.name} /><input aria-label={`Серийный номер прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, serialNumber: event.target.value } : row))} placeholder="Серийный номер" value={item.serialNumber} /><input aria-label={`Показание счётчика прибора ${index + 1}`} inputMode="decimal" onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => {
-        if (rowIndex !== index) return row;
-        const { meterReading: _meterReading, ...withoutMeter } = row;
-        return event.target.value === "" ? withoutMeter : { ...row, meterReading: Number(event.target.value) };
-      }))} placeholder="Счётчик" step="any" type="number" value={item.meterReading ?? ""} /><button aria-label={`Удалить прибор ${index + 1}`} className="task-parts-editor__remove" onClick={() => setActEquipmentRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">×</button></div>)}</div>
-      <button className="task-parts-add" onClick={() => setActEquipmentRows((current) => [...current, { name: "", serialNumber: "" }])} type="button">Добавить прибор</button>
-      <h3>Выполненные работы</h3>
-      <div className="work-act-row-editor__list">{actWorkRows.map((item, index) => <div className="work-act-row-editor__work" key={`work-${index}`}><input aria-label={`Вид работ ${index + 1}`} onChange={(event) => setActWorkRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="Вид работ" value={item.name} /><Select aria-label={`Модификатор работ ${index + 1}`} onChange={(event) => setActWorkRows((current) => current.map((row, rowIndex) => {
-        if (rowIndex !== index) return row;
-        const { modifier: _modifier, ...withoutModifier } = row;
-        return event.target.value ? { ...row, modifier: event.target.value as "G" | "N" } : withoutModifier;
-      }))} value={item.modifier ?? ""}><option value="">Без модификатора</option><option value="G">Г · гарантийные</option><option value="N">Н · неправильная эксплуатация</option></Select><input aria-label={`Часы работ ${index + 1}`} inputMode="decimal" onChange={(event) => setActWorkRows((current) => current.map((row, rowIndex) => {
-        if (rowIndex !== index) return row;
-        const { hours: _hours, ...withoutHours } = row;
-        return event.target.value === "" ? withoutHours : { ...row, hours: Number(event.target.value) };
-      }))} min="0" placeholder="Часы" step="any" type="number" value={item.hours ?? ""} /><button aria-label={`Удалить вид работ ${index + 1}`} className="task-parts-editor__remove" onClick={() => setActWorkRows((current) => current.filter((_, rowIndex) => rowIndex !== index))} type="button">×</button></div>)}</div>
-      <button className="task-parts-add" onClick={() => setActWorkRows((current) => [...current, { name: "" }])} type="button">Добавить вид работ</button>
-    </section></Dialog>
-    {detailTab === "materials" ? <div className="task-card-columns">
-      <section className="card task-materials-card">
-        <CardHeader
-          action={canUploadFiles ? <label className={`button button--primary task-upload-button${busy ? " is-disabled" : ""}`}><input accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" disabled={busy} multiple onChange={(event) => void uploadTaskMaterials(event)} type="file" /><Icon name="plus" size={16} />{busy ? "Загружаем…" : "Добавить файлы"}</label> : undefined}
-          meta={formatRussianCount(card.files.length, ["файл", "файла", "файлов"])}
-          title="Файлы"
-        />
-        <div className="task-card-panel task-files">
-          <div className="task-files__group">
-            <div className="task-files__head"><h4>Фото подписанного акта</h4>{canUploadFiles ? <label className="text-button task-upload-link"><input accept="image/jpeg,image/png,image/webp,image/heic,image/heif" disabled={busy} onChange={(event) => void uploadTaskMaterials(event, "act")} type="file" />{hasActPhoto ? "Заменить" : "Загрузить"}</label> : null}</div>
-            <FileGallery emptyText="Фото акта ещё не загружено. Оно нужно, чтобы передать задачу на проверку." files={latestActFile ? [latestActFile] : []} />
-          </div>
-          <div className="task-files__group">
-            <div className="task-files__head"><h4>Фото и видео с выезда</h4></div>
-            <FileGallery emptyText="Фото и видео пока нет. Нажмите «Добавить файлы», можно выбрать сразу несколько." files={card.files.filter((file) => file.kind === "photo" || file.kind === "video")} />
-          </div>
-          {card.files.some((file) => file.kind !== "photo" && file.kind !== "video" && file.id !== latestActFile?.id) ? <div className="task-files__group">
-            <div className="task-files__head"><h4>Документы, письма и прежние фото акта</h4></div>
-            <FileGallery files={card.files.filter((file) => file.kind !== "photo" && file.kind !== "video" && file.id !== latestActFile?.id)} />
-          </div> : null}
-        </div>
-      </section>
-      <section className="card task-materials-card">
-        <CardHeader meta={formatRussianCount(card.parts.length, ["позиция", "позиции", "позиций"])} title="Запчасти" />
-        {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
-        <div className="task-card-panel">
-          {card.parts.length > 0
-            ? <div className="task-card-list">{card.parts.map((part) => <div key={part.id}><strong>{part.articleNumber} · {part.name}</strong><span>{part.quantity} шт. · {part.condition === "G" ? "Г · гарантийная" : part.condition === "N" ? "Н · новая" : "Б · б/у"}{part.forSale ? " · для продажи" : ""}</span></div>)}</div>
-            : <div className="task-empty task-empty--compact"><Icon name="info" size={18} /><div><strong>Запчастей пока нет</strong><p>Укажите детали, если использовали на выезде</p></div></div>}
-          {card.canEditParts ? <div className="task-materials-actions">
-            <button className="task-materials-action" onClick={addPartDraft} type="button">Добавить</button>
-            {card.parts.length > 0 ? <button className="task-materials-action" onClick={() => setPartsEditing(true)} type="button">Изменить</button> : null}
-          </div> : null}
-        </div>
-      </section>
-    </div> : null}
-    {detailTab === "history" ? <section className="card">
-      <CardHeader meta="Кто, что и когда" title="Журнал задачи" />
-      {card.journal.length > 0 ? <div className="history-feed">{card.journal.map((event) => {
-        const description = taskJournalDescription(event);
-        return <article className="history-feed__item" key={event.id}>
-          <div aria-hidden="true" className="history-feed__rail"><span className="history-feed__dot" /></div>
-          <div className="history-feed__body">
-            <time dateTime={event.occurredAt}>{formatTaskDate(event.occurredAt, true)}</time>
-            <strong className="history-feed__actor">{event.actorName ?? "Автоматически"}</strong>
-            {event.toStatus ? <div className="history-feed__status"><span className="history-feed__chip history-feed__chip--muted">{TASK_STATUS_LABELS[event.fromStatus ?? ""] ?? "—"}</span><span aria-hidden="true" className="history-feed__arrow">→</span><StatusBadge tone={taskStatusTone(event.toStatus)}>{TASK_STATUS_LABELS[event.toStatus] ?? event.toStatus}</StatusBadge></div> : <p className="history-feed__text">{description}</p>}
-            {event.comment ? <p className="history-feed__note">{event.comment}</p> : null}
-          </div>
-        </article>;
-      })}</div> : <div className="task-empty"><Icon name="clock" size={22} /><p>Записей в журнале пока нет. Действия по задаче появятся здесь.</p></div>}
-    </section> : null}
+    {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
     <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<textarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
@@ -1226,7 +1240,7 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
   const apply = async () => { setPageIndex(0); await reload(filters, 0); };
   const statusTone = (status: MailInboxRecord["status"]): StatusTone => status === "converted" ? "success" : status === "failed" ? "danger" : status === "ignored" ? "neutral" : status === "parsed" ? "info" : "warning";
   return <>
-    <FilterBar loading={loading} onReset={() => { const reset = { search: "", status: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={apply}><label>Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Отправитель или тема" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{Object.entries(mailStatusLabels).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label></FilterBar>
+    <FilterBar loading={loading} onReset={() => { const reset = { search: "", status: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={apply}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Отправитель или тема" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{Object.entries(mailStatusLabels).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label></FilterBar>
     <DataTableShell meta={`${items.length} из ${total}`} title="Входящие письма">{loading && items.length === 0 ? <ResourceState description="Подождите, входящие сейчас появятся." status="loading" title="Загружаем письма" /> : items.length === 0 ? <ResourceState description={filters.search || filters.status ? "Измените поиск или сбросьте фильтры." : "Новые письма с заявками появятся здесь. Можно создать задачу вручную."} status={filters.search || filters.status ? "filtered-empty" : "empty"} title={filters.search || filters.status ? "Писем по этим условиям нет" : "Входящих писем нет"} /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Получено</th><th>Отправитель</th><th>Тема</th><th>Что распознано</th><th>Статус</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{items.map((mail) => <tr key={mail.id}><td>{formatTaskDate(mail.receivedAt, true)}</td><td>{mail.sender}</td><td><strong>{mail.subject || "Без темы"}</strong></td><td><div className="mail-recognized">{mailRecognized(mail) ? <strong>{mailRecognized(mail)}</strong> : null}{mail.equipmentSerial ? <span>S/N {mail.equipmentSerial} <StatusBadge tone={mail.equipmentFound ? "success" : "warning"}>{mail.equipmentFound ? "прибор найден" : "нет в базе"}</StatusBadge></span> : null}<span className="mail-recognized__summary">{mail.description ?? mail.summary ?? (mail.status === "pending" ? "Письмо ещё разбирается" : "—")}</span>{mail.confidence !== undefined && mail.status !== "pending" ? <small className="mail-confidence">уверенность {Math.round(mail.confidence * 100)}%</small> : null}</div></td><td><StatusBadge tone={statusTone(mail.status)}>{mailStatusLabels[mail.status]}</StatusBadge>{mail.status === "converted" ? <small className="mail-autoreply">{mail.autoreplyError ? `Автоответ не ушёл: ${mail.autoreplyError}` : mail.autoreplySent ? "Автоответ отправлен" : "Автоответ в очереди"}</small> : null}</td><td><div className="table-actions">{mail.taskId ? <IconButton icon="open" label="Открыть задачу" onClick={() => onOpenTask(mail.taskId!)} /> : mail.status !== "ignored" ? <><IconButton icon="plus" label="Создать задачу" onClick={() => onCreateTask(mail)} variant="secondary" /><IconButton icon="ignore" label="Не требует работы" onClick={() => setIgnoreTarget(mail)} /></> : <IconButton icon="restore" label="Вернуть в работу" onClick={() => void m2Api.updateMailInbox(mail.id, { status: mail.wasParsed ? "parsed" : "pending" }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div>}<RegistryPagination ariaLabel="Страницы входящих писем" onPageChange={(next) => { setPageIndex(next); void reload(filters, next); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></DataTableShell>
     <ConfirmationDialog confirmLabel="Не требует работы" description={ignoreTarget ? <>Письмо «{ignoreTarget.subject || "Без темы"}» останется в журнале. Его можно будет вернуть в работу.</> : null} onConfirm={async () => { if (!ignoreTarget) return; await m2Api.updateMailInbox(ignoreTarget.id, { status: "ignored" }); await reload(); }} onOpenChange={(open) => { if (!open) setIgnoreTarget(null); }} open={Boolean(ignoreTarget)} title="Письмо не требует работы?" />
   </>;
@@ -1234,14 +1248,14 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
 
 /** Экран на время загрузки карточки: сразу видно, какая задача открывается. */
 function TaskCardLoading({ task, onBack }: { readonly task?: { readonly number?: string; readonly title?: string }; readonly onBack: () => void }) {
-  return <>
-    <PageIntro
-      actions={<Button onClick={onBack} variant="secondary">К списку задач</Button>}
-      description={task?.title || "Загружаем данные задачи"}
-      title={task?.number ? `Задача ${task.number}` : "Открываем задачу"}
-    />
-    <ResourceState description="Подождите, карточка сейчас откроется." status="loading" title="Открываем задачу" />
-  </>;
+  // Тот же каркас, что у открытой карточки: при загрузке ничего не перескакивает.
+  return <div aria-busy="true" className="task-card-loading" role="status">
+    <EntityDetailToolbar backLabel="К списку задач" onBack={onBack} />
+    <EntityDetailHeader description={task?.number ?? ""} title={task?.title ?? "Открываем задачу…"} />
+    <span className="sr-only">Открываем задачу</span>
+    <div className="task-card-loading__bar"><Skeleton className="skeleton-line skeleton-line--w60" /><Skeleton className="skeleton-line skeleton-line--w30" /></div>
+    <div className="task-card-loading__grid">{[0, 1, 2, 3, 4, 5].map((item) => <Skeleton className="task-card-loading__tile" key={item} />)}</div>
+  </div>;
 }
 
 function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
@@ -1466,21 +1480,12 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
     <>
       <PageIntro
         actions={<Button disabled={formDataState === "loading"} icon="plus" onClick={() => void openCreationForm()}>{formDataState === "loading" ? "Открываем форму…" : "Создать задачу"}</Button>}
-        description="Создайте заявку, назначьте инженера или откройте карточку, чтобы проверить работу."
         title="Задачи"
+        titleAside={<>
+          <ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }, { value: "mail", label: "Письма" }]} label="Как показать задачи" onValueChange={(value) => { setRegistryView(value); setSelectedTaskIds(new Set()); setShowCompletedBoard(false); }} value={registryView} />
+          {registryView === "board" ? <button aria-pressed={showCompletedBoard} className={`toggle-chip${showCompletedBoard ? " toggle-chip--on" : ""}`} onClick={() => setShowCompletedBoard((current) => !current)} type="button">Закрытые и отменённые</button> : null}
+        </>}
       />
-      <div className="task-view-toolbar">
-        <PageTabs items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }, { value: "mail", label: "Письма" }]} label="Как показать задачи" onValueChange={(value) => { setRegistryView(value); setSelectedTaskIds(new Set()); setShowCompletedBoard(false); }} value={registryView} />
-        {registryView === "board" ? (
-          <Button
-            aria-pressed={showCompletedBoard}
-            onClick={() => setShowCompletedBoard((current) => !current)}
-            variant={showCompletedBoard ? "primary" : "secondary"}
-          >
-            Завершенные
-          </Button>
-        ) : null}
-      </div>
 
       <TaskCreationForm canAssignEngineer={canAssignEngineer} engineers={engineers} equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject.replace(/^(?:(?:re|fwd?|ответ|пересл)\s*:\s*)+/iu, "").slice(0, 200) } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} {...(mailDraft && !mailDraft.lowConfidence && mailDraft.status !== "failed" ? { initialComment: mailCommentDraft(mailDraft) } : {})} {...(mailEquipment ? { initialEquipment: mailEquipment } : {})} {...(mailDraft ? { mail: mailDraft } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) { setMailDraft(null); setMailEquipment(undefined); } }} onCreated={async (task) => {
         const draft = mailDraft;
@@ -2274,7 +2279,7 @@ function NotificationsPage() {
       <label>Канал<Select onChange={(event) => changeFilter("channel", event.target.value)} value={filters.channel}><option value="">Все каналы</option><option value="email">E-mail</option><option value="telegram">Telegram</option><option value="max">MAX</option><option value="sms">СМС</option></Select></label>
       <label>Событие<Select onChange={(event) => changeFilter("eventCode", event.target.value)} value={filters.eventCode}><option value="">Все события</option>{Object.entries(eventLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>
       <label>Статус<Select onChange={(event) => changeFilter("status", event.target.value)} value={filters.status}><option value="">Все статусы</option>{Object.entries(statusLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>
-      <label>Адресат<input onChange={(event) => changeFilter("recipient", event.target.value)} placeholder="Имя или e-mail" type="search" value={filters.recipient} /></label>
+      <label className="filter-field--search">Адресат<input onChange={(event) => changeFilter("recipient", event.target.value)} placeholder="Имя или e-mail" type="search" value={filters.recipient} /></label>
     </FilterBar>
     <section className="card notification-list" aria-label="Лента уведомлений">{loading && items.length === 0 ? <ResourceState description="Подождите, письма сейчас появятся." status="loading" title="Загружаем уведомления" /> : items.map((notification) => <article className={`notification-item${notification.status === "failed" ? " notification-item--failed" : ""}`} key={notification.id}><span className="notification-item__icon"><Icon name="bell" size={17} /></span><div><div className="notification-item__meta"><strong>{notification.recipientAddress}</strong><span>{formatDisplayDate(notification.createdAt, true)}</span><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></div><h2>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</h2><p className="notification-item__event">{eventLabel[notification.eventCode] ?? "Событие"} · попыток отправки: {notification.attempts}</p><p className="notification-item__body">{notification.body}</p>{notification.diagnosticError ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError}<code>{notification.lastError}</code></div> : null}</div></article>)}{!loading && items.length === 0 ? <ResourceState description={filters.status || filters.eventCode || filters.recipient ? "Измените условия или сбросьте фильтры." : "Письма появятся здесь, когда система отправит сообщения по заявкам."} status={filters.status || filters.eventCode || filters.recipient ? "filtered-empty" : "empty"} title={filters.status || filters.eventCode || filters.recipient ? "Уведомлений по этим условиям нет" : "Уведомлений пока нет"} /> : null}<RegistryPagination ariaLabel="Страницы журнала уведомлений" onPageChange={changePage} pageIndex={pageIndex} pageSize={pageSize} total={total} /></section></>;
 }
@@ -2762,10 +2767,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
   }
   const openFromList = (id: string) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"));
   return <>
-    <PageIntro description="Ваши выезды: адрес, прибор и сроки. Откройте задачу, чтобы работать с ней." title="Мои задачи" />
-    <div className="task-view-toolbar">
-      <PageTabs items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать задачи" onValueChange={(next) => { setView(next); setReload((value) => value + 1); }} value={view} />
-    </div>
+    <PageIntro title="Мои задачи" titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать задачи" onValueChange={(next) => { setView(next); setReload((value) => value + 1); }} value={view} />} />
     {view === "board" ? <TaskBoard
       engineers={[]}
       equipment={[]}

@@ -39,11 +39,11 @@ function blankRows(count: number, columns: number) {
   </tr>);
 }
 
-export function WorkAct({ act, onBack }: { readonly act: WorkActModel; readonly onBack: () => void }) {
+export function WorkAct({ act, onBack, onEditRows }: { readonly act: WorkActModel; readonly onBack: () => void; readonly onEditRows?: () => void }) {
   const equipmentBlankRows = Math.max(0, 5 - act.equipment.length);
   const partBlankRows = Math.max(0, 5 - act.parts.length);
   return <div className="work-act-print-root">
-    <EntityDetailToolbar actions={<Button onClick={() => window.print()}>Печать</Button>} backLabel="К задаче" onBack={onBack} />
+    <EntityDetailToolbar actions={<>{onEditRows ? <Button onClick={onEditRows} variant="secondary">Строки акта</Button> : null}<Button onClick={() => window.print()}>Печать</Button></>} backLabel="К задаче" onBack={onBack} />
     <article className="work-act-document" aria-label={`Акт выполненных работ ${act.number}`}>
       <header className="work-act-company">
         <strong>{act.company.name}</strong>
