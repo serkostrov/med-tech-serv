@@ -1,4 +1,4 @@
--- Проверка создания счёта (миграции 0010, 0015). Запуск на локальной базе с миграциями:
+-- Проверка создания счёта и замены плательщика (миграции 0010, 0015, 0016). Запуск на локальной базе с миграциями:
 --   psql -v ON_ERROR_STOP=1 -f supabase/tests/invoice_create.sql
 -- Всё в транзакции и откатывается. Ошибка = проверка не прошла.
 
@@ -33,13 +33,14 @@ GRANT SELECT ON v TO authenticated, anon;
 
 DO $$
 DECLARE
-  coord uuid := gen_random_uuid(); wh uuid := gen_random_uuid();
+  coord uuid := gen_random_uuid(); wh uuid := gen_random_uuid(); sup uuid := gen_random_uuid(); t4 uuid;
   org uuid; site uuid; p1 uuid; p2 uuid; m uuid; md uuid; eq1 uuid; eq2 uuid; eq3 uuid; t1 uuid; t2 uuid; t3 uuid; wt text;
 BEGIN
-  INSERT INTO auth.users (id, email, aud, role) VALUES (coord, 'inv-coord@test.local', 'authenticated', 'authenticated'), (wh, 'inv-wh@test.local', 'authenticated', 'authenticated');
+  INSERT INTO auth.users (id, email, aud, role) VALUES (coord, 'inv-coord@test.local', 'authenticated', 'authenticated'), (wh, 'inv-wh@test.local', 'authenticated', 'authenticated'), (sup, 'inv-sup@test.local', 'authenticated', 'authenticated');
   INSERT INTO users (id, full_name, role, email, is_active, access_role_key) VALUES
     (coord, 'Координатор', 'coordinator', 'inv-coord@test.local', true, 'coordinator'),
-    (wh, 'Кладовщик', 'warehouse', 'inv-wh@test.local', true, 'warehouse');
+    (wh, 'Кладовщик', 'warehouse', 'inv-wh@test.local', true, 'warehouse'),
+    (sup, 'Руководитель', 'supervisor', 'inv-sup@test.local', true, 'supervisor');
   INSERT INTO organizations (name) VALUES ('Счета: организация') RETURNING id INTO org;
   INSERT INTO sites (name, organization_id) VALUES ('Счета: площадка', org) RETURNING id INTO site;
   INSERT INTO payers (name) VALUES ('Счета: плательщик 1') RETURNING id INTO p1;
@@ -53,7 +54,8 @@ BEGIN
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, deadline_from, deadline_to) VALUES ('Счета 1', wt, eq1, site, p1, coord, current_date, current_date + 3) RETURNING id INTO t1;
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, deadline_from, deadline_to) VALUES ('Счета 2', wt, eq2, site, p1, coord, current_date, current_date + 3) RETURNING id INTO t2;
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, deadline_from, deadline_to) VALUES ('Счета 3', wt, eq3, site, p2, coord, current_date, current_date + 3) RETURNING id INTO t3;
-  INSERT INTO v VALUES ('coord', coord), ('wh', wh), ('p1', p1), ('p2', p2), ('eq1', eq1), ('t1', t1), ('t2', t2), ('t3', t3);
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, deadline_from, deadline_to) VALUES ('Открытая', wt, eq1, site, p1, coord, current_date, current_date + 3) RETURNING id INTO t4;
+  INSERT INTO v VALUES ('coord', coord), ('wh', wh), ('sup', sup), ('p1', p1), ('p2', p2), ('eq1', eq1), ('eq2', eq2), ('t1', t1), ('t2', t2), ('t3', t3), ('t4', t4);
 END $$;
 
 -- Подготовка: задачи закрываем в обход проверок закрытия (акт и фото здесь не проверяем).
@@ -93,6 +95,20 @@ INSERT INTO invoices (payer_id, status, source_equipment_id, payer_override_reas
 VALUES ((SELECT id FROM v WHERE k = 'p2'), 'draft', (SELECT id FROM v WHERE k = 'eq1'), 'тест', (SELECT id FROM v WHERE k = 'wh'));
 SELECT pg_temp.check((SELECT count(*) FROM invoices WHERE payer_overridden_by = (SELECT id FROM v WHERE k = 'wh')) = 0,
   'подставить чужого автора замены нельзя');
+RESET ROLE;
+
+-- Замена плательщика задачи координатором, потом руководитель меняет прибор.
+SELECT pg_temp.act_as((SELECT id FROM v WHERE k = 'coord'));
+UPDATE tasks SET payer_id = (SELECT id FROM v WHERE k = 'p2'), payer_override_reason = 'Платит головная', payer_overridden_by = auth.uid()
+ WHERE id = (SELECT id FROM v WHERE k = 't4');
+SELECT pg_temp.check((SELECT payer_snapshot_source FROM tasks WHERE id = (SELECT id FROM v WHERE k = 't4')) = 'override', 'координатор заменил плательщика задачи');
+RESET ROLE;
+SELECT pg_temp.act_as((SELECT id FROM v WHERE k = 'sup'));
+UPDATE tasks SET equipment_id = (SELECT id FROM v WHERE k = 'eq2') WHERE id = (SELECT id FROM v WHERE k = 't4');
+SELECT pg_temp.check((SELECT payer_overridden_by FROM tasks WHERE id = (SELECT id FROM v WHERE k = 't4')) = auth.uid(),
+  'руководитель меняет прибор такой задачи, автором замены становится он');
+SELECT pg_temp.check((SELECT payer_overridden_at FROM tasks WHERE id = (SELECT id FROM v WHERE k = 't4')) IS NOT NULL,
+  'время замены заполнено заново');
 RESET ROLE;
 
 -- Кладовщик счёт не создаёт.
