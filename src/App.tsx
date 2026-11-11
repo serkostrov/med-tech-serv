@@ -2259,7 +2259,9 @@ function NotificationsPage() {
   const [items, setItems] = useState<readonly NotificationJournalRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
-  const [filters, setFilters] = useState({ channel: "email", status: "", eventCode: "", recipient: "" });
+  // По умолчанию все каналы: раньше был выбран только e-mail, и сообщения Telegram были не видны.
+  const [filters, setFilters] = useState({ channel: "", status: "", eventCode: "", recipient: "" });
+  const [openId, setOpenId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const reload = async (current = filters, targetPageIndex = pageIndex) => {
     setLoading(true);
@@ -2294,14 +2296,39 @@ function NotificationsPage() {
     task_rework_requested: "Возврат на доработку", task_overdue: "Просрочка"
   };
   const tone = (status: string): StatusTone => status === "failed" ? "danger" : status === "delivered" || status === "sent" ? "success" : "warning";
-  return <><PageIntro description="Какие письма и сообщения уже ушли клиентам и сотрудникам." title="Уведомления" />
-    <FilterBar loading={loading} onReset={() => { const reset = { channel: "email", status: "", eventCode: "", recipient: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={() => { setPageIndex(0); return reload(filters, 0); }}>
-      <label>Канал<Select onChange={(event) => changeFilter("channel", event.target.value)} value={filters.channel}><option value="">Все каналы</option><option value="email">E-mail</option><option value="telegram">Telegram</option><option value="max">MAX</option><option value="sms">СМС</option></Select></label>
+  const channelLabel: Readonly<Record<string, string>> = { email: "E-mail", telegram: "Telegram", max: "MAX", sms: "СМС" };
+  const filtered = Boolean(filters.status || filters.eventCode || filters.recipient || filters.channel);
+  return <><PageIntro title="Уведомления" />
+    <FilterBar loading={loading} onReset={() => { const reset = { channel: "", status: "", eventCode: "", recipient: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={() => { setPageIndex(0); return reload(filters, 0); }}>
+      <label>Канал<Select onChange={(event) => changeFilter("channel", event.target.value)} value={filters.channel}><option value="">Все каналы</option><option value="email">E-mail</option><option value="telegram">Telegram</option></Select></label>
       <label>Событие<Select onChange={(event) => changeFilter("eventCode", event.target.value)} value={filters.eventCode}><option value="">Все события</option>{Object.entries(eventLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>
       <label>Статус<Select onChange={(event) => changeFilter("status", event.target.value)} value={filters.status}><option value="">Все статусы</option>{Object.entries(statusLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>
       <label className="filter-field--search">Адресат<input onChange={(event) => changeFilter("recipient", event.target.value)} placeholder="Имя или e-mail" type="search" value={filters.recipient} /></label>
     </FilterBar>
-    <section className="card notification-list" aria-label="Лента уведомлений">{loading && items.length === 0 ? <ResourceState description="Подождите, письма сейчас появятся." status="loading" title="Загружаем уведомления" /> : items.map((notification) => <article className={`notification-item${notification.status === "failed" ? " notification-item--failed" : ""}`} key={notification.id}><span className="notification-item__icon"><Icon name="bell" size={17} /></span><div><div className="notification-item__meta"><strong>{notification.recipientAddress}</strong><span>{formatDisplayDate(notification.createdAt, true)}</span><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></div><h2>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</h2><p className="notification-item__event">{eventLabel[notification.eventCode] ?? "Событие"} · попыток отправки: {notification.attempts}</p><p className="notification-item__body">{notification.body}</p>{notification.diagnosticError ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError}<code>{notification.lastError}</code></div> : null}</div></article>)}{!loading && items.length === 0 ? <ResourceState description={filters.status || filters.eventCode || filters.recipient ? "Измените условия или сбросьте фильтры." : "Письма появятся здесь, когда система отправит сообщения по заявкам."} status={filters.status || filters.eventCode || filters.recipient ? "filtered-empty" : "empty"} title={filters.status || filters.eventCode || filters.recipient ? "Уведомлений по этим условиям нет" : "Уведомлений пока нет"} /> : null}<RegistryPagination ariaLabel="Страницы журнала уведомлений" onPageChange={changePage} pageIndex={pageIndex} pageSize={pageSize} total={total} /></section></>;
+    <section className="card card--table" aria-label="Журнал уведомлений">
+      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Журнал отправки" />
+      {loading && items.length === 0 ? <ResourceState description="Подождите, письма сейчас появятся." status="loading" title="Загружаем уведомления" />
+        : items.length === 0 ? <ResourceState description={filtered ? "Измените условия или сбросьте фильтры." : "Письма появятся здесь, когда система отправит сообщения по заявкам."} status={filtered ? "filtered-empty" : "empty"} title={filtered ? "Уведомлений по этим условиям нет" : "Уведомлений пока нет"} />
+          : <div className="table-scroll"><table className="data-table notification-table"><thead><tr><th scope="col">Когда</th><th scope="col">Кому</th><th scope="col">О чём</th><th scope="col">Канал</th><th scope="col">Статус</th></tr></thead><tbody>
+            {items.map((notification) => {
+              const open = openId === notification.id;
+              return <React.Fragment key={notification.id}>
+                <tr aria-expanded={open} className={`data-table__selectable${notification.status === "failed" ? " notification-table__failed" : ""}`} onClick={() => setOpenId(open ? null : notification.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpenId(open ? null : notification.id); } }} role="button" tabIndex={0}>
+                  <td className="notification-table__when">{formatDisplayDate(notification.createdAt, true)}</td>
+                  <td>{notification.recipientAddress}</td>
+                  <td><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong><small>{eventLabel[notification.eventCode] ?? "Событие склада"}{notification.attempts > 1 ? ` · попыток: ${notification.attempts}` : ""}</small></td>
+                  <td>{channelLabel[notification.channel] ?? notification.channel}</td>
+                  <td><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></td>
+                </tr>
+                {open ? <tr className="notification-table__detail"><td colSpan={5}>
+                  <p className="notification-table__body">{notification.body}</p>
+                  {notification.diagnosticError ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError}</div> : null}
+                </td></tr> : null}
+              </React.Fragment>;
+            })}
+          </tbody></table></div>}
+      <RegistryPagination ariaLabel="Страницы журнала уведомлений" onPageChange={changePage} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+    </section></>;
 }
 
 function NotificationTemplatesPage() {
@@ -2457,7 +2484,7 @@ function AdminReferencesPage() {
         <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th><th scope="col">Параметры</th><th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
           return <tr className={!record.isActive ? "reference-admin-table__inactive" : ""} key={record.id}>
             <td><strong>{record.name}</strong></td>
-            <td className="muted">{Object.entries(record.attributes).map(([key, value]) => `${selected.fields.find((field) => field.key === key)?.label ?? key}: ${typeof value === "boolean" ? value ? "да" : "нет" : String(value)}`).join(" · ") || "—"}</td>
+            <td className="muted">{Object.entries(record.attributes).filter(([key]) => key !== "sortOrder").map(([key, value]) => `${selected.fields.find((field) => field.key === key)?.label ?? key}: ${typeof value === "boolean" ? value ? "да" : "нет" : String(value)}`).join(" · ") || "—"}</td>
             <td><StatusBadge tone={record.isActive ? "success" : "neutral"}>{record.isActive ? "Активно" : "Неактивно"}</StatusBadge></td>
             <td><div className="reference-admin-actions">
               <IconButton disabled={index === 0} icon="moveUp" label="Выше" onClick={() => void moveRecord(record, "up")} />
@@ -2477,7 +2504,7 @@ function AdminReferencesPage() {
 function ReferencesWorkspace({ notificationTemplates = false }: { readonly notificationTemplates?: boolean }) {
   const [section, setSection] = useState<"catalogs" | "equipment" | "notifications">("catalogs");
   const tabItems = [
-    { value: "catalogs" as const, label: "Сервис" },
+    { value: "catalogs" as const, label: "Работы и статусы" },
     { value: "equipment" as const, label: "Приборы" },
     ...(notificationTemplates ? [{ value: "notifications" as const, label: "Шаблоны писем" }] : [])
   ];
@@ -2499,7 +2526,7 @@ function ReferencesWorkspace({ notificationTemplates = false }: { readonly notif
 
 function CustomersPage() {
   return <>
-    <PageIntro description="Площадки и люди в них — для выезда и для счетов." title="Клиенты" />
+    <PageIntro title="Клиенты" />
     <CustomerReferencesPage />
   </>;
 }

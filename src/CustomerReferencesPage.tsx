@@ -51,7 +51,10 @@ function peopleCountLabel(count: number): string {
 export function CustomerReferencesPage() {
   const [sites, setSites] = useState<readonly SiteOption[]>([]);
   const [payers, setPayers] = useState<readonly PayerOption[]>([]);
+  // Раскрытые площадки: по умолчанию все свёрнуты, чтобы список читался целиком.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
+  const [search, setSearch] = useState("");
+  const [showInactive, setShowInactive] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pendingStateChange, setPendingStateChange] = useState<PendingStateChange | null>(null);
   const [loading, setLoading] = useState(true);
@@ -177,20 +180,39 @@ export function CustomerReferencesPage() {
     return <ResourceState description="Подождите, площадки и люди сейчас появятся." status="loading" title="Загружаем клиентов" />;
   }
 
+  // Поиск по площадке, адресу и людям; найденные площадки раскрываются сами.
+  const query = search.trim().toLocaleLowerCase("ru-RU");
+  const visibleSites = sites.filter((site) => {
+    if (!showInactive && !site.isActive) return false;
+    if (!query) return true;
+    const haystack = [site.name, site.address, ...sitePeople(site).flatMap((person) => [person.fullName, person.phone, person.email, person.inn])].filter(Boolean).join(" ").toLocaleLowerCase("ru-RU");
+    return haystack.includes(query);
+  });
+  const inactiveCount = sites.filter((site) => !site.isActive).length;
+
   return <>
     <div className="customer-references">
-      <div className="customer-references__toolbar">
-        <p className="customer-references__hint">Площадка и люди в ней — для выезда и для счетов в одной карточке.</p>
+      <div className="registry-toolbar">
+        <label className="registry-toolbar__search" htmlFor="customer-search">
+          <span className="sr-only">Поиск клиентов</span>
+          <input id="customer-search" onChange={(event) => setSearch(event.target.value)} placeholder="Площадка, адрес, человек или ИНН" type="search" value={search} />
+        </label>
+        {inactiveCount > 0 ? <button aria-pressed={showInactive} className={`toggle-chip${showInactive ? " toggle-chip--on" : ""}`} onClick={() => setShowInactive((value) => !value)} type="button">Отключённые · {inactiveCount}</button> : null}
+        <span className="registry-toolbar__spacer" />
         <Button icon="plus" onClick={() => { setFormError(null); setEditor({ kind: "site" }); }}>Добавить площадку</Button>
       </div>
 
       {sites.length === 0
         ? <ResourceState description="Нужна, чтобы указывать место работ в заявках. Добавьте первую площадку кнопкой сверху." status="empty" title="Площадок пока нет" />
-        : <div className="customer-site-list">
-          {sites.map((site) => {
+        : visibleSites.length === 0
+          ? <ResourceState description="Измените поиск или покажите отключённые площадки." status="filtered-empty" title="Ничего не найдено" />
+          : <div className="customer-site-list">
+          {visibleSites.map((site) => {
             const people = sitePeople(site);
-            const peopleOpen = !collapsed.has(site.id);
+            const peopleOpen = collapsed.has(site.id) || Boolean(query);
             const activePeople = people.filter((person) => person.isActive).length;
+            const contacts = people.filter((person) => person.contactId);
+            const legalEntities = people.filter((person) => !person.contactId);
             return <article className={`customer-site-card${site.isActive ? "" : " customer-site-card--inactive"}`} key={site.id}>
               <header className="customer-site-card__header">
                 <button
@@ -222,9 +244,10 @@ export function CustomerReferencesPage() {
 
               {peopleOpen ? <div className="customer-site-card__people" id={`site-people-${site.id}`}>
                 {people.length === 0
-                  ? <p className="customer-site-card__empty">Пока никого нет. Добавьте человека — телефон для выезда и реквизиты для счетов в одной карточке.</p>
-                  : <ul className="customer-people-list">
-                    {people.map((person) => <li className={`customer-person${person.isActive ? "" : " is-inactive"}`} key={person.key}>
+                  ? <p className="customer-site-card__empty">Пока никого нет. Добавьте контакт для выезда или юрлицо с реквизитами для счетов.</p>
+                  : <>
+                    {contacts.length > 0 ? <div className="customer-people-group"><h4>Контакты</h4><ul className="customer-people-list">
+                    {contacts.map((person) => <li className={`customer-person${person.isActive ? "" : " is-inactive"}`} key={person.key}>
                       <div className="customer-person__body">
                         <div className="customer-person__line">
                           <strong>{person.fullName}</strong>
@@ -253,7 +276,39 @@ export function CustomerReferencesPage() {
                         />
                       </div>
                     </li>)}
-                  </ul>}
+                    </ul></div> : null}
+                    {legalEntities.length > 0 ? <div className="customer-people-group"><h4>Юрлица для счетов</h4><ul className="customer-people-list">
+                    {legalEntities.map((person) => <li className={`customer-person${person.isActive ? "" : " is-inactive"}`} key={person.key}>
+                      <div className="customer-person__body">
+                        <div className="customer-person__line">
+                          <strong>{person.fullName}</strong>
+                          {person.isPrimary && person.isActive
+                            ? <StatusBadge tone="info">Основной</StatusBadge>
+                            : null}
+                          {!person.isActive
+                            ? <StatusBadge tone="neutral">Неактивен</StatusBadge>
+                            : null}
+                        </div>
+                        <p>{formatSitePersonDetails(person)}</p>
+                      </div>
+                      <div className="table-actions">
+                        <IconButton icon="edit" label="Изменить" onClick={() => { setFormError(null); setEditor({ kind: "person", siteId: site.id, person }); }} />
+                        <IconButton
+                          icon={person.isActive ? "disable" : "enable"}
+                          label={person.isActive ? "Отключить" : "Включить"}
+                          onClick={() => setPendingStateChange({
+                            kind: "person",
+                            siteId: site.id,
+                            person,
+                            id: person.contactId ?? person.payerId ?? person.key,
+                            label: person.fullName,
+                            isActive: person.isActive
+                          })}
+                        />
+                      </div>
+                    </li>)}
+                    </ul></div> : null}
+                  </>}
                 <div className="customer-site-card__actions">
                   <Button
                     className="button--compact"
@@ -367,7 +422,7 @@ export function CustomerReferencesPage() {
 
     <ConfirmationDialog
       confirmLabel={pendingStateChange?.isActive ? "Отключить" : "Включить"}
-      description={pendingStateChange ? `${pendingStateChange.label}: для новых заявок запись скроется, история сохранится.` : ""}
+      description={pendingStateChange ? (pendingStateChange.isActive ? `${pendingStateChange.label}: запись перестанет предлагаться в новых заявках, история сохранится.` : `${pendingStateChange.label}: запись снова можно будет выбирать в заявках.`) : ""}
       onConfirm={changeState}
       onOpenChange={(open) => { if (!open) setPendingStateChange(null); }}
       open={pendingStateChange !== null}

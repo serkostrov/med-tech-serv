@@ -307,7 +307,7 @@
 .report-bar i { display: block; min-width: 2px; height: 100%; border-radius: inherit; background: var(--color-accent); }
 .report-bar strong { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .report-bar strong small { color: var(--color-muted); font-size: 12px; font-weight: 500; }
-.report-bar--closed i { background: var(--color-danger); }
+.report-bar--closed i { background: var(--color-success); }
 .report-bar--in_progress i { background: var(--color-success); }
 .report-bar--under_review i { background: var(--color-accent); }
 .report-bar--cancelled i { background: #8a9aa3; }
@@ -8407,3 +8407,25 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .maintenance-group > header h3 small { color: var(--color-muted); font-size: 12px; font-weight: 500; }
 .maintenance-schedule { padding-top: 6px; }
 .maintenance-schedule .maintenance-months { margin-top: 22px; }
+
+/* ===== Клиенты v2 ===== */
+.registry-toolbar__spacer { flex: 1; }
+.customer-people-group { display: grid; gap: 6px; }
+.customer-people-group + .customer-people-group { margin-top: 10px; }
+.customer-people-group h4 { margin: 0; color: var(--color-muted); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.customer-site-card { border-radius: 12px; }
+
+/* ===== Справочники v2: действия в одну строку, строки обычной высоты ===== */
+.reference-admin-actions { flex-wrap: nowrap; gap: 4px; }
+.reference-admin-table td:last-child { width: 1%; white-space: nowrap; }
+.reference-admin-table td { vertical-align: middle; }
+
+/* ===== Уведомления v2: журнал таблицей, текст по клику ===== */
+.notification-table { min-width: 860px; }
+.notification-table td strong { display: block; color: var(--color-ink); font-weight: 600; }
+.notification-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; }
+.notification-table__when { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-ink-soft); }
+.notification-table__failed td { background: #fff8f8; }
+.notification-table__detail td { background: #fafbfc; }
+.notification-table__body { margin: 0; max-width: 90ch; color: var(--color-ink); font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
+.notification-table__detail .notification-item__error { margin-top: 10px; }
