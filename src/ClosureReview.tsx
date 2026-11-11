@@ -7,7 +7,8 @@ const FILE_KIND_LABELS: Readonly<Record<string, string>> = {
   act: "Фото акта",
   photo: "Фотофиксация",
   video: "Видеофиксация",
-  document: "Документ"
+  document: "Документ",
+  mail_attachment: "Из письма клиента"
 };
 
 function reviewValue(primary: string | undefined, closure: string | undefined): string {

@@ -27,6 +27,10 @@ export interface SmtpMessage {
   readonly toAddress: string;
   readonly subject: string;
   readonly body: string;
+  /** Message-ID письма, на которое отвечаем, вместе с угловыми скобками. */
+  readonly inReplyTo?: string;
+  /** Автоматический ответ (RFC 3834): почтовые программы не отвечают на него автоответом. */
+  readonly autoSubmitted?: boolean;
 }
 
 export interface SmtpTransport {
@@ -95,7 +99,7 @@ function assertMailbox(value: string): void {
 function assertMessageEnvelope(message: SmtpMessage): void {
   assertMailbox(message.fromAddress);
   assertMailbox(message.toAddress);
-  if (/[\r\n]/u.test(message.subject) || /[\r\n]/u.test(message.messageId)) {
+  if (/[\r\n]/u.test(message.subject) || /[\r\n]/u.test(message.messageId) || (message.inReplyTo !== undefined && !/^<[^<>\s\r\n]{1,250}>$/u.test(message.inReplyTo))) {
     throw new ChannelDeliveryError("smtp_invalid_message", false);
   }
 }
@@ -128,6 +132,8 @@ export function smtpMessageData(message: SmtpMessage): string {
     `From: ${displayName(message.fromName)} <${message.fromAddress}>`,
     `To: <${message.toAddress}>`,
     `Subject: ${encodedHeader(message.subject)}`,
+    ...(message.inReplyTo ? [`In-Reply-To: ${message.inReplyTo}`, `References: ${message.inReplyTo}`] : []),
+    ...(message.autoSubmitted ? ["Auto-Submitted: auto-replied"] : []),
     "MIME-Version: 1.0",
     "Content-Type: text/plain; charset=UTF-8",
     "Content-Transfer-Encoding: base64",

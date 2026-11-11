@@ -57,6 +57,30 @@ export interface MailInboxRecord {
   readonly equipmentSerial?: string;
   readonly workTypeCode?: string;
   readonly taskId?: string;
+  /** Что разобрала служба из письма (может быть пусто или неточно). */
+  readonly client?: string;
+  readonly contactName?: string;
+  readonly contactPhone?: string;
+  readonly equipmentName?: string;
+  readonly equipmentFound?: boolean;
+  readonly equipmentId?: string;
+  readonly equipmentLabel?: string;
+  readonly description?: string;
+  readonly lowConfidence?: boolean;
+  readonly body?: string;
+  readonly rawStorageKey?: string;
+  /** Служба уже разбирала письмо (для «Вернуть в работу»). */
+  readonly wasParsed?: boolean;
+  readonly autoreplySent?: boolean;
+  readonly autoreplyError?: string;
+  readonly attachments?: readonly MailAttachment[];
+}
+
+export interface MailAttachment {
+  readonly storageKey: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
 }
 
 export interface MailInboxResponse {

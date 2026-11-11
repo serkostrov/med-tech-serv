@@ -11,9 +11,12 @@
     "start": "node dist/main.js"
   },
   "dependencies": {
+    "imapflow": "^2.11.0",
+    "mailparser": "^3.14.3",
     "pg": "^8.16.3"
   },
   "devDependencies": {
+    "@types/mailparser": "^3.9.0",
     "@types/node": "^22.10.2",
     "@types/pg": "^8.15.5",
     "tsx": "^4.20.3",

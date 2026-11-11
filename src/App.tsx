@@ -97,7 +97,8 @@ const FILE_KIND_LABELS: Readonly<Record<string, string>> = {
   act: "Фото акта",
   photo: "Фото",
   video: "Видео",
-  document: "Документ"
+  document: "Документ",
+  mail_attachment: "Из письма клиента"
 };
 
 function taskStatusTone(status: string): StatusTone {
@@ -181,8 +182,13 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
   );
 }
 
-function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = "", initialWorkTypeCode, onOpenChange, onCreated, onEquipmentAttached }: {
+function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = "", initialWorkTypeCode, initialComment = "", initialEquipment, mail, onOpenChange, onCreated, onEquipmentAttached }: {
   readonly open: boolean;
+  readonly initialComment?: string;
+  /** Прибор, найденный по S/N из письма: подставляется сразу, его можно сменить. */
+  readonly initialEquipment?: EquipmentApiRecord;
+  /** Письмо, из которого создаётся задача: показываем его текст рядом с формой. */
+  readonly mail?: MailInboxRecord;
   readonly equipment: readonly EquipmentApiRecord[];
   readonly sites: readonly SiteOption[];
   readonly workTypes: readonly ReferenceCatalogValue[];
@@ -255,6 +261,13 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
     if (!open) return;
     setPickingEquipment(!equipmentId);
   }, [open, equipmentId]);
+
+  useEffect(() => {
+    if (!open || !initialEquipment) return;
+    rememberEquipment(initialEquipment);
+    // Только при открытии формы с этим прибором; смена прибора дальше — за координатором.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, initialEquipment?.id]);
 
   useEffect(() => {
     if (open) return;
@@ -448,7 +461,8 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
       ? "Нет людей в справочнике «Клиенты»"
       : "Не выбран";
 
-  return <DialogForm busy={busy} description="Инициатор и клиент — люди из справочника «Клиенты». Выбор сохраняет площадку и плательщика в паспорте прибора." onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title="Новая задача">
+  return <DialogForm busy={busy} description={mail ? "Поля заполнены по письму. Проверьте и поправьте их перед созданием: после создания клиенту уйдёт автоответ с номером заявки." : "Инициатор и клиент — люди из справочника «Клиенты». Выбор сохраняет площадку и плательщика в паспорте прибора."} onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title={mail ? "Задача из письма" : "Новая задача"}>
+      {mail ? <MailSourcePanel mail={mail} /> : null}
       <label className="field-wide">Название задачи *<input autoFocus defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, диагностика анализатора" required /></label>
       <label>Вид работ *<Select onChange={(event) => setWorkTypeCode(event.target.value)} required value={workTypeCode}>{activeWorkTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
       <label className="task-priority-check">
@@ -462,7 +476,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
           <small>Реакция до 24 ч · иначе плановая</small>
         </span>
       </label>
-      <label className="field-wide">Комментарий<textarea maxLength={2000} name="comment" placeholder="Кратко опишите суть обращения" rows={3} /></label>
+      <label className="field-wide">Комментарий<textarea defaultValue={initialComment} maxLength={2000} name="comment" placeholder="Кратко опишите суть обращения" rows={3} /></label>
       <div className="equipment-picker field-wide">
         <span className="equipment-picker__label">Прибор *</span>
         {selectedEquipment && !pickingEquipment ? (
@@ -1034,6 +1048,42 @@ const mailStatusLabels: Readonly<Record<MailInboxRecord["status"], string>> = {
   pending: "Новое", parsed: "Распознано", converted: "Создана задача", ignored: "Не требует работы", failed: "Ошибка разбора"
 };
 
+function mailRecognized(mail: MailInboxRecord): string {
+  return [mail.client, mail.equipmentLabel ?? mail.equipmentName].filter(Boolean).join(" · ");
+}
+
+/** Комментарий задачи из письма: суть и контакт для обратной связи. */
+function mailCommentDraft(mail: MailInboxRecord): string {
+  const contact = [mail.contactName, mail.contactPhone].filter(Boolean).join(", ");
+  return [
+    mail.description,
+    mail.client ? `Клиент: ${mail.client}` : undefined,
+    contact ? `Контакт: ${contact}` : undefined,
+    mail.equipmentSerial && !mail.equipmentFound ? `S/N из письма: ${mail.equipmentSerial} (нет в базе)` : undefined,
+    `Из письма ${mail.sender}`
+  ].filter(Boolean).join("\n").slice(0, 2000);
+}
+
+/** Текст письма и что из него распознано: рядом с формой, чтобы сверить. */
+function MailSourcePanel({ mail }: { readonly mail: MailInboxRecord }) {
+  const facts: Array<[string, string | undefined]> = [
+    ["Отправитель", mail.sender],
+    ["Клиент", mail.client],
+    ["Контакт", [mail.contactName, mail.contactPhone].filter(Boolean).join(", ") || undefined],
+    ["Оборудование", mail.equipmentName],
+    ["S/N", mail.equipmentSerial ? `${mail.equipmentSerial}${mail.equipmentFound ? " (прибор найден)" : " (такого прибора нет в базе)"}` : undefined]
+  ];
+  const files = mail.attachments?.length ?? 0;
+  return <section className="mail-source field-wide" aria-label="Письмо клиента">
+    {mail.lowConfidence || mail.status === "failed" ? <p className="mail-source__warning" role="status">Письмо распознано неуверенно: поля оставлены пустыми, заполните их по тексту письма.</p> : null}
+    <dl className="mail-source__facts">{facts.filter(([, value]) => value).map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
+    <details open={Boolean(mail.lowConfidence) || mail.status === "failed"}>
+      <summary>Текст письма{files ? ` · вложений: ${files} (перейдут в задачу)` : ""}</summary>
+      <pre className="mail-source__body">{mail.body || "Текст письма пустой"}</pre>
+    </details>
+  </section>;
+}
+
 function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (mail: MailInboxRecord) => void; readonly onOpenTask: (taskId: string) => void }) {
   const pageSize = 25;
   const [items, setItems] = useState<readonly MailInboxRecord[]>([]);
@@ -1056,7 +1106,7 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
   const statusTone = (status: MailInboxRecord["status"]): StatusTone => status === "converted" ? "success" : status === "failed" ? "danger" : status === "ignored" ? "neutral" : status === "parsed" ? "info" : "warning";
   return <>
     <FilterBar loading={loading} onReset={() => { const reset = { search: "", status: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={apply}><label>Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Отправитель или тема" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{Object.entries(mailStatusLabels).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label></FilterBar>
-    <DataTableShell meta={`${items.length} из ${total}`} title="Входящие письма">{loading && items.length === 0 ? <ResourceState description="Подождите, входящие сейчас появятся." status="loading" title="Загружаем письма" /> : items.length === 0 ? <ResourceState description={filters.search || filters.status ? "Измените поиск или сбросьте фильтры." : "Новые письма с заявками появятся здесь. Можно создать задачу вручную."} status={filters.search || filters.status ? "filtered-empty" : "empty"} title={filters.search || filters.status ? "Писем по этим условиям нет" : "Входящих писем нет"} /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Получено</th><th>Отправитель</th><th>Тема</th><th>Что распознано</th><th>Статус</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{items.map((mail) => <tr key={mail.id}><td>{formatTaskDate(mail.receivedAt, true)}</td><td>{mail.sender}</td><td><strong>{mail.subject || "Без темы"}</strong></td><td>{mail.summary ?? mail.equipmentSerial ?? "—"}{mail.confidence !== undefined ? <small className="mail-confidence">{Math.round(mail.confidence * 100)}%</small> : null}</td><td><StatusBadge tone={statusTone(mail.status)}>{mailStatusLabels[mail.status]}</StatusBadge></td><td><div className="table-actions">{mail.taskId ? <IconButton icon="open" label="Открыть задачу" onClick={() => onOpenTask(mail.taskId!)} /> : mail.status !== "ignored" ? <><IconButton icon="plus" label="Создать задачу" onClick={() => onCreateTask(mail)} variant="secondary" /><IconButton icon="ignore" label="Не требует работы" onClick={() => setIgnoreTarget(mail)} /></> : <IconButton icon="restore" label="Вернуть в работу" onClick={() => void m2Api.updateMailInbox(mail.id, { status: "pending" }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div>}<RegistryPagination ariaLabel="Страницы входящих писем" onPageChange={(next) => { setPageIndex(next); void reload(filters, next); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></DataTableShell>
+    <DataTableShell meta={`${items.length} из ${total}`} title="Входящие письма">{loading && items.length === 0 ? <ResourceState description="Подождите, входящие сейчас появятся." status="loading" title="Загружаем письма" /> : items.length === 0 ? <ResourceState description={filters.search || filters.status ? "Измените поиск или сбросьте фильтры." : "Новые письма с заявками появятся здесь. Можно создать задачу вручную."} status={filters.search || filters.status ? "filtered-empty" : "empty"} title={filters.search || filters.status ? "Писем по этим условиям нет" : "Входящих писем нет"} /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Получено</th><th>Отправитель</th><th>Тема</th><th>Что распознано</th><th>Статус</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{items.map((mail) => <tr key={mail.id}><td>{formatTaskDate(mail.receivedAt, true)}</td><td>{mail.sender}</td><td><strong>{mail.subject || "Без темы"}</strong></td><td><div className="mail-recognized">{mailRecognized(mail) ? <strong>{mailRecognized(mail)}</strong> : null}{mail.equipmentSerial ? <span>S/N {mail.equipmentSerial} <StatusBadge tone={mail.equipmentFound ? "success" : "warning"}>{mail.equipmentFound ? "прибор найден" : "нет в базе"}</StatusBadge></span> : null}<span className="mail-recognized__summary">{mail.description ?? mail.summary ?? (mail.status === "pending" ? "Письмо ещё разбирается" : "—")}</span>{mail.confidence !== undefined && mail.status !== "pending" ? <small className="mail-confidence">уверенность {Math.round(mail.confidence * 100)}%</small> : null}</div></td><td><StatusBadge tone={statusTone(mail.status)}>{mailStatusLabels[mail.status]}</StatusBadge>{mail.status === "converted" ? <small className="mail-autoreply">{mail.autoreplyError ? `Автоответ не ушёл: ${mail.autoreplyError}` : mail.autoreplySent ? "Автоответ отправлен" : "Автоответ в очереди"}</small> : null}</td><td><div className="table-actions">{mail.taskId ? <IconButton icon="open" label="Открыть задачу" onClick={() => onOpenTask(mail.taskId!)} /> : mail.status !== "ignored" ? <><IconButton icon="plus" label="Создать задачу" onClick={() => onCreateTask(mail)} variant="secondary" /><IconButton icon="ignore" label="Не требует работы" onClick={() => setIgnoreTarget(mail)} /></> : <IconButton icon="restore" label="Вернуть в работу" onClick={() => void m2Api.updateMailInbox(mail.id, { status: mail.wasParsed ? "parsed" : "pending" }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div>}<RegistryPagination ariaLabel="Страницы входящих писем" onPageChange={(next) => { setPageIndex(next); void reload(filters, next); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></DataTableShell>
     <ConfirmationDialog confirmLabel="Не требует работы" description={ignoreTarget ? <>Письмо «{ignoreTarget.subject || "Без темы"}» останется в журнале. Его можно будет вернуть в работу.</> : null} onConfirm={async () => { if (!ignoreTarget) return; await m2Api.updateMailInbox(ignoreTarget.id, { status: "ignored" }); await reload(); }} onOpenChange={(open) => { if (!open) setIgnoreTarget(null); }} open={Boolean(ignoreTarget)} title="Письмо не требует работы?" />
   </>;
 }
@@ -1106,6 +1156,8 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [mailDraft, setMailDraft] = useState<MailInboxRecord | null>(null);
+  const [mailEquipment, setMailEquipment] = useState<EquipmentApiRecord | undefined>(undefined);
+  const [mailRefresh, setMailRefresh] = useState(0);
   const reloadTasks = async (currentFilters = appliedFilters, targetPageIndex = pageIndex) => {
     setLoading(true);
     try {
@@ -1307,7 +1359,25 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
         ) : null}
       </div>
 
-      <TaskCreationForm equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) setMailDraft(null); }} onCreated={async (task) => { if (mailDraft) await m2Api.updateMailInbox(mailDraft.id, { status: "converted", taskId: task.id }); await refreshTasks(); setFormOpen(false); setMailDraft(null); await openTask(task.id); }} open={formOpen} workTypes={workTypes} />
+      <TaskCreationForm equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject.replace(/^(?:(?:re|fwd?|ответ|пересл)\s*:\s*)+/iu, "").slice(0, 200) } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} {...(mailDraft && !mailDraft.lowConfidence && mailDraft.status !== "failed" ? { initialComment: mailCommentDraft(mailDraft) } : {})} {...(mailEquipment ? { initialEquipment: mailEquipment } : {})} {...(mailDraft ? { mail: mailDraft } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) { setMailDraft(null); setMailEquipment(undefined); } }} onCreated={async (task) => {
+        const draft = mailDraft;
+        // Задача уже создана: форму закрываем сразу, чтобы повторное нажатие не создало вторую.
+        setFormOpen(false); setMailDraft(null); setMailEquipment(undefined);
+        if (draft) {
+          try {
+            // Сначала отметка «создана задача»: если письмо уже взял другой координатор, файлы не копируем.
+            // После отметки служба отправит клиенту автоответ.
+            await m2Api.updateMailInbox(draft.id, { status: "converted", taskId: task.id });
+            const failedFiles = await m2Api.attachMailToTask(draft, task.id).catch(() => (draft.attachments?.length ?? 0) + (draft.rawStorageKey ? 1 : 0));
+            if (failedFiles > 0) toast.warning(`Не получилось приложить к задаче файлов из письма: ${failedFiles}. Их можно загрузить вручную.`);
+            toast.success(`Задача ${task.number} создана из письма. Клиенту уйдёт автоответ с номером заявки.`);
+          } catch (mailError) {
+            toast.error(mailError instanceof Error ? mailError.message : "Задача создана, но письмо не отмечено", { title: "Задача создана, письмо не отмечено" });
+          }
+          setMailRefresh((value) => value + 1);
+        }
+        await refreshTasks(); await openTask(task.id);
+      }} open={formOpen} workTypes={workTypes} />
 
       {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{siteNames.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
 
@@ -1322,7 +1392,13 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
           <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={(next) => void changePage(next)} pageIndex={pageIndex} pageSize={pageSize} total={total} />
         </section>
 
-      </div> : <MailInboxTab onCreateTask={(mail) => { setMailDraft(mail); void openCreationForm(); }} onOpenTask={(taskId) => void openTask(taskId)} />}
+      </div> : <MailInboxTab key={mailRefresh} onCreateTask={(mail) => void (async () => {
+        // Прибор по S/N из письма подставляем в форму; если не нашёлся, координатор выберет сам.
+        const device = await m2Api.mailEquipment(mail).catch(() => undefined);
+        setMailEquipment(device);
+        setMailDraft(mail);
+        await openCreationForm();
+      })()} onOpenTask={(taskId) => void openTask(taskId)} />}
     </>
   );
 }

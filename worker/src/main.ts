@@ -6,6 +6,10 @@ import { maintenanceActivationConfig } from "./maintenance-activation.js";
 import { PostgresEventOutboxRepository, type DeliveryChannel, type EventDeliveryPlanner, type OutboxSqlExecutor } from "./outbox.js";
 import { CompositeEventDeliveryPlanner, DryRunDeliveryChannel, runPollCycle } from "./runtime.js";
 import { NodeSmtpTransport, SmtpDeliveryChannel, smtpConfiguration } from "./smtp.js";
+import { aiMailParserFromEnv } from "./ai-parser.js";
+import { sendMailAutoreplies, type AutoreplySender } from "./mail-autoreply.js";
+import { ImapMailIntake, imapSettings } from "./mail-intake.js";
+import { supabaseMailFileStore } from "./storage-upload.js";
 import {
   PostgresTelegramEventDeliveryPlanner,
   TelegramChatIdResponder,
@@ -87,10 +91,30 @@ if (enabled.telegram) {
   }
 }
 const channels = configuredDeliveryChannels({ enabled }, adapters);
+
+// Заявки из почты (Блок 4): забор писем, разбор, автоответ «заявка принята».
+const mailIntakeEnabled = flag("MAIL_INTAKE_ENABLED", false);
+const mailIntervalMs = interval("MAIL_POLL_INTERVAL_MS", 60_000);
+let mailIntake: ImapMailIntake | undefined;
+let autoreplySender: AutoreplySender | undefined;
+if (mailIntakeEnabled) {
+  const files = supabaseMailFileStore(process.env);
+  if (!files) console.warn("SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY не заданы: вложения писем сохраняться не будут");
+  mailIntake = new ImapMailIntake(imapSettings(process.env), database, files, aiMailParserFromEnv(process.env));
+  if (flag("MAIL_AUTOREPLY_ENABLED", true)) {
+    if (dryRun) {
+      autoreplySender = { send: async (message) => console.log(`Пробный режим: автоответ на ${message.toAddress} не отправлен`) };
+    } else {
+      const smtp = smtpConfiguration(process.env);
+      const transport = new NodeSmtpTransport(smtp);
+      autoreplySender = { send: (message) => transport.send({ ...message, fromAddress: smtp.fromAddress, fromName: smtp.fromName }) };
+    }
+  }
+}
 const planner = new CompositeEventDeliveryPlanner(planners);
 const repository = new PostgresEventOutboxRepository(database);
 
-console.log(`Служба уведомлений запущена: каналы ${channels.map((item) => item.code).join(", ") || "нет"}${dryRun ? ", пробный режим" : ""}`);
+console.log(`Служба уведомлений запущена: каналы ${channels.map((item) => item.code).join(", ") || "нет"}${mailIntake ? ", заявки из почты" : ""}${dryRun ? ", пробный режим" : ""}`);
 
 let running = false;
 let stopping = false;
@@ -121,16 +145,49 @@ async function poll(): Promise<void> {
   }
 }
 
+let mailRunning = false;
+let replyRunning = false;
+
+async function sendReplies(): Promise<void> {
+  if (!autoreplySender || replyRunning || stopping) return;
+  replyRunning = true;
+  try {
+    const replies = await sendMailAutoreplies(database, autoreplySender);
+    if (replies.sent || replies.failed) console.log(`Автоответы: отправлено ${replies.sent}, ошибок ${replies.failed}`);
+  } catch (error) {
+    console.error(`Автоответы не отправлены: ${errorCode(error)}`);
+  } finally {
+    replyRunning = false;
+  }
+}
+
+async function pollMail(): Promise<void> {
+  if (!mailIntake || mailRunning || stopping) return;
+  mailRunning = true;
+  try {
+    const result = await mailIntake.poll();
+    if (result.created) console.log(`Письма: новых ${result.created}, разобрано ${result.parsed}, ошибок ${result.failed}`);
+  } catch (error) {
+    console.error(`Забор писем не выполнен: ${errorCode(error)}`);
+  } finally {
+    mailRunning = false;
+  }
+}
+
 let timer: ReturnType<typeof setInterval> | undefined;
+let mailTimer: ReturnType<typeof setInterval> | undefined;
+let replyTimer: ReturnType<typeof setInterval> | undefined;
 
 async function shutdown(): Promise<void> {
   if (stopping) return;
   stopping = true;
   if (timer) clearInterval(timer);
+  if (mailTimer) clearInterval(mailTimer);
+  if (replyTimer) clearInterval(replyTimer);
   // Новые попытки уже не начинаются; текущую ждём не дольше 25 секунд.
   // В Docker поставьте stop_grace_period не меньше 30 секунд.
   const stopBy = Date.now() + 25_000;
-  while (running && Date.now() < stopBy) await new Promise((resolve) => setTimeout(resolve, 100));
+  while ((running || mailRunning || replyRunning) && Date.now() < stopBy) await new Promise((resolve) => setTimeout(resolve, 100));
   await pool.end().catch(() => undefined);
   await rm(healthFile, { force: true });
   process.exit(0);
@@ -141,3 +198,9 @@ process.once("SIGTERM", () => void shutdown());
 
 await poll();
 if (!stopping) timer = setInterval(() => void poll(), pollIntervalMs);
+if (mailIntake && !stopping) {
+  void pollMail();
+  mailTimer = setInterval(() => void pollMail(), mailIntervalMs);
+  // Автоответ после создания задачи координатором уходит через несколько секунд, независимо от забора писем.
+  if (autoreplySender) replyTimer = setInterval(() => void sendReplies(), pollIntervalMs);
+}

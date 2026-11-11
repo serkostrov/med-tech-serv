@@ -1,0 +1,54 @@
+# Служба уведомлений и заявок из почты для Dokploy (тип Compose, источник GitHub,
+# путь к файлу: worker/docker-compose.yml). Сам Supabase не меняется: служба
+# подключается к сети его compose и ходит в базу по имени сервиса db.
+# Значения переменных задаются во вкладке Environment в Dokploy, не в репозитории.
+services:
+  worker:
+    build:
+      context: .
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      PUBLIC_APP_URL: ${PUBLIC_APP_URL}
+      EMAIL_NOTIFICATIONS_ENABLED: ${EMAIL_NOTIFICATIONS_ENABLED:-true}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-}
+      SMTP_SECURE: ${SMTP_SECURE:-}
+      SMTP_STARTTLS: ${SMTP_STARTTLS:-}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM_ADDRESS: ${SMTP_FROM_ADDRESS:-}
+      SMTP_FROM_NAME: ${SMTP_FROM_NAME:-}
+      TELEGRAM_NOTIFICATIONS_ENABLED: ${TELEGRAM_NOTIFICATIONS_ENABLED:-false}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID_REPLIES: ${TELEGRAM_CHAT_ID_REPLIES:-true}
+      OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-5000}
+      MAIL_INTAKE_ENABLED: ${MAIL_INTAKE_ENABLED:-false}
+      IMAP_HOST: ${IMAP_HOST:-}
+      IMAP_PORT: ${IMAP_PORT:-}
+      IMAP_SECURE: ${IMAP_SECURE:-true}
+      IMAP_USER: ${IMAP_USER:-}
+      IMAP_PASSWORD: ${IMAP_PASSWORD:-}
+      IMAP_MAILBOX: ${IMAP_MAILBOX:-}
+      MAIL_INTAKE_SINCE_DAYS: ${MAIL_INTAKE_SINCE_DAYS:-}
+      MAIL_POLL_INTERVAL_MS: ${MAIL_POLL_INTERVAL_MS:-60000}
+      MAIL_AUTOREPLY_ENABLED: ${MAIL_AUTOREPLY_ENABLED:-true}
+      STORAGE_BUCKET: ${STORAGE_BUCKET:-medtech-files}
+      SUPABASE_URL: ${SUPABASE_URL:-}
+      SUPABASE_SERVICE_ROLE_KEY: ${SUPABASE_SERVICE_ROLE_KEY:-}
+      AI_PROVIDER: ${AI_PROVIDER:-none}
+      YANDEX_API_KEY: ${YANDEX_API_KEY:-}
+      YANDEX_FOLDER_ID: ${YANDEX_FOLDER_ID:-}
+      YANDEX_MODEL: ${YANDEX_MODEL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_MODEL: ${AI_MODEL:-}
+    networks:
+      - supabase
+
+networks:
+  supabase:
+    # Сеть compose Supabase в Dokploy: <имя приложения>_default.
+    name: ${SUPABASE_NETWORK:-medtechservice-supabase-alaql9_default}
+    external: true

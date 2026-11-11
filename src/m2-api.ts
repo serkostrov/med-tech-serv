@@ -13,6 +13,7 @@ import type {
   EquipmentFileResponse,
   EquipmentMeterReading,
   GenerateMaintenanceTasksResponse,
+  MailAttachment,
   MailInboxRecord,
   MailInboxResponse,
   MaintenancePlanListResponse,
@@ -351,6 +352,50 @@ function numberValue(value: unknown): number | undefined {
     return Number.isFinite(parsed) ? parsed : undefined;
   }
   return undefined;
+}
+
+const MAIL_SELECT = "id, sender, subject, body, received_at, status, ai_confidence, parsed_payload, parsed_at, task_id, raw_storage_key, attachments, autoreply_sent_at, autoreply_error";
+
+function mailRecord(row: Record<string, unknown>): MailInboxRecord {
+  const payload = asRow(row.parsed_payload);
+  const flag = (key: string): boolean | undefined => (typeof payload[key] === "boolean" ? payload[key] as boolean : undefined);
+  const attachments = Array.isArray(row.attachments)
+    ? row.attachments.map((item) => asRow(item)).filter((item) => typeof item.storageKey === "string").map((item): MailAttachment => ({
+        storageKey: String(item.storageKey),
+        fileName: typeof item.fileName === "string" && item.fileName ? item.fileName : "вложение",
+        contentType: typeof item.contentType === "string" ? item.contentType : "application/octet-stream",
+        byteSize: typeof item.byteSize === "number" ? item.byteSize : 0
+      }))
+    : [];
+  const record: Record<string, unknown> = {
+    id: text(row, "id"),
+    sender: text(row, "sender"),
+    subject: text(row, "subject"),
+    receivedAt: iso(row.received_at),
+    status: text(row, "status") as MailInboxRecord["status"],
+    confidence: numberValue(row.ai_confidence),
+    summary: optionalText(payload, "summary"),
+    equipmentSerial: optionalText(payload, "equipmentSerial"),
+    workTypeCode: optionalText(payload, "workTypeCode"),
+    taskId: optionalText(row, "task_id"),
+    client: optionalText(payload, "client"),
+    contactName: optionalText(payload, "contactName"),
+    contactPhone: optionalText(payload, "contactPhone"),
+    equipmentName: optionalText(payload, "equipmentName"),
+    equipmentFound: flag("equipmentFound"),
+    equipmentId: optionalText(payload, "equipmentId"),
+    equipmentLabel: optionalText(payload, "equipmentLabel"),
+    description: optionalText(payload, "description"),
+    lowConfidence: flag("lowConfidence"),
+    body: optionalText(row, "body"),
+    rawStorageKey: optionalText(row, "raw_storage_key"),
+    wasParsed: Boolean(row.parsed_at),
+    autoreplyError: optionalText(row, "autoreply_error"),
+    autoreplySent: Boolean(row.autoreply_sent_at) && !optionalText(row, "autoreply_error"),
+    attachments
+  };
+  for (const key of Object.keys(record)) if (record[key] === undefined) delete record[key];
+  return record as unknown as MailInboxRecord;
 }
 
 /**
@@ -1722,49 +1767,68 @@ export class M2ApiClient {
   public async mailInbox(query: { readonly search?: string; readonly status?: string; readonly limit?: number; readonly offset?: number } = {}): Promise<MailInboxResponse> {
     const limit = query.limit ?? 25;
     const offset = query.offset ?? 0;
-    let request = this.db().from("mail_messages").select("id, sender, subject, received_at, status, ai_confidence, parsed_payload, task_id", { count: "exact" }).order("received_at", { ascending: false }).range(offset, offset + limit - 1);
+    let request = this.db().from("mail_messages").select(MAIL_SELECT, { count: "exact" }).order("received_at", { ascending: false }).range(offset, offset + limit - 1);
     if (query.status) request = request.eq("status", query.status);
-    if (query.search?.trim()) request = request.or(`sender.ilike.%${query.search.trim()}%,subject.ilike.%${query.search.trim()}%`);
+    const search = query.search?.trim().replace(/[,()%*\\]/gu, " ").trim();
+    if (search) request = request.or(`sender.ilike.%${search}%,subject.ilike.%${search}%`);
     const { data, error, count } = await request;
     throwIfError(error);
     return {
-      items: (data ?? []).map((item) => {
-        const row = asRow(item);
-        const payload = asRow(row.parsed_payload);
-        return {
-          id: text(row, "id"),
-          sender: text(row, "sender"),
-          subject: text(row, "subject"),
-          receivedAt: iso(row.received_at),
-          status: text(row, "status") as MailInboxRecord["status"],
-          confidence: numberValue(row.ai_confidence),
-          summary: optionalText(payload, "summary"),
-          equipmentSerial: optionalText(payload, "equipmentSerial"),
-          workTypeCode: optionalText(payload, "workTypeCode"),
-          taskId: optionalText(row, "task_id")
-        };
-      }),
+      items: (data ?? []).map((item) => mailRecord(asRow(item))),
       total: count ?? 0,
       limit,
       offset
     };
   }
 
-  public async updateMailInbox(id: string, input: { readonly status: "pending" | "ignored" | "converted"; readonly taskId?: string }): Promise<MailInboxRecord> {
-    const { data, error } = await this.db().from("mail_messages").update({
+  public async updateMailInbox(id: string, input: { readonly status: "pending" | "parsed" | "ignored" | "converted"; readonly taskId?: string }): Promise<MailInboxRecord> {
+    let request = this.db().from("mail_messages").update({
       status: input.status,
       task_id: input.taskId ?? null
-    }).eq("id", id).select("id, sender, subject, received_at, status, ai_confidence, parsed_payload, task_id").single();
+    }).eq("id", id);
+    // Задачу из письма создаёт один координатор: второй получит понятную ошибку, а не дубль.
+    if (input.status === "converted") request = request.is("task_id", null).in("status", ["pending", "parsed", "failed"]);
+    const { data, error } = await request.select(MAIL_SELECT).maybeSingle();
     throwIfError(error);
-    const row = asRow(data);
-    return {
-      id: text(row, "id"),
-      sender: text(row, "sender"),
-      subject: text(row, "subject"),
-      receivedAt: iso(row.received_at),
-      status: text(row, "status") as MailInboxRecord["status"],
-      taskId: optionalText(row, "task_id")
-    };
+    if (!data) throw new M2ApiError(409, "По этому письму уже создана задача или оно отмечено как не требующее работы. Обновите список писем.");
+    return mailRecord(asRow(data));
+  }
+
+  /** Прибор, найденный службой по S/N из письма, в виде для формы задачи. */
+  public async mailEquipment(mail: MailInboxRecord): Promise<EquipmentApiRecord | undefined> {
+    if (!mail.equipmentId) return undefined;
+    return this.loadEquipment(mail.equipmentId);
+  }
+
+  /**
+   * Письмо и вложения переходят в файлы задачи: копия в папку задачи, чтобы их
+   * видел инженер (папка писем открыта только тем, кто разбирает почту).
+   * Возвращает число файлов, которые не получилось перенести.
+   */
+  public async attachMailToTask(mail: MailInboxRecord, taskId: string): Promise<number> {
+    const actor = await this.actorId();
+    const items: MailAttachment[] = [
+      ...(mail.rawStorageKey ? [{ storageKey: mail.rawStorageKey, fileName: "Письмо клиента.eml", contentType: "message/rfc822", byteSize: 0 }] : []),
+      ...(mail.attachments ?? [])
+    ];
+    let failed = 0;
+    for (const item of items) {
+      const target = `tasks/${taskId}/${storageObjectName(item.fileName)}`;
+      const { error: copyError } = await this.db().storage.from("medtech-files").copy(item.storageKey, target);
+      if (copyError) { failed += 1; continue; }
+      const { error } = await this.db().from("files").insert({
+        kind: "mail_attachment",
+        task_id: taskId,
+        storage_key: target,
+        original_name: item.fileName,
+        content_type: item.contentType || "application/octet-stream",
+        byte_size: item.byteSize > 0 ? item.byteSize : 1,
+        uploaded_by: actor,
+        is_financial: false
+      });
+      if (error) failed += 1;
+    }
+    return failed;
   }
 
   public async engineerTasks(limit = 20, offset = 0): Promise<EngineerTaskListResponse> {
