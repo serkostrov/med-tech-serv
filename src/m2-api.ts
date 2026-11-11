@@ -2552,16 +2552,18 @@ export class M2ApiClient {
   public async createInvoice(input: Readonly<Record<string, unknown>>): Promise<InvoiceApiRecord> {
     const taskIds = Array.isArray(input.taskIds) ? input.taskIds as readonly string[] : [];
     if (!input.payerId) throw new M2ApiError(400, "Выберите плательщика");
-    const { data, error } = await this.db().from("invoices").insert({
-      payer_id: input.payerId,
-      status: "draft"
-    }).select("id").single();
-    throwIfError(error);
-    const invoiceId = text(asRow(data), "id");
-    if (taskIds.length) {
-      const { error: itemsError } = await this.db().from("invoice_tasks").insert(taskIds.map((taskId) => ({ invoice_id: invoiceId, task_id: taskId })));
-      throwIfError(itemsError);
-    }
+    if (!taskIds.length) throw new M2ApiError(400, "Выберите хотя бы одну закрытую задачу");
+    const overrideReason = typeof input.payerOverrideReason === "string" ? input.payerOverrideReason.trim() : "";
+    // Счёт и привязка задач одной операцией в базе (миграция 0015): при ошибке
+    // не остаётся пустого черновика, прибор-источник и автор замены выбирает база.
+    const { data, error } = await this.db().rpc("create_invoice", {
+      p_payer_id: input.payerId,
+      p_task_ids: [...taskIds],
+      p_payer_override_reason: overrideReason || null
+    });
+    throwIfError(error, "Не получилось создать счёт");
+    const invoiceId = typeof data === "string" ? data : "";
+    if (!invoiceId) throw new M2ApiError(500, "Счёт не создан");
     const invoices = await this.listInvoices();
     const created = invoices.find((item) => item.id === invoiceId);
     if (!created) throw new M2ApiError(500, "Счёт не создан");
