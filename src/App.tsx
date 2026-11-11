@@ -2466,7 +2466,6 @@ const navigationPermission: Partial<Record<NavigationId, string>> = {
 
 function navigationForSession(role: AppRole, user: ApiSessionUser | null | undefined): readonly NavigationItem[] {
   const items = getRoleNavigation(role);
-  if (role === "admin") return items;
   return items.filter((item) => {
     if (!user?.permissions) return true;
     if (item.id === "access") return user.permissions.some((permission) => permission === "users.read" || permission === "roles.write");

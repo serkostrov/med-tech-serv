@@ -37,6 +37,15 @@ export interface ApiSessionUser {
 export interface AccessUserRecord extends ApiSessionUser {
   readonly email: string;
   readonly isActive: boolean;
+  readonly telegramChatId?: string;
+}
+
+/** Номер чата Telegram: цифры, у групп со знаком минус. Пусто = не получать в Telegram. */
+export function normalizeTelegramChatId(value: unknown): string | null {
+  const normalized = String(value ?? "").trim();
+  if (!normalized) return null;
+  if (!/^-?\d{1,20}$/u.test(normalized)) throw new M2ApiError(400, "Номер чата Telegram должен состоять из цифр");
+  return normalized;
 }
 
 export interface EquipmentApiRecord {
@@ -838,7 +847,7 @@ export class M2ApiClient {
   }
 
   public async accessUsers(): Promise<readonly AccessUserRecord[]> {
-    const { data, error } = await this.db().from("users").select("id, full_name, role, email, is_active, access_role_key").order("full_name");
+    const { data, error } = await this.db().from("users").select("id, full_name, role, email, is_active, access_role_key, telegram_chat_id").order("full_name");
     throwIfError(error);
     return (data ?? []).map((item) => {
       const row = asRow(item);
@@ -848,7 +857,8 @@ export class M2ApiClient {
         role: text(row, "role"),
         email: text(row, "email"),
         isActive: row.is_active !== false,
-        accessRoleKey: optionalText(row, "access_role_key")
+        accessRoleKey: optionalText(row, "access_role_key"),
+        ...(optionalText(row, "telegram_chat_id") ? { telegramChatId: optionalText(row, "telegram_chat_id") } : {})
       };
     });
   }
@@ -861,6 +871,7 @@ export class M2ApiClient {
     const organizationIds = Array.isArray(input.organizationIds)
       ? input.organizationIds.map((value) => String(value).trim()).filter(Boolean)
       : [];
+    const telegramChatId = normalizeTelegramChatId(input.telegramChatId);
     const { data, error } = await this.db().rpc("create_access_user", {
       p_email: email,
       p_password: password,
@@ -872,13 +883,18 @@ export class M2ApiClient {
     const row = asRow(data);
     const userId = text(row, "id");
     if (!userId) throw new M2ApiError(400, "Supabase не вернул идентификатор пользователя");
+    if (telegramChatId) {
+      const { error: telegramError } = await this.db().from("users").update({ telegram_chat_id: telegramChatId }).eq("id", userId);
+      throwIfError(telegramError, "Сотрудник создан, но номер чата Telegram не сохранён");
+    }
     return {
       id: userId,
       fullName: text(row, "full_name") || fullName,
       role: text(row, "role") || String(input.role ?? ""),
       email: text(row, "email") || email,
       isActive: row.is_active !== false,
-      accessRoleKey: optionalText(row, "access_role_key") ?? accessRoleKey
+      accessRoleKey: optionalText(row, "access_role_key") ?? accessRoleKey,
+      ...(telegramChatId ? { telegramChatId } : {})
     };
   }
 
@@ -888,7 +904,8 @@ export class M2ApiClient {
     if (input.role !== undefined) patch.role = input.role;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
     if (input.accessRoleKey !== undefined) patch.access_role_key = input.accessRoleKey;
-    const { data, error } = await this.db().from("users").update(patch).eq("id", id).select("id, full_name, role, email, is_active, access_role_key").single();
+    if (input.telegramChatId !== undefined) patch.telegram_chat_id = normalizeTelegramChatId(input.telegramChatId);
+    const { data, error } = await this.db().from("users").update(patch).eq("id", id).select("id, full_name, role, email, is_active, access_role_key, telegram_chat_id").single();
     throwIfError(error);
     const row = asRow(data);
     return {
@@ -897,7 +914,8 @@ export class M2ApiClient {
       role: text(row, "role"),
       email: text(row, "email"),
       isActive: row.is_active !== false,
-      accessRoleKey: optionalText(row, "access_role_key")
+      accessRoleKey: optionalText(row, "access_role_key"),
+      ...(optionalText(row, "telegram_chat_id") ? { telegramChatId: optionalText(row, "telegram_chat_id") } : {})
     };
   }
 
