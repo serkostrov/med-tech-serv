@@ -1263,9 +1263,9 @@ function TaskCardLoading({ task, onBack, backLabel = "К задачам" }: { re
   </div>;
 }
 
-function CoordinatorTasks({ initialTaskId, onTaskRouteChange, returnToEquipment = false }: {
+function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipment }: {
   /** Задачу открыли из паспорта прибора: «назад» возвращает в паспорт. */
-  readonly returnToEquipment?: boolean;
+  readonly onReturnToEquipment?: () => void;
   readonly initialTaskId: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
@@ -1427,7 +1427,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, returnToEquipment 
   };
   const closeTask = () => {
     // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
-    if (returnToEquipment) { window.history.back(); return; }
+    if (onReturnToEquipment) { onReturnToEquipment(); return; }
     openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
@@ -1485,8 +1485,8 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, returnToEquipment 
         toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
       });
   }, [initialTaskId]);
-  if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={returnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
-  if (selectedTaskId && taskCard) return <TaskCard backLabel={returnToEquipment ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
+  if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
+  if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
@@ -2047,6 +2047,9 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
     setPageIndex(0);
   };
 
+  // Актуальный открытый паспорт для асинхронных ответов (замыкание могло устареть).
+  const selectedIdRef = useRef(selectedId);
+  selectedIdRef.current = selectedId;
   const refreshRegistry = async () => {
     const page = await m2Api.equipmentPage({
       limit: pageSize,
@@ -2060,9 +2063,12 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
     // Подробная запись открытого паспорта не затирается строкой списка (иначе мигают история и форма).
     setRecords((current) => {
       const rows = page.items.map((item) => equipmentUiRecord(item));
-      const detailed = selectedId ? current.find((item) => item.id === selectedId) : undefined;
+      const openId = selectedIdRef.current;
+      const detailed = openId ? current.find((item) => item.id === openId) : undefined;
       if (!detailed) return rows;
-      return rows.some((item) => item.id === detailed.id) ? rows.map((item) => item.id === detailed.id ? detailed : item) : [detailed, ...rows];
+      // Поля паспорта берём из свежей строки, историю, счётчик и файлы оставляем из подробной записи.
+      const keepDetails = (row: EquipmentUiRecord): EquipmentUiRecord => ({ ...row, history: detailed.history, historyTotal: detailed.historyTotal, meterReadings: detailed.meterReadings, meterReadingsTotal: detailed.meterReadingsTotal, files: detailed.files, fileRecords: detailed.fileRecords });
+      return rows.some((item) => item.id === detailed.id) ? rows.map((item) => item.id === detailed.id ? keepDetails(item) : item) : [detailed, ...rows];
     });
     setTotal(page.total);
   };
@@ -2132,7 +2138,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
     }
     await refreshRegistry();
     // Открытый паспорт загружаем заново целиком: иначе история, счётчик и файлы пропадают.
-    if (selectedId) await openCard(selectedId);
+    if (selectedIdRef.current) await openCard(selectedIdRef.current);
     setFormOpen(false);
     setEditingId(null);
     if (uploadWarning) toast.warning(uploadWarning);
@@ -2290,16 +2296,29 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
 // Технические коды ошибок отправки простыми словами; незнакомый код показываем как есть.
 const NOTIFICATION_ERROR_TEXT: Readonly<Record<string, string>> = {
   max_attempts_exceeded: "не удалось отправить после нескольких попыток",
+  channel_delivery_failed: "канал отправки вернул ошибку",
+  channel_not_registered: "этот канал отправки не подключён",
+  notification_delivery_lease_expired: "отправка прервалась, письмо будет отправлено повторно",
+  notification_delivery_result_recording_failed: "не удалось записать результат отправки",
   smtp_connection_failed: "почтовый сервер недоступен",
-  smtp_auth_failed: "почтовый сервер не принял логин и пароль",
-  smtp_rejected: "почтовый сервер отклонил письмо",
+  smtp_authentication_failed: "почтовый сервер не принял логин и пароль",
+  smtp_authentication_unavailable: "почтовый сервер не поддерживает вход",
+  smtp_starttls_unavailable: "почтовый сервер не поддерживает защищённое соединение",
+  smtp_invalid_address: "неверный адрес e-mail",
   smtp_recipient_rejected: "почтовый сервер не знает такого адреса",
-  smtp_timeout: "почтовый сервер не ответил вовремя",
-  telegram_chat_not_found: "в Telegram не найден такой чат",
-  telegram_blocked: "получатель заблокировал бота в Telegram",
-  telegram_failed: "Telegram не принял сообщение",
-  recipient_missing: "у получателя не указан адрес",
-  channel_disabled: "канал отправки выключен"
+  smtp_message_rejected: "почтовый сервер отклонил письмо",
+  smtp_invalid_message: "письмо составлено с ошибкой",
+  smtp_temporary_failure: "временный сбой почтового сервера",
+  smtp_protocol_error: "ошибка связи с почтовым сервером",
+  smtp_delivery_outcome_unknown: "неизвестно, дошло ли письмо",
+  smtp_channel_mismatch: "письмо попало не в тот канал",
+  telegram_chat_rejected: "Telegram не принял сообщение: бот заблокирован или чат не найден",
+  telegram_invalid_chat_id: "неверный номер чата Telegram",
+  telegram_bot_token_rejected: "Telegram не принял ключ бота",
+  telegram_connection_failed: "Telegram недоступен",
+  telegram_temporary_failure: "временный сбой Telegram",
+  telegram_delivery_outcome_unknown: "неизвестно, дошло ли сообщение",
+  telegram_channel_mismatch: "сообщение попало не в тот канал"
 };
 
 function notificationErrorText(code: string): string {
@@ -2680,15 +2699,15 @@ function FinancePage() {
     <section className="card card--table"><CardHeader meta={`${invoices.length} документов`} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th></tr></thead><tbody>{invoices.map((invoice) => <tr key={invoice.id}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td></tr>)}</tbody></table></div>}</section></>;
 }
 
-function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, returnToEquipment = false, onTaskRouteChange }: {
-  readonly returnToEquipment?: boolean;
+function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
+  readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
   readonly equipmentRouteId?: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
-    case "tasks": return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} />;
+    case "tasks": return <CoordinatorTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
     case "maintenance": return <MaintenancePlanPage />;
     case "equipment": return <EquipmentPage initialEquipmentId={equipmentRouteId} />;
     case "engineers": return <OperationsEngineersPage />;
@@ -2698,12 +2717,12 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, returnToEqu
     case "customers": return <CustomersPage />;
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
-    default: return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} />;
+    default: return <CoordinatorTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
   }
 }
 
-function AdminWorkspace({ view, taskRouteId, equipmentRouteId, returnToEquipment = false, onTaskRouteChange }: {
-  readonly returnToEquipment?: boolean;
+function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
+  readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
   readonly equipmentRouteId?: string | undefined;
@@ -2711,7 +2730,7 @@ function AdminWorkspace({ view, taskRouteId, equipmentRouteId, returnToEquipment
 }) {
   if (view === "access") return <AccessAdminPage />;
   if (view === "references") return <ReferencesWorkspace notificationTemplates />;
-  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} taskRouteId={taskRouteId} view={view} />;
+  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} taskRouteId={taskRouteId} view={view} />;
 }
 
 function engineerDate(value: string | undefined): string {
@@ -2775,8 +2794,8 @@ const ENGINEER_BOARD_STATUSES: readonly ReferenceCatalogValue[] = (["assigned", 
   attributes: { sortOrder: index, ...(code === "closed" ? { isTerminal: true } : {}) }
 }));
 
-function EngineerTasks({ user, initialTaskId, onTaskRouteChange, returnToEquipment = false }: {
-  readonly returnToEquipment?: boolean;
+function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquipment }: {
+  readonly onReturnToEquipment?: () => void;
   readonly user: ApiSessionUser;
   readonly initialTaskId: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
@@ -2825,7 +2844,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, returnToEquipme
   };
   const closeTask = () => {
     // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
-    if (returnToEquipment) { window.history.back(); return; }
+    if (onReturnToEquipment) { onReturnToEquipment(); return; }
     openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
@@ -2860,11 +2879,11 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, returnToEquipme
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) {
-    return <TaskCardLoading backLabel={returnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={page?.items.find((item) => item.id === selectedTaskId)} />;
+    return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={page?.items.find((item) => item.id === selectedTaskId)} />;
   }
   if (selectedTaskId && taskCard) {
     return <TaskCard
-      backLabel={returnToEquipment ? "К прибору" : "К задачам"}
+      backLabel={onReturnToEquipment ? "К прибору" : "К задачам"}
       card={taskCard}
       onBack={closeTask}
       onChanged={async () => {
@@ -2904,8 +2923,8 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, returnToEquipme
   </>;
 }
 
-function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, returnToEquipment = false, onTaskRouteChange }: {
-  readonly returnToEquipment?: boolean;
+function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
+  readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly user: ApiSessionUser;
   readonly taskRouteId: string | undefined;
@@ -2913,10 +2932,10 @@ function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, returnTo
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
-    case "tasks": return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} user={user} />;
+    case "tasks": return <EngineerTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} user={user} />;
     case "equipment": return <EquipmentPage engineer initialEquipmentId={equipmentRouteId} />;
     case "notifications": return <NotificationsPage />;
-    default: return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} user={user} />;
+    default: return <EngineerTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} user={user} />;
   }
 }
 
@@ -3029,7 +3048,11 @@ function App() {
   const [equipmentRouteId, setEquipmentRouteId] = useState<string | undefined>(() => {
     if (typeof window === "undefined" || taskIdFromPathname(window.location.pathname)) return undefined;
     const state = window.history.state as { readonly view?: string; readonly equipmentId?: string } | null;
-    return state?.view === "equipment" ? state.equipmentId : undefined;
+    if (state?.view !== "equipment") return undefined;
+    // Обновление страницы открывает раздел по умолчанию, как и у задач.
+    const navigationEntry = window.performance?.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (navigationEntry?.type === "reload") { window.history.replaceState(null, "", window.location.pathname); return undefined; }
+    return state.equipmentId;
   });
   // Текущая задача открыта из паспорта: кнопка «назад» ведёт в паспорт и подписана «К прибору».
   const [fromEquipmentId, setFromEquipmentId] = useState<string | undefined>(() =>
@@ -3083,10 +3106,20 @@ function App() {
     else if (window.history.state) window.history.replaceState(null, "", "/");
   };
 
+  // «К прибору»: открываем паспорт новым шагом истории, не полагаясь на прошлые шаги браузера.
+  const returnToEquipment = fromEquipmentId ? () => {
+    window.history.pushState({ view: "equipment", equipmentId: fromEquipmentId }, "", "/");
+    setTaskRouteId(undefined);
+    setEquipmentRouteId(fromEquipmentId);
+    setFromEquipmentId(undefined);
+    setActiveView("equipment");
+    setNavigationKey((value) => value + 1);
+  } : undefined;
+
   const changeTaskRoute = (taskId?: string, replace = false) => {
     setTaskRouteId(taskId);
     // Новый шаг истории без метки паспорта: обычная задача, «назад» ведёт к задачам.
-    setFromEquipmentId(undefined);
+    if (!replace) setFromEquipmentId(undefined);
     const pathname = taskId ? taskPathname(taskId) : "/";
     if (window.location.pathname === pathname) return;
     // Откат после неудачного открытия не оставляет лишний шаг в истории браузера.
@@ -3118,10 +3151,10 @@ function App() {
       userName={sessionUser.fullName}
     >
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
-      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} returnToEquipment={Boolean(fromEquipmentId)} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
-      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} returnToEquipment={Boolean(fromEquipmentId)} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
+      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
       {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace key={navigationKey} view={activeView} /> : null}
-      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} returnToEquipment={Boolean(fromEquipmentId)} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
     </AppShell>
   );
 }

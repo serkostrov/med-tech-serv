@@ -120,7 +120,7 @@ describe("shared UI architecture", () => {
     }
     // Подпись «назад» у задачи зависит от того, откуда её открыли: «К задачам» или «К прибору».
     assert.match(app, /<EntityDetailToolbar[\s\S]{0,300}backLabel=\{backLabel\}/u);
-    assert.match(app, /returnToEquipment \? "К прибору" : "К задачам"/u);
+    assert.match(app, /onReturnToEquipment \? "К прибору" : "К задачам"/u);
     assert.match(app, /<EntityDetailToolbar[\s\S]{0,400}backLabel="К приборам"/u);
     assert.ok(!app.includes("title={`${record.model} · S/N"));
     // Паспорт прибора устроен как карточка задачи: свойства справа, открытые задачи сверху.
