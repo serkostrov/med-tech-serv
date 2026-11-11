@@ -106,7 +106,11 @@ export interface TaskApiRecord {
   readonly initiatorName?: string;
   readonly payerId?: string;
   readonly equipmentId?: string;
+  /** Краткое описание прибора, приходит вместе с задачей (для доски и списка). */
+  readonly equipmentLabel?: { readonly serialNumber: string; readonly model?: string; readonly manufacturer?: string };
   readonly engineerId?: string;
+  /** Имя инженера, приходит вместе с задачей. */
+  readonly engineerName?: string;
   readonly periodFrom?: string;
   readonly periodTo?: string;
   readonly callDate?: string;
@@ -349,6 +353,17 @@ function numberValue(value: unknown): number | undefined {
   return undefined;
 }
 
+/**
+ * Безопасная часть ключа в хранилище. Storage принимает в ключе только латиницу,
+ * цифры и простые знаки: имя «Снимок экрана — 2026-11-11 в 15.00.30.png»
+ * отклонялось с «Invalid key». В ключе оставляем только расширение,
+ * а исходное имя файла хранится в files.original_name.
+ */
+export function storageObjectName(fileName: string): string {
+  const extension = /\.([A-Za-z0-9]{1,10})$/u.exec(fileName)?.[1]?.toLowerCase();
+  return `${crypto.randomUUID()}${extension ? `.${extension}` : ""}`;
+}
+
 function related(row: Row, key: string): Row {
   const value = row[key];
   if (Array.isArray(value)) return asRow(value[0]);
@@ -497,7 +512,9 @@ const TASK_SELECT = `
   contact:site_contacts!site_contact_id(full_name, phone, email),
   initiator_contact:site_contacts!initiator_contact_id(full_name),
   contract:contracts(number),
-  status:task_statuses(code, name)
+  status:task_statuses(code, name),
+  device:equipment!equipment_id(serial_number, model:equipment_models(name), maker:manufacturers(name)),
+  engineer:users!engineer_id(full_name)
 `;
 
 const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
@@ -512,7 +529,9 @@ const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
   payer:payers!payer_id(name),
   contact:site_contacts!site_contact_id(full_name, phone, email),
   contract:contracts(number),
-  status:task_statuses(code, name)
+  status:task_statuses(code, name),
+  device:equipment!equipment_id(serial_number, model:equipment_models(name), maker:manufacturers(name)),
+  engineer:users!engineer_id(full_name)
 `;
 
 /** После 0007 в tasks появляются initiator_contact_id / initiator_name. Пока миграции нет — select без них. */
@@ -561,6 +580,9 @@ export function mapTask(row: Row): TaskApiRecord {
   const workModifier = text(row, "work_modifier");
   const initiatorContactId = optionalText(row, "initiator_contact_id");
   const initiatorName = optionalText(row, "initiator_name") ?? optionalText(initiatorContact, "full_name");
+  const device = related(row, "device");
+  const deviceSerial = optionalText(device, "serial_number");
+  const engineerRow = related(row, "engineer");
   return {
     id: text(row, "id"),
     number: text(row, "number"),
@@ -578,7 +600,13 @@ export function mapTask(row: Row): TaskApiRecord {
     ...(initiatorName ? { initiatorName } : {}),
     payerId: optionalText(row, "payer_id"),
     equipmentId: optionalText(row, "equipment_id"),
+    ...(deviceSerial ? { equipmentLabel: {
+      serialNumber: deviceSerial,
+      ...(optionalText(related(device, "model"), "name") ? { model: optionalText(related(device, "model"), "name") } : {}),
+      ...(optionalText(related(device, "maker"), "name") ? { manufacturer: optionalText(related(device, "maker"), "name") } : {})
+    } } : {}),
     engineerId: optionalText(row, "engineer_id"),
+    ...(optionalText(engineerRow, "full_name") ? { engineerName: optionalText(engineerRow, "full_name") } : {}),
     periodFrom: optionalText(row, "deadline_from"),
     periodTo,
     callDate: optionalText(row, "call_date"),
@@ -1308,7 +1336,7 @@ export class M2ApiClient {
   public async uploadEquipmentFiles(id: string, files: readonly File[]): Promise<void> {
     const actor = await this.actorId();
     for (const file of files) {
-      const key = `${id}/${crypto.randomUUID()}-${file.name}`;
+      const key = `${id}/${storageObjectName(file.name)}`;
       const { error: storageError } = await this.db().storage.from("medtech-files").upload(key, file, { contentType: file.type || "application/octet-stream", upsert: false });
       throwIfError(storageError, "Не удалось загрузить файл");
       const { error } = await this.db().from("files").insert({
@@ -1323,6 +1351,13 @@ export class M2ApiClient {
       });
       throwIfError(error);
     }
+  }
+
+  /** Лёгкий список площадок (id и название) для фильтров. */
+  public async listSiteNames(): Promise<readonly { readonly id: string; readonly name: string }[]> {
+    const { data, error } = await this.db().from("sites").select("id, name").eq("is_active", true).order("name");
+    throwIfError(error);
+    return (data ?? []).map((item) => ({ id: text(asRow(item), "id"), name: text(asRow(item), "name") }));
   }
 
   public async listSites(includeInactive = false): Promise<readonly SiteOption[]> {
@@ -1624,8 +1659,21 @@ export class M2ApiClient {
     const offset = query.offset ?? 0;
     const ascending = query.sort === "deadline_asc" || query.sort === "updated_asc";
     const sortColumn = query.sort?.startsWith("deadline") ? "deadline_to" : "updated_at";
-    const applyTaskFilters = <T extends { eq: (column: string, value: string) => T; or: (filters: string) => T }>(request: T): T => {
+    const applyTaskFilters = <T extends {
+      eq: (column: string, value: string) => T;
+      or: (filters: string) => T;
+      gte: (column: string, value: string) => T;
+      lte: (column: string, value: string) => T;
+      lt: (column: string, value: string) => T;
+      not: (column: string, operator: string, value: string) => T;
+    }>(request: T): T => {
       let next = request;
+      // Период: задачи, срок которых пересекается с выбранным периодом.
+      if (query.periodFrom) next = next.gte("deadline_to", query.periodFrom.slice(0, 10));
+      if (query.periodTo) next = next.lte("deadline_from", query.periodTo.slice(0, 10));
+      if (query.overdue) {
+        next = next.lt("deadline_to", new Date().toISOString().slice(0, 10)).not("status_code", "in", "(closed,cancelled)");
+      }
       if (query.status) next = next.eq("status_code", query.status);
       if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
       if (query.siteId) next = next.eq("site_id", query.siteId);
@@ -1881,7 +1929,7 @@ export class M2ApiClient {
     const actor = await this.actorId();
     const uploadedIds: string[] = [];
     for (const file of files) {
-      const key = `tasks/${id}/${crypto.randomUUID()}-${file.name}`;
+      const key = `tasks/${id}/${storageObjectName(file.name)}`;
       const { error: storageError } = await this.db().storage.from("medtech-files").upload(key, file, {
         contentType: file.type || "application/octet-stream",
         upsert: false

@@ -73,8 +73,15 @@ export function EquipmentFolderPicker({
   const [modelId, setModelId] = useState("");
   const rootRef = useRef<HTMLDivElement | null>(null);
 
+  const [equipmentLoading, setEquipmentLoading] = useState(false);
+  const [equipmentLoaded, setEquipmentLoaded] = useState(false);
   useEffect(() => {
-    setLiveEquipment(equipment);
+    // Не затираем уже загруженный список пустым или частичным значением из формы.
+    setLiveEquipment((current) => {
+      if (equipment.length === 0) return current;
+      const known = new Set(current.map((item) => item.id));
+      return [...current, ...equipment.filter((item) => !known.has(item.id))];
+    });
   }, [equipment]);
 
   useEffect(() => {
@@ -109,12 +116,16 @@ export function EquipmentFolderPicker({
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
+    setEquipmentLoading(true);
     void m2Api.listEquipment()
       .then((items) => {
-        if (!cancelled) setLiveEquipment(items);
+        if (!cancelled) { setLiveEquipment(items); setEquipmentLoaded(true); }
       })
-      .catch(() => {
-        /* оставляем текущий список */
+      .catch((loadError: unknown) => {
+        if (!cancelled) toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить приборы");
+      })
+      .finally(() => {
+        if (!cancelled) setEquipmentLoading(false);
       });
     const onPointerDown = (event: MouseEvent) => {
       if (rootRef.current && !rootRef.current.contains(event.target as Node)) setOpen(false);
@@ -309,7 +320,7 @@ export function EquipmentFolderPicker({
             }}
             onFocus={() => setOpen(true)}
             onKeyDown={onKeyDown}
-            placeholder="S/N, модель, производитель или категория"
+            placeholder="Нажмите и выберите прибор или введите S/N"
             role="combobox"
             type="search"
             value={query}
@@ -325,7 +336,9 @@ export function EquipmentFolderPicker({
           >
             {visibleTree.length === 0 ? (
               <p className="equipment-combobox__empty">
-                {models.length === 0 && liveEquipment.length === 0
+                {equipmentLoading && !equipmentLoaded
+                  ? "Загружаем приборы…"
+                  : models.length === 0 && liveEquipment.length === 0
                   ? "Справочник пуст. Нажмите «Новый», чтобы добавить прибор."
                   : "Приборов по этому запросу нет"}
               </p>

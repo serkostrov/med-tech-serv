@@ -49,6 +49,7 @@ import { ClosureReview } from "./ClosureReview.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset } from "./RegistryPagination.js";
+import { FileDropField } from "./FileDropField.js";
 import {
   EngineersPage as OperationsEngineersPage,
   ReportsPage as OperationsReportsPage,
@@ -167,9 +168,9 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
               <td><button className="text-button" onClick={(event) => { event.stopPropagation(); onOpen(task.id); }} type="button"><strong>{task.number}</strong></button></td>
               <td><strong>{task.title}</strong></td>
               <td>{task.customer?.siteName ?? "Не выбрана"}</td>
-              <td className="muted">{device ? `${device.model} · S/N ${device.serialNumber}` : "Не выбран"}</td>
+              <td className="muted">{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · S/N ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · S/N ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</td>
               <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="urgent-label">срочно</span> : null}{task.isOverdue ? <span className="status-badge status-badge--danger">просрочена</span> : null}</td>
-              <td>{engineers.find((engineer) => engineer.id === task.engineerId)?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</td>
+              <td>{task.engineerName ?? engineers.find((engineer) => engineer.id === task.engineerId)?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</td>
               <td><StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge></td>
             </tr>
           );})}
@@ -397,7 +398,11 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
     const data = new FormData(event.currentTarget);
     const title = String(data.get("title") ?? "").trim();
     if (!title) return fail("Укажите название задачи");
-    if (!selectedEquipment) return fail("Выберите прибор из списка");
+    if (!selectedEquipment) {
+      // Открываем список приборов сразу, чтобы было понятно, где выбирать.
+      document.querySelector<HTMLInputElement>("input[aria-label=\"Поиск прибора\"]")?.focus();
+      return fail("Выберите прибор: нажмите на поле «Прибор» и выберите его из списка");
+    }
     if (!selectedEquipment.siteId || !selectedEquipment.payerId) {
       return fail("Выберите клиента или инициатора — так задаются площадка и плательщик прибора");
     }
@@ -606,9 +611,24 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         await m2Api.transitionTask(task.id, "in_progress", { reworkComment: suppliedComment.trim() });
       } else {
         const target = card.availableActions.find((action) => action.code === code)?.targetStatus;
-        if (target) await m2Api.transitionTask(task.id, target);
+        if (!target) throw new Error("Это действие сейчас недоступно");
+        await m2Api.transitionTask(task.id, target);
       }
-      await onChanged();
+      // Подтверждение сразу после действия: оно уже выполнено, даже если обновление экрана не удастся.
+      const engineerName = suggestions.find((item) => item.engineerId === engineerId)?.fullName;
+      const done: Readonly<Record<string, string>> = {
+        assign: engineerName ? `Инженер назначен: ${engineerName}` : "Инженер назначен",
+        verify_closure: "Работа принята, задача закрыта",
+        close: "Задача закрыта",
+        cancel: "Задача отменена",
+        return_for_rework: "Задача возвращена инженеру на доработку"
+      };
+      toast.success(done[code] ?? "Статус задачи изменён");
+      try {
+        await onChanged();
+      } catch (refreshError) {
+        toast.warning(refreshError instanceof Error ? `Действие выполнено, но экран не обновился: ${refreshError.message}` : "Действие выполнено, обновите страницу");
+      }
       return true;
     } catch (actionError) {
       toast.error(actionError instanceof Error ? actionError.message : "Не получилось изменить задачу");
@@ -887,7 +907,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <label className="field-check"><input defaultChecked={task.apparatusApproved ?? card.closure?.apparatusApproved === true} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>
       <label className="field-check"><input defaultChecked={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims === true} name="customerHasNoClaims" type="checkbox" /><span>Претензий нет</span></label>
       <label className="field-check"><input defaultChecked={task.continuedInPrimary === true} name="continuedInPrimary" type="checkbox" /><span>Продолжение первичной заявки</span></label>
-      <label className="field-wide field-file">Фото акта{card.closure?.actFileId || card.files.some((file) => file.kind === "act") ? <small>Уже есть — можно заменить новым снимком</small> : <small>Нужно для передачи на проверку (JPEG/PNG/WebP)</small>}<span className="field-file__control"><input accept="image/jpeg,image/png,image/webp,image/heic,image/heif" name="actPhoto" type="file" /></span></label>
+      <FileDropField accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hint={card.closure?.actFileId || card.files.some((file) => file.kind === "act") ? "Фото акта уже есть, можно заменить новым" : "Нужно для передачи на проверку: JPEG, PNG, WebP или HEIC"} name="actPhoto" title="Фото акта" />
     </DialogForm>
     <Dialog footer={<><Button onClick={() => setActRowsEditing(false)} variant="secondary">Сохранить строки</Button><Button onClick={() => setActOpen(true)}>Открыть акт</Button></>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Данные печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
       <h3>Оборудование</h3>
@@ -1057,18 +1077,24 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
   readonly initialTaskId: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
-  const pageSize = 100;
+  // 25 задач на страницу списка: быстро грузится даже через медленную связь.
+  const pageSize = 25;
   const [tasks, setTasks] = useState<readonly TaskApiRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
   const [equipment, setEquipment] = useState<readonly EquipmentApiRecord[]>([]);
   const [sites, setSites] = useState<readonly SiteOption[]>([]);
+  const [siteNames, setSiteNames] = useState<readonly { readonly id: string; readonly name: string }[]>([]);
+  const [formDataState, setFormDataState] = useState<"idle" | "loading" | "ready">("idle");
+  const formDataPromise = useRef<Promise<void> | null>(null);
+  const [listLoaded, setListLoaded] = useState(false);
+  const [boardRefresh, setBoardRefresh] = useState(0);
   const [workTypes, setWorkTypes] = useState<readonly ReferenceCatalogValue[]>([]);
   const [taskStatuses, setTaskStatuses] = useState<readonly ReferenceCatalogValue[]>([]);
   const [engineers, setEngineers] = useState<readonly { readonly id: string; readonly fullName: string }[]>([]);
   const [registryView, setRegistryView] = useState<"board" | "list" | "mail">("board");
   const [showCompletedBoard, setShowCompletedBoard] = useState(false);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
   const [filters, setFilters] = useState<TaskRegistryFilters>(EMPTY_TASK_FILTERS);
@@ -1094,11 +1120,36 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
       });
       setTasks(page.items); setTotal(page.total);
     } finally {
+      // И при ошибке: вместо бесконечного индикатора — пустой список и сообщение об ошибке.
+      setListLoaded(true);
       setLoading(false);
     }
   };
+  // Полные справочники приборов и площадок нужны только форме создания задачи:
+  // грузим их при её открытии, а не при каждом заходе в «Задачи».
+  const ensureFormData = (): Promise<void> => {
+    if (formDataPromise.current) return formDataPromise.current;
+    setFormDataState("loading");
+    // Приборы форма грузит сама, когда открываешь выбор прибора; здесь нужны только площадки с контактами.
+    const promise = m2Api.listSites()
+      .then((loadedSites) => { setSites(loadedSites); setFormDataState("ready"); })
+      .catch((loadError: unknown) => { formDataPromise.current = null; setFormDataState("idle"); throw loadError; });
+    formDataPromise.current = promise;
+    return promise;
+  };
+  const openCreationForm = async () => {
+    try { await ensureFormData(); setFormOpen(true); }
+    catch (loadError) { setMailDraft(null); toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть форму создания задачи"); }
+  };
+  // После изменений обновляем то, что на экране: колонки доски и (если открыт) список.
+  const refreshTasks = async () => {
+    setBoardRefresh((value) => value + 1);
+    if (registryView === "list" || listLoaded) await reloadTasks();
+  };
   const applyFilters = async (nextFilters = filters) => {
     setFilters(nextFilters); setAppliedFilters(nextFilters); setSelectedTaskIds(new Set()); setPageIndex(0);
+    // На доске колонки перезагрузятся сами по новым фильтрам; список — только если он открыт.
+    if (registryView !== "list") { setListLoaded(false); return; }
     try { await reloadTasks(nextFilters, 0); }
     catch (loadError) { toast.error(loadError instanceof Error ? loadError.message : "Не получилось обновить список"); }
   };
@@ -1200,8 +1251,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
     return { items: page.items, total: page.total };
   };
   useEffect(() => {
-    // Каждый список показываем, как только он пришёл: доске нужны только статусы,
-    // приборы и площадки (форма создания, подписи на карточках) догружаются следом.
+    // Доске нужны только статусы; справочники для фильтров лёгкие. Задачи колонки грузят сами.
     let reported = false;
     const report = (loadError: unknown) => {
       if (reported) return;
@@ -1211,13 +1261,13 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
     void m2Api.listCatalogValues("task-statuses").then(setTaskStatuses).catch(report);
     void m2Api.listCatalogValues("work-types").then(setWorkTypes).catch(report);
     void m2Api.listTaskEngineers().then(setEngineers).catch(report);
-    void m2Api.listEquipment().then(setEquipment).catch(report);
-    void m2Api.listSites().then(setSites).catch(report);
-    void m2Api.tasksPage({ limit: pageSize, offset: 0 })
-      .then((taskPage) => { setTasks(taskPage.items); setTotal(taskPage.total); })
-      .catch(report)
-      .finally(() => setLoading(false));
+    void m2Api.listSiteNames().then(setSiteNames).catch(report);
   }, []);
+  useEffect(() => {
+    // Список задач грузим только когда открыта вкладка «Список».
+    if (registryView !== "list" || listLoaded) return;
+    void reloadTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить список задач"));
+  }, [registryView]);
   useEffect(() => {
     // Задача уже открыта или открывается по клику: повторно не загружаем.
     if (initialTaskId && initialTaskId === selectedTaskId) return;
@@ -1236,11 +1286,11 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) return <TaskCardLoading onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
-  if (selectedTaskId && taskCard) return <TaskCard card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([reloadTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
+  if (selectedTaskId && taskCard) return <TaskCard card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
-        actions={<Button icon="plus" onClick={() => setFormOpen(true)}>Создать задачу</Button>}
+        actions={<Button disabled={formDataState === "loading"} icon="plus" onClick={() => void openCreationForm()}>{formDataState === "loading" ? "Открываем форму…" : "Создать задачу"}</Button>}
         description="Создайте заявку, назначьте инженера или откройте карточку, чтобы проверить работу."
         title="Задачи"
       />
@@ -1257,22 +1307,22 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
         ) : null}
       </div>
 
-      <TaskCreationForm equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) setMailDraft(null); }} onCreated={async (task) => { if (mailDraft) await m2Api.updateMailInbox(mailDraft.id, { status: "converted", taskId: task.id }); await reloadTasks(); setFormOpen(false); setMailDraft(null); await openTask(task.id); }} open={formOpen} workTypes={workTypes} />
+      <TaskCreationForm equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) setMailDraft(null); }} onCreated={async (task) => { if (mailDraft) await m2Api.updateMailInbox(mailDraft.id, { status: "converted", taskId: task.id }); await refreshTasks(); setFormOpen(false); setMailDraft(null); await openTask(task.id); }} open={formOpen} workTypes={workTypes} />
 
-      {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
+      {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{siteNames.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
-      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={async (id, status) => { try { await m2Api.transitionTask(id, status); } catch (moveError) { const message = moveError instanceof Error ? moveError.message : "Не получилось изменить статус"; toast.error(message); throw moveError; } }} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={JSON.stringify(appliedFilters)} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
+      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={async (id, status) => { try { await m2Api.transitionTask(id, status); } catch (moveError) { const message = moveError instanceof Error ? moveError.message : "Не получилось изменить статус"; toast.error(message); throw moveError; } }} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
         <section className="card card--table" aria-labelledby="tasks-table-title">
           <CardHeader headingId="tasks-table-title" meta={`${tasks.length} из ${total}`} title="Все задачи" />
-          {loading && tasks.length === 0
+          {(loading || !listLoaded) && tasks.length === 0
             ? <ResourceState description="Подождите, список сейчас появится." status="loading" title="Загружаем задачи" />
             : <TaskTable engineers={engineers} equipment={equipment} filtered={Boolean(appliedFilters.search || appliedFilters.status || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode || appliedFilters.priority || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue)} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} onToggle={toggleTask} onToggleAll={(selected) => setSelectedTaskIds((current) => { const next = new Set(current); for (const task of tasks) { if (selected) next.add(task.id); else next.delete(task.id); } return next; })} selectedTaskIds={selectedTaskIds} tasks={tasks} />}
           <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={(next) => void changePage(next)} pageIndex={pageIndex} pageSize={pageSize} total={total} />
         </section>
 
-      </div> : <MailInboxTab onCreateTask={(mail) => { setMailDraft(mail); setFormOpen(true); }} onOpenTask={(taskId) => void openTask(taskId)} />}
+      </div> : <MailInboxTab onCreateTask={(mail) => { setMailDraft(mail); void openCreationForm(); }} onOpenTask={(taskId) => void openTask(taskId)} />}
     </>
   );
 }
