@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import type { BulkTaskCommandResponse, EngineerTaskListItem, EngineerTaskListResponse, EquipmentHistoryEvent, EquipmentMeterReading, MailInboxRecord, NotificationJournalRecord, NotificationTemplateResponse, TaskPartPosition } from "./types.js";
+import type { BulkTaskCommandResponse, EngineerTaskListItem, EngineerTaskListResponse, EquipmentFileResponse, EquipmentHistoryEvent, EquipmentMeterReading, MailInboxRecord, NotificationJournalRecord, NotificationTemplateResponse, TaskPartPosition } from "./types.js";
 import {
   getDefaultView,
   getRoleNavigation,
@@ -1552,6 +1552,8 @@ interface EquipmentUiRecord {
   readonly notes: string;
   readonly lastMeterReading?: number;
   readonly files: readonly string[];
+  /** Файлы со ссылками: превью и открытие из паспорта. */
+  readonly fileRecords: readonly EquipmentFileResponse[];
   readonly meterReadings: readonly EquipmentMeterReading[];
   readonly meterReadingsTotal: number;
   readonly history: readonly EquipmentHistoryEvent[];
@@ -1592,6 +1594,7 @@ function equipmentUiRecord(record: EquipmentApiRecord, card?: EquipmentCardRespo
     notes: record.notes ?? "",
     ...(record.lastMeterReading !== undefined ? { lastMeterReading: record.lastMeterReading } : {}),
     files: card?.files.map((file) => file.originalName) ?? [],
+    fileRecords: card?.files ?? [],
     meterReadings: card?.meterReadings.items ?? [],
     meterReadingsTotal: card?.meterReadings.total ?? 0,
     history: card?.history.items ?? [],
@@ -1693,6 +1696,7 @@ function EquipmentPassportForm({
         notes: String(data.get("notes") ?? "").trim(),
         ...(record?.lastMeterReading !== undefined ? { lastMeterReading: record.lastMeterReading } : {}),
         files: record?.files ?? [],
+        fileRecords: record?.fileRecords ?? [],
         meterReadings: record?.meterReadings ?? [],
         meterReadingsTotal: record?.meterReadingsTotal ?? 0,
         history: record?.history ?? [],
@@ -1881,104 +1885,126 @@ function EquipmentCard({
 }) {
   const [changeKind, setChangeKind] = useState<EquipmentAssignmentKind | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<"overview" | "movements" | "payers" | "meters" | "files" | "history">("overview");
+  const [detailTab, setDetailTab] = useState<"history" | "meters" | "files" | "movements">("history");
+  const [openTasks, setOpenTasks] = useState<readonly TaskApiRecord[] | null>(null);
   const siteChanges = record.history.filter((event) => event.eventType === "site_change");
   const payerChanges = record.history.filter((event) => event.eventType === "payer_change");
   const placeUnset = record.place === "Не указана";
   const payerUnset = record.payer === "Не указан";
   const organizationUnset = record.organization === "Не указана";
+  useEffect(() => {
+    // Открытые задачи по прибору: главное, что нужно знать о нём сейчас.
+    let active = true;
+    setOpenTasks(null);
+    void m2Api.tasksPage({ equipmentId: record.id, limit: 20, sort: "updated_desc" })
+      .then((page) => { if (active) setOpenTasks(page.items.filter((task) => task.status !== "closed" && task.status !== "cancelled")); })
+      .catch(() => { if (active) setOpenTasks([]); });
+    return () => { active = false; };
+  }, [record.id]);
+  const openTask = (id: string) => {
+    // Переход в раздел задач с открытой карточкой: тот же путь, что у ссылки из письма.
+    window.history.pushState(null, "", taskPathname(id));
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  };
   const apply = async (change: NewEquipmentAssignmentChange) => {
     await onApply(change);
     setChangeKind(null);
   };
   return (
     <div className="equipment-card-view">
-      <EntityDetailToolbar
-        actions={readOnly || !onEdit ? undefined : <Button onClick={onEdit} variant="secondary">Изменить паспорт</Button>}
-        backLabel="К списку приборов"
-        onBack={onBack}
-      />
-      <EntityDetailHeader
-        aside={<StatusBadge tone={record.tone}>{record.status}</StatusBadge>}
-        description={<>{record.manufacturer}<span aria-hidden="true"> · </span><span className="equipment-serial">S/N {record.serial}</span></>}
-        title={record.model}
-      />
-      <PageTabs items={[
-        { value: "overview", label: "Обзор" },
-        { value: "movements", label: "Перемещения", badge: siteChanges.length },
-        { value: "payers", label: "Плательщики", badge: payerChanges.length },
-        { value: "meters", label: "Счётчик", badge: record.meterReadingsTotal },
-        { value: "files", label: "Файлы", badge: record.files.length },
-        { value: "history", label: "История", badge: record.historyTotal }
-      ]} label="Разделы карточки прибора" onValueChange={setDetailTab} value={detailTab} />
-      {detailTab === "overview" ? <section className="equipment-overview">
-        <div className="equipment-overview__stats">
-          <article>
-            <span>Место установки</span>
-            <strong className={placeUnset ? "is-empty" : undefined}>{record.place}</strong>
-            {readOnly ? null : <Button className="button--compact" onClick={() => setChangeKind("site_change")} variant="secondary">{placeUnset ? "Указать место" : "Сменить место"}</Button>}
-          </article>
-          <article>
-            <span>Плательщик</span>
-            <strong className={payerUnset ? "is-empty" : undefined}>{record.payer}</strong>
-            {readOnly ? null : <Button className="button--compact" onClick={() => setChangeKind("payer_change")} variant="secondary">{payerUnset ? "Указать плательщика" : "Сменить плательщика"}</Button>}
-          </article>
-          <article>
-            <span>Последнее показание</span>
-            <strong className={record.lastMeterReading === undefined ? "is-empty" : undefined}>{record.lastMeterReading === undefined ? "Не указано" : record.lastMeterReading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong>
-            <small>{record.lastMeterReading === undefined ? "Появится после принятого закрытия задачи" : "Обновляется после принятого закрытия"}</small>
-          </article>
+      <EntityDetailToolbar backLabel="К приборам" onBack={onBack} />
+      <header className="task-head">
+        <div className="task-head__meta">
+          <span className="task-head__number">S/N {record.serial}</span>
+          <StatusBadge tone={record.tone}>{record.status}</StatusBadge>
         </div>
-        <section className="card">
-          <CardHeader title="Паспорт" />
-          <dl className="detail-list equipment-overview__details">
-            <div><dt>Организация</dt><dd className={organizationUnset ? "is-empty" : undefined}>{record.organization}</dd></div>
-            <div><dt>Категория гарантии</dt><dd>{record.guarantee}</dd></div>
-            <div className="equipment-overview__notes"><dt>Примечания</dt><dd className={record.notes ? undefined : "is-empty"}>{record.notes || "Не указаны"}</dd></div>
-          </dl>
-        </section>
-      </section> : null}
+        <h1>{record.manufacturer} {record.model}</h1>
+        <p>{[placeUnset ? null : record.place, record.guarantee === "Не указана" ? null : record.guarantee].filter(Boolean).join(" · ")}</p>
+      </header>
+      <div className="task-layout">
+        <div className="task-layout__main">
+          <section className="task-section" aria-labelledby={`equipment-open-tasks-${record.id}`}>
+            <header className="task-section__head"><h3 id={`equipment-open-tasks-${record.id}`}>Открытые задачи</h3></header>
+            {openTasks === null
+              ? <div className="skeleton-row"><Skeleton className="skeleton-row__a" /><Skeleton className="skeleton-row__b" /><Skeleton className="skeleton-row__c" /></div>
+              : openTasks.length > 0
+                ? <ul className="equipment-tasks">{openTasks.map((task) => <li key={task.id}><button className="equipment-tasks__item" onClick={() => openTask(task.id)} type="button">
+                    <span className="equipment-tasks__number">{task.number}</span>
+                    <strong>{task.title}</strong>
+                    <StatusBadge tone={TASK_STATUS_TONES[task.status] ?? "warning"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge>
+                    <small>{task.engineerName ?? "Инженер не назначен"}{task.periodTo ? ` · до ${formatTaskDate(task.periodTo)}` : ""}{task.isOverdue ? " · просрочена" : ""}</small>
+                  </button></li>)}</ul>
+                : <div className="task-section__empty"><p>Открытых задач по прибору нет.</p></div>}
+          </section>
+          <PageTabs items={[
+            { value: "history", label: "История", badge: record.historyTotal },
+            { value: "meters", label: "Счётчик", badge: record.meterReadingsTotal },
+            { value: "files", label: "Файлы", badge: record.fileRecords.length },
+            { value: "movements", label: "Перемещения", badge: siteChanges.length + payerChanges.length }
+          ]} label="Разделы карточки прибора" onValueChange={setDetailTab} value={detailTab} />
+          {detailTab === "history" ? <section className="task-section equipment-history" aria-labelledby="equipment-history-title">
+            <header className="task-section__head">
+              <h3 id="equipment-history-title">История прибора</h3>
+              {!readOnly ? <Button icon="plus" onClick={() => setManualOpen(true)} variant="secondary">Добавить прошлое событие</Button> : null}
+            </header>
+            {record.history.length > 0 ? <ol className="equipment-history-list">{record.history.map((event) => <li className="task-history__item" key={event.id}>
+              <span aria-hidden="true" className={`task-history__dot task-history__dot--${event.eventType === "task" ? "success" : event.eventType === "part_replacement" ? "warning" : "info"}`} />
+              <div className="task-history__body">
+                <div className="task-history__line">
+                  <span className={`equipment-history__kind equipment-history__kind--${event.eventType}`}>{equipmentHistoryEventLabel(event.eventType)}</span>
+                  <strong>{event.summary}</strong>
+                  <time dateTime={event.occurredAt}>{formatEquipmentAssignmentDate(event.occurredAt)}</time>
+                </div>
+                <span className="task-history__actor">{[event.author?.name ?? "Система", event.client].filter(Boolean).join(" · ")}</span>
+                {event.description ? <p className="task-history__comment">{equipmentHistoryDescription(event)}</p> : null}
+                {event.attachment ? <span className="task-history__actor">Файл: {event.attachment.name}</span> : null}
+              </div>
+            </li>)}</ol> : <div className="task-section__empty"><p>Истории пока нет. Закрытые задачи, перемещения и прошлые события появятся здесь.</p></div>}
+            {record.history.length < record.historyTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreHistory()} variant="secondary">Показать ещё события</Button> : null}
+          </section> : null}
+          {detailTab === "meters" ? <section className="task-section" aria-labelledby={`equipment-meters-${record.id}`}>
+            <header className="task-section__head"><h3 id={`equipment-meters-${record.id}`}>Показания счётчика</h3><span className="muted">{record.meterReadings.length} из {record.meterReadingsTotal}</span></header>
+            {record.meterReadings.length > 0 ? <div className="table-scroll"><table className="data-table equipment-meters-table"><thead><tr><th scope="col">Дата</th><th className="numeric" scope="col">Показание</th><th className="numeric" scope="col">Прирост</th><th scope="col">Кто записал</th></tr></thead><tbody>
+              {record.meterReadings.map((reading, index) => {
+                const previous = record.meterReadings[index + 1];
+                const delta = previous ? reading.reading - previous.reading : undefined;
+                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `+${delta.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td></tr>;
+              })}
+            </tbody></table></div> : <div className="task-section__empty"><p>Показаний пока нет. Они появятся после принятого закрытия задачи.</p></div>}
+            {record.meterReadings.length < record.meterReadingsTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreMeterReadings()} variant="secondary">Показать ещё показания</Button> : null}
+          </section> : null}
+          {detailTab === "files" ? <section className="task-section" aria-labelledby={`equipment-files-${record.id}`}>
+            <header className="task-section__head"><h3 id={`equipment-files-${record.id}`}>Файлы прибора</h3></header>
+            <FileGallery emptyText={readOnly ? "К прибору пока не прикреплены файлы." : "К прибору пока не прикреплены файлы. Их можно добавить в паспорте: «Изменить»."} files={record.fileRecords} />
+          </section> : null}
+          {detailTab === "movements" ? <div className="task-work">
+            <AssignmentHistorySection empty="Перемещений пока нет. Они появятся после смены места установки." events={siteChanges} title="Смены места установки" />
+            {readOnly ? null : <AssignmentHistorySection empty="Смен плательщика пока нет." events={payerChanges} title="Смены плательщика" />}
+          </div> : null}
+        </div>
+        <aside className="task-layout__aside" aria-label="Паспорт прибора">
+          <section className="task-props">
+            <header className="task-props__head"><h2>Паспорт</h2>{!readOnly && onEdit ? <Button onClick={onEdit} variant="ghost">Изменить</Button> : null}</header>
+            <dl>
+              <div><dt>Производитель</dt><dd>{record.manufacturer}</dd></div>
+              <div><dt>Модель</dt><dd>{record.model}</dd></div>
+              <div><dt>S/N</dt><dd>{record.serial}</dd></div>
+              <div><dt>Статус</dt><dd><StatusBadge tone={record.tone}>{record.status}</StatusBadge></dd></div>
+              <div><dt>Гарантия</dt><dd>{record.guarantee === "Не указана" ? <span className="is-empty">Не указана</span> : record.guarantee}</dd></div>
+            </dl>
+            <dl>
+              <div><dt>Площадка</dt><dd>{placeUnset ? <span className="is-empty">Не указана</span> : record.place}{readOnly ? null : <button className="text-button" onClick={() => setChangeKind("site_change")} type="button">{placeUnset ? "Указать" : "Сменить"}</button>}</dd></div>
+              <div><dt>Организация</dt><dd>{organizationUnset ? <span className="is-empty">Не указана</span> : record.organization}</dd></div>
+              {readOnly ? null : <div><dt>Плательщик</dt><dd>{payerUnset ? <span className="is-empty">Не указан</span> : record.payer}<button className="text-button" onClick={() => setChangeKind("payer_change")} type="button">{payerUnset ? "Указать" : "Сменить"}</button></dd></div>}
+            </dl>
+            <dl>
+              <div><dt>Счётчик</dt><dd>{record.lastMeterReading === undefined ? <span className="is-empty">Нет показаний</span> : record.lastMeterReading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}<small>обновляется после закрытия задачи</small></dd></div>
+              {record.notes ? <div><dt>Примечание</dt><dd>{record.notes}</dd></div> : null}
+            </dl>
+          </section>
+        </aside>
+      </div>
       {changeKind ? <EquipmentAssignmentForm kind={changeKind} onApply={apply} onOpenChange={(open) => { if (!open) setChangeKind(null); }} open options={changeKind === "site_change" ? sites : payers} record={record} /> : null}
-      {detailTab === "movements" ? <AssignmentHistorySection empty="Перемещений пока нет. Они появятся после смены места установки." events={siteChanges} title="Перемещения" /> : null}
-      {detailTab === "payers" ? <AssignmentHistorySection empty="Смен плательщика пока нет. Они появятся после смены плательщика." events={payerChanges} title="История плательщиков" /> : null}
-      {detailTab === "meters" ? <section className="card equipment-card-section">
-          <CardHeader meta={`${record.meterReadings.length} из ${record.meterReadingsTotal}`} title="Показания счётчика" />
-          {record.meterReadings.length > 0 ? <div className="history-feed">{record.meterReadings.map((reading) => <article className="history-feed__item" key={reading.id}>
-            <div aria-hidden="true" className="history-feed__rail"><span className="history-feed__dot" /></div>
-            <div className="history-feed__body">
-              <time dateTime={reading.measuredAt}>{formatEquipmentAssignmentDate(reading.measuredAt)}</time>
-              <strong className="history-feed__actor">{reading.author.name}</strong>
-              <p className="history-feed__text history-feed__text--emphasis">{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</p>
-              <p className="history-feed__note">Задача: {reading.taskId}</p>
-            </div>
-          </article>)}</div> : <div className="task-empty"><Icon name="clock" size={22} /><p>Показаний счётчика пока нет. Они появятся после принятого закрытия задачи.</p></div>}
-          {record.meterReadings.length < record.meterReadingsTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreMeterReadings()} variant="secondary">Показать ещё показания</Button> : null}
-        </section> : null}
-      {detailTab === "files" ? <section className="card equipment-card-section">
-          <CardHeader meta={`${record.files.length} файлов`} title="Файлы" />
-          <div className="equipment-card-section__list equipment-card-files">
-            {record.files.map((file) => <article key={file}><Icon name="info" size={16} /><strong>{file}</strong></article>)}
-            {record.files.length === 0 ? <p>К прибору пока не прикреплены файлы. Их можно добавить в паспорте.</p> : null}
-          </div>
-        </section> : null}
-      {detailTab === "history" ? <section className="card equipment-history" aria-labelledby="equipment-history-title">
-          <CardHeader action={!readOnly ? <Button icon="plus" onClick={() => setManualOpen(true)} variant="secondary">Добавить прошлое событие</Button> : undefined} headingId="equipment-history-title" meta={`${record.history.length} из ${record.historyTotal} · новые сверху`} title="История прибора" />
-        {record.history.length > 0 ? <div className="history-feed">{record.history.map((event) => <article className="history-feed__item" key={event.id}>
-          <div aria-hidden="true" className="history-feed__rail"><span className="history-feed__dot" /></div>
-          <div className="history-feed__body history-feed__body--rich">
-            <time dateTime={event.occurredAt}>{formatEquipmentAssignmentDate(event.occurredAt)}</time>
-            <strong className="history-feed__actor">{event.author?.name ?? "Система"}</strong>
-            <div className="history-feed__main">
-              <span className={`equipment-history__kind equipment-history__kind--${event.eventType}`}>{equipmentHistoryEventLabel(event.eventType)}</span>
-              <strong className="history-feed__title">{event.summary}</strong>
-            </div>
-            <p className="history-feed__note">Клиент: {event.client || "не указан"}</p>
-            <p className={`history-feed__note${event.description ? "" : " history-feed__note--empty"}`}>{equipmentHistoryDescription(event)}</p>
-            {event.attachment ? <p className="history-feed__note">Файл: {event.attachment.name}</p> : null}
-          </div>
-        </article>)}</div> : <div className="task-empty"><Icon name="clock" size={22} /><p>Истории пока нет. Закрытые задачи, перемещения и прошлые события появятся здесь.</p></div>}
-        {record.history.length < record.historyTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreHistory()} variant="secondary">Показать ещё события</Button> : null}
-      </section> : null}
       <ManualEquipmentHistoryForm onAdd={async (draft) => { await onAddManual(draft); setManualOpen(false); }} onOpenChange={setManualOpen} open={manualOpen} record={record} />
     </div>
   );
@@ -2187,43 +2213,37 @@ function EquipmentPage({ engineer = false }: { readonly engineer?: boolean }) {
       />
       {!engineer ? <EquipmentPassportForm key={editingId ?? "new"} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
       {!engineer && siteChangeRecord ? <EquipmentAssignmentForm kind="site_change" onApply={async (change) => { await applyAssignmentTo(siteChangeRecord, change); setSiteChangeId(null); }} onOpenChange={(open) => { if (!open) setSiteChangeId(null); }} open options={sites} record={siteChangeRecord} /> : null}
-      <section className="card equipment-registry-tools" aria-labelledby="equipment-search-title">
-        <div className="search-row">
-          <label className="search-field" htmlFor="equipment-search">
-            <Icon name="search" size={18} />
-            <span className="sr-only" id="equipment-search-title">Поиск приборов</span>
-            <input id="equipment-search" onChange={(event) => changeFilter("search", event.target.value)} placeholder="Серийный номер, модель или организация" type="search" value={filters.search} />
-          </label>
-          {initialLoading ? null : <span className="muted search-hint">{total} приборов</span>}
-        </div>
-        <div className="equipment-registry-filters" aria-label="Фильтры списка приборов">
-          <label>Производитель<Select onChange={(event) => changeFilter("manufacturer", event.target.value)} value={filters.manufacturer}><option value="">Все производители</option>{references.manufacturers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></label>
-          <label>Статус<Select onChange={(event) => changeFilter("status", event.target.value)} value={filters.status}><option value="">Все статусы</option>{references.statuses.map((value) => <option key={value.code} value={value.code}>{value.name}</option>)}</Select></label>
-          <label>Площадка<Select onChange={(event) => changeFilter("site", event.target.value)} value={filters.site}><option value="">Все площадки</option>{sites.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></label>
-          <label>Плательщик<Select onChange={(event) => changeFilter("payer", event.target.value)} value={filters.payer}><option value="">Все плательщики</option>{payers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select></label>
-          <Button onClick={() => { setFilters(EMPTY_EQUIPMENT_REGISTRY_FILTERS); setPageIndex(0); }} variant="secondary">Сбросить</Button>
+      <section className="registry-toolbar" aria-labelledby="equipment-search-title">
+        <label className="registry-toolbar__search" htmlFor="equipment-search">
+          <span className="sr-only" id="equipment-search-title">Поиск приборов</span>
+          <input id="equipment-search" onChange={(event) => changeFilter("search", event.target.value)} placeholder="S/N, модель или организация" type="search" value={filters.search} />
+        </label>
+        <div className="registry-toolbar__filters" aria-label="Фильтры списка приборов">
+          <Select aria-label="Производитель" onChange={(event) => changeFilter("manufacturer", event.target.value)} value={filters.manufacturer}><option value="">Все производители</option>{references.manufacturers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select>
+          <Select aria-label="Статус" onChange={(event) => changeFilter("status", event.target.value)} value={filters.status}><option value="">Все статусы</option>{references.statuses.map((value) => <option key={value.code} value={value.code}>{value.name}</option>)}</Select>
+          <Select aria-label="Площадка" onChange={(event) => changeFilter("site", event.target.value)} value={filters.site}><option value="">Все площадки</option>{sites.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select>
+          {engineer ? null : <Select aria-label="Плательщик" onChange={(event) => changeFilter("payer", event.target.value)} value={filters.payer}><option value="">Все плательщики</option>{payers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select>}
+          {filteredEmpty ? <Button onClick={() => { setFilters(EMPTY_EQUIPMENT_REGISTRY_FILTERS); setPageIndex(0); }} variant="ghost">Сбросить</Button> : null}
         </div>
       </section>
       <section className="card card--table" aria-labelledby="equipment-table-title">
-        <CardHeader headingId="equipment-table-title" meta="История пишется при каждом закрытии задачи" title="Все приборы" />
+        <CardHeader headingId="equipment-table-title" {...(initialLoading ? {} : { meta: formatRussianCount(total, ["прибор", "прибора", "приборов"]) })} title={engineer ? "Приборы с ваших задач" : "Все приборы"} />
         {initialLoading
           ? <ResourceState description="Подождите, список приборов сейчас появится." status="loading" title="Загружаем приборы" />
           : <>
             <div className="table-scroll">
-              <table className="data-table">
-                <thead><tr><th scope="col">Модель</th><th scope="col">S/N</th><th scope="col">Производитель</th><th scope="col">Место установки</th><th scope="col">Плательщик</th><th scope="col">Статус</th><th scope="col">Ближайшее действие</th>{engineer ? null : <th scope="col"><span className="sr-only">Действия</span></th>}</tr></thead>
+              <table className="data-table equipment-registry-table">
+                <thead><tr><th scope="col">Прибор</th><th scope="col">S/N</th><th scope="col">Площадка</th>{engineer ? null : <th scope="col">Плательщик</th>}<th scope="col">Статус</th>{engineer ? null : <th scope="col"><span className="sr-only">Действия</span></th>}</tr></thead>
                 <tbody>
                   {records.map((record) => <tr className="data-table__selectable" key={record.id} onClick={() => void openCard(record.id)}>
-                    <td><strong>{record.model}</strong><div className="muted">{record.guarantee}</div></td>
-                    <td>{record.serial}</td>
-                    <td>{record.manufacturer}</td>
-                    <td>{record.place}</td>
-                    <td>{record.payer}</td>
+                    <td><strong>{record.manufacturer} {record.model}</strong><small>{record.guarantee}</small></td>
+                    <td className="equipment-registry-table__serial">{record.serial}</td>
+                    <td>{record.place === "Не указана" ? <span className="muted">Не указана</span> : record.place}</td>
+                    {engineer ? null : <td>{record.payer === "Не указан" ? <span className="muted">Не указан</span> : record.payer}</td>}
                     <td><StatusBadge tone={record.tone}>{record.status}</StatusBadge></td>
-                    <td>{record.next}</td>
-                    {engineer ? null : <td onClick={(event) => event.stopPropagation()}><div className="table-actions equipment-registry-actions"><IconButton icon="relocate" label="Сменить место" onClick={() => setSiteChangeId(record.id)} /><IconButton icon="edit" label="Изменить паспорт" onClick={() => openEdit(record.id)} /></div></td>}
+                    {engineer ? null : <td onClick={(event) => event.stopPropagation()}><div className="table-actions equipment-registry-actions"><Button className="button--compact" onClick={() => setSiteChangeId(record.id)} variant="ghost">Сменить место</Button><IconButton icon="edit" label="Изменить паспорт" onClick={() => openEdit(record.id)} /></div></td>}
                   </tr>)}
-                  {records.length === 0 ? <tr><td className="equipment-registry-empty" colSpan={engineer ? 7 : 8}><ResourceState description={filteredEmpty ? "Измените поиск или сбросьте фильтры." : engineer ? "Приборы с ваших заявок появятся здесь." : "Добавьте прибор, чтобы вести паспорт и историю обслуживания."} status={filteredEmpty ? "filtered-empty" : "empty"} title={filteredEmpty ? "Приборы не найдены" : "Приборов пока нет"} /></td></tr> : null}
+                  {records.length === 0 ? <tr><td className="equipment-registry-empty" colSpan={engineer ? 4 : 6}><ResourceState description={filteredEmpty ? "Измените поиск или сбросьте фильтры." : engineer ? "Приборы с ваших заявок появятся здесь." : "Добавьте прибор, чтобы вести паспорт и историю обслуживания."} status={filteredEmpty ? "filtered-empty" : "empty"} title={filteredEmpty ? "Приборы не найдены" : "Приборов пока нет"} /></td></tr> : null}
                 </tbody>
               </table>
             </div>

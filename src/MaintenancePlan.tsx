@@ -2,7 +2,7 @@ import React, { useEffect, useState, type FormEvent } from "react";
 import { MAX_ANNUAL_MAINTENANCE_PERIODS } from "./domain/maintenance-plan.js";
 import type { MaintenancePlanListResponse, MaintenancePlanPeriodResponse } from "./types.js";
 import { m2Api, type EquipmentApiRecord } from "./m2-api.js";
-import { Button, CardHeader, DatePicker, DialogForm, IconButton, MetricCard, PageIntro, PageTabs, Select, toast } from "./ui.js";
+import { Button, CardHeader, ConfirmationDialog, DatePicker, DialogForm, IconButton, PageIntro, Select, ViewSwitch, toast } from "./ui.js";
 import { formatIsoCalendarDate } from "./date-format.js";
 
 export const MAINTENANCE_MONTHS = [
@@ -21,6 +21,22 @@ export function formatMaintenancePeriod(periodFrom: string, periodTo: string): s
 }
 
 type View = MaintenancePlanListResponse["view"];
+
+function plural(count: number, one: string, few: string, many: string): string {
+  const mod10 = count % 10;
+  const mod100 = count % 100;
+  const word = mod10 === 1 && mod100 !== 11 ? one : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many;
+  return `${count} ${word}`;
+}
+
+/** Где на годовой шкале сегодняшний день, в процентах; вне выбранного года — нет отметки. */
+function todayPercent(year: number): number | undefined {
+  const now = new Date();
+  if (now.getFullYear() !== year) return undefined;
+  const start = Date.UTC(year, 0, 1);
+  const end = Date.UTC(year + 1, 0, 1);
+  return ((Date.UTC(year, now.getMonth(), now.getDate()) - start) / (end - start)) * 100;
+}
 interface PeriodDraft { readonly key: number; readonly periodFrom: string; readonly periodTo: string; readonly assignedEngineerId: string; readonly comment: string }
 
 function shiftIsoDate(iso: string, days: number): string {
@@ -144,6 +160,14 @@ export function MaintenancePlanPage() {
     } finally { setSaving(false); }
   };
 
+  const [confirmAll, setConfirmAll] = useState(false);
+  // Без выбранных строк задачи создаются по всем запланированным периодам года: сначала спрашиваем.
+  const requestGenerate = () => {
+    if (selected.length) { void generate(); return; }
+    const eligibleCount = data?.items.filter((item) => item.status === "planned").length ?? 0;
+    if (eligibleCount === 0) { toast.warning("Нет периодов со статусом «Запланировано» для генерации"); return; }
+    setConfirmAll(true);
+  };
   const generate = async () => {
     const eligible = data?.items.filter((item) => item.status === "planned") ?? [];
     const planIds = selected.length ? selected : eligible.map((item) => item.id);
@@ -155,7 +179,10 @@ export function MaintenancePlanPage() {
       const result = await m2Api.generateMaintenanceTasks(year, planIds);
       if (result.failures.length) {
         toast.warning(`Создано задач: ${result.created.length}. Уже существовало: ${result.existing.length}. Ошибок: ${result.failures.length}.`);
+      } else {
+        toast.success(result.created.length ? `Создано задач: ${result.created.length}. Они появились на доске в колонке «Новая».` : "Новых задач нет: по выбранным периодам задачи уже созданы.");
       }
+      setSelected([]);
       await load();
     } catch (generateError) {
       toast.error(generateError instanceof Error ? generateError.message : "Не получилось создать плановые задачи");
@@ -170,18 +197,36 @@ export function MaintenancePlanPage() {
   const organizations = new Set(items.map((item) => item.organizationId).filter(Boolean)).size;
   const yearOptions = [year - 1, year, year + 1];
 
+  const eligibleCount = items.filter((item) => item.status === "planned").length;
+  const today = todayPercent(year);
   return <div className="maintenance-page">
     <PageIntro
       actions={
         <>
           <Button onClick={openForm} variant="secondary">Настроить план</Button>
-          <Button disabled={loading} onClick={() => void generate()}>
+          <Button disabled={loading} onClick={requestGenerate}>
             {selected.length ? `Создать задачи · ${selected.length}` : "Создать задачи"}
           </Button>
         </>
       }
-      description="Отметьте периоды обслуживания приборов и создайте из них заявки инженерам."
       title="План ТО"
+      titleAside={<>
+        <div className="year-stepper" role="group" aria-label="Год плана">
+          <button aria-label="Предыдущий год" onClick={() => changeYear(year - 1)} type="button">‹</button>
+          <strong>{year}</strong>
+          <button aria-label="Следующий год" onClick={() => changeYear(year + 1)} type="button">›</button>
+        </div>
+        <ViewSwitch items={[{ value: "equipment", label: "По приборам" }, { value: "engineer", label: "По инженерам" }, { value: "organization", label: "По организациям" }]} label="Группировка плана" onValueChange={setView} value={view} />
+      </>}
+    />
+    <ConfirmationDialog
+      confirmLabel={`Создать ${plural(eligibleCount, "задачу", "задачи", "задач")}`}
+      description={`Строки не выбраны, поэтому задачи будут созданы по всем запланированным периодам ${year} года: ${plural(eligibleCount, "период", "периода", "периодов")}. Назначенным инженерам уйдут уведомления.`}
+      onConfirm={generate}
+      onOpenChange={setConfirmAll}
+      open={confirmAll}
+      title="Создать задачи по всему плану?"
+      tone="primary"
     />
 
     <DialogForm
@@ -252,47 +297,28 @@ export function MaintenancePlanPage() {
       </div>
     </DialogForm>
 
-    <div className="maintenance-toolbar" aria-label="Настройки представления">
-      <PageTabs
-        items={yearOptions.map((option) => ({ value: String(option), label: String(option) }))}
-        label="Год плана"
-        onValueChange={(value) => changeYear(Number(value))}
-        value={String(year)}
-      />
-      <PageTabs
-        items={[
-          { value: "equipment", label: "По приборам" },
-          { value: "engineer", label: "По инженерам" },
-          { value: "organization", label: "По организациям" }
-        ]}
-        label="Группировка плана"
-        onValueChange={setView}
-        value={view}
-      />
-    </div>
-
-    <div className="metric-grid metric-grid--three">
-      <MetricCard detail="периодов обслуживания" icon="maintenance" label="В плане" value={String(items.length)} />
-      <MetricCard detail="задач со связью с планом" icon="tasks" label="Сформировано" tone="purple" value={String(generatedCount)} />
-      <MetricCard detail="в текущем представлении" icon="references" label="Организации" tone="green" value={String(organizations)} />
-    </div>
-
     <section className="card card--table maintenance-schedule">
       <CardHeader
         headingId="maintenance-schedule-title"
-        meta={`${data?.groups.length ?? 0} групп`}
+        meta={`${plural(items.length, "период", "периода", "периодов")} · задач создано: ${generatedCount} · ${plural(organizations, "организация", "организации", "организаций")}`}
         title={`График на ${year} год`}
       />
-      <div className="maintenance-months" aria-hidden="true">{MAINTENANCE_MONTHS.map((month) => <span key={month}>{month}</span>)}</div>
-      {loading ? <p className="maintenance-empty">Загружаем план…</p> : data ? data.groups.map((group) => <article className="maintenance-group" key={group.key}>
-        <header><h3>{group.label}</h3><span>{group.items.length} периодов</span></header>
+      <div className="maintenance-months" aria-hidden="true">{MAINTENANCE_MONTHS.map((month) => <span key={month}>{month}</span>)}{today !== undefined ? <i className="maintenance-today-label" style={{ left: `${today}%` }}>сегодня</i> : null}</div>
+      {loading ? <div className="resource-state resource-state--skeleton" role="status"><span className="sr-only">Загружаем план</span>{[0, 1, 2, 3].map((row) => <div className="skeleton-row" key={row}><div className="skeleton-row__a" /><div className="skeleton-row__b" /><div className="skeleton-row__c" /></div>)}</div> : data ? data.groups.map((group) => {
+        const first = group.items[0];
+        // По приборам подписываем группу моделью и клиентом, а не одним серийным номером.
+        const label = view === "equipment" && first ? `${first.equipment.manufacturer} ${first.equipment.model} · S/N ${first.equipment.serialNumber}` : group.label;
+        const sub = view === "equipment" && first ? first.organization ?? first.site : undefined;
+        return <article className="maintenance-group" key={group.key}>
+        <header><h3>{label}{sub ? <small>{sub}</small> : null}</h3><span>{plural(group.items.length, "период", "периода", "периодов")}</span></header>
         {group.items.map((item) => <div className="maintenance-row" key={item.id}>
           <label className="maintenance-row__select"><input checked={selected.includes(item.id)} disabled={item.status !== "planned"} onChange={() => toggle(item.id)} type="checkbox" /><span className="sr-only">Выбрать период {formatMaintenancePeriod(item.periodFrom, item.periodTo)}</span></label>
           <div className="maintenance-row__identity"><strong>{view === "equipment" ? `ТО № ${item.periodNo}` : `${item.equipment.model} · S/N ${item.equipment.serialNumber}`}</strong><span>{formatMaintenancePeriod(item.periodFrom, item.periodTo)} · {item.assignedEngineerName ?? "инженер не назначен"}</span></div>
-          <div className="maintenance-track"><span className={`maintenance-bar maintenance-bar--${item.status}`} style={{ left: `${item.timeline.leftPercent}%`, width: `${Math.max(item.timeline.widthPercent, 0.8)}%` }} title={formatMaintenancePeriod(item.periodFrom, item.periodTo)}>{item.timeline.crossesYearBoundary ? "↔" : ""}</span></div>
+          <div className="maintenance-track">{today !== undefined ? <i aria-hidden="true" className="maintenance-today" style={{ left: `${today}%` }} /> : null}<span className={`maintenance-bar maintenance-bar--${item.status}`} style={{ left: `${item.timeline.leftPercent}%`, width: `${Math.max(item.timeline.widthPercent, 0.8)}%` }} title={formatMaintenancePeriod(item.periodFrom, item.periodTo)}>{item.timeline.crossesYearBoundary ? "↔" : ""}</span></div>
           <span className={`maintenance-status maintenance-status--${item.status}`}>{maintenancePlanStatusLabel[item.status]}</span>
         </div>)}
-      </article>) : null}
+      </article>;
+      }) : null}
       {!loading && data?.groups.length === 0 ? <p className="maintenance-empty">На {year} год периоды ТО ещё не заданы. Нажмите «Настроить план», чтобы добавить обслуживание приборов.</p> : null}
     </section>
   </div>;

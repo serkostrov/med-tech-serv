@@ -1711,6 +1711,8 @@ export class M2ApiClient {
     readonly status?: string;
     readonly search?: string;
     readonly engineerId?: string;
+    /** Задачи одного прибора (для паспорта). */
+    readonly equipmentId?: string;
     readonly siteId?: string;
     readonly workTypeCode?: string;
     readonly priority?: "urgent" | "planned";
@@ -1744,6 +1746,7 @@ export class M2ApiClient {
       }
       if (query.status) next = next.eq("status_code", query.status);
       if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
+      if (query.equipmentId) next = next.eq("equipment_id", query.equipmentId);
       if (query.siteId) next = next.eq("site_id", query.siteId);
       if (query.workTypeCode) next = next.eq("work_type_code", query.workTypeCode);
       if (query.priority) next = next.eq("priority", query.priority);

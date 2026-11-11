@@ -8347,3 +8347,63 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Колонки делят ширину экрана, прокрутка вбок только когда не помещаются */
 .task-board { grid-auto-columns: minmax(240px, 1fr); }
 .task-board__column { width: auto; min-width: 0; }
+
+/* ===== Приборы v2: строка поиска и фильтров, плотная таблица, паспорт в две колонки ===== */
+.registry-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
+.registry-toolbar__search { flex: 0 1 340px; min-width: 220px; }
+.registry-toolbar__search input {
+  width: 100%;
+  min-height: 38px;
+  padding: 8px 12px 8px 34px;
+  border: 1px solid var(--color-border);
+  border-radius: 9px;
+  background: var(--color-surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' fill='none' stroke='%2355666f' stroke-width='2' stroke-linecap='round' viewBox='0 0 24 24'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cpath d='m20 20-3.5-3.5'/%3E%3C/svg%3E") no-repeat 11px center;
+  font-size: 14px;
+}
+.registry-toolbar__filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.registry-toolbar__filters .ui-select { width: 190px; }
+.registry-toolbar__filters .ui-select__trigger { min-height: 38px; border-radius: 9px; font-size: 14px; }
+
+.equipment-registry-table td strong { display: block; color: var(--color-ink); font-weight: 650; }
+.equipment-registry-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; }
+.equipment-registry-table__serial { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.equipment-registry-actions { gap: 4px; }
+
+.equipment-tasks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.equipment-tasks__item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 10px;
+  background: #fafbfc;
+  text-align: left;
+  cursor: pointer;
+}
+.equipment-tasks__item:hover { border-color: #c5d3db; background: #f3f8fb; }
+.equipment-tasks__number { color: var(--color-accent-dark); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.equipment-tasks__item strong { overflow: hidden; color: var(--color-ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.equipment-tasks__item small { grid-column: 2 / -1; color: var(--color-muted); font-size: 12.5px; }
+
+.equipment-meters-table { min-width: 520px; }
+.task-section .history-feed { padding: 0; }
+.equipment-card-view .task-work .card { margin: 0; }
+.equipment-history-list { display: grid; margin: 0; padding: 0; list-style: none; }
+.equipment-history-list .task-history__line strong { min-width: 0; overflow-wrap: anywhere; }
+.task-history__line .equipment-history__kind { padding: 2px 8px; border-radius: 6px; font-size: 12px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+
+/* ===== План ТО v2: год стрелками, линия «сегодня», подписи групп ===== */
+.year-stepper { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-surface); }
+.year-stepper button { display: inline-grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 6px; color: var(--color-muted); background: transparent; font-size: 18px; line-height: 1; cursor: pointer; }
+.year-stepper button:hover { color: var(--color-ink); background: #eef2f5; }
+.year-stepper strong { min-width: 46px; color: var(--color-ink); font-size: 14px; font-variant-numeric: tabular-nums; text-align: center; }
+.maintenance-months { position: relative; }
+.maintenance-today-label { position: absolute; top: -16px; transform: translateX(-50%); color: var(--color-danger); font-size: 11px; font-style: normal; font-weight: 700; white-space: nowrap; }
+.maintenance-today { position: absolute; top: -2px; bottom: -2px; z-index: 1; width: 2px; margin-left: -1px; background: var(--color-danger); opacity: .7; }
+.maintenance-group > header h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.maintenance-group > header h3 small { color: var(--color-muted); font-size: 12px; font-weight: 500; }
+.maintenance-schedule { padding-top: 6px; }
+.maintenance-schedule .maintenance-months { margin-top: 22px; }

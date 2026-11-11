@@ -115,13 +115,15 @@ describe("shared UI architecture", () => {
     assert.match(ui, /export function EntityDetailToolbar/u);
     assert.match(ui, /export function EntityDetailHeader/u);
     assert.match(app, /label="Разделы карточки прибора"/u);
-    for (const tab of ["overview", "movements", "payers", "meters", "files", "history"]) {
+    for (const tab of ["history", "meters", "files", "movements"]) {
       assert.match(app, new RegExp(`value: "${tab}"`, "u"));
     }
     assert.match(app, /<EntityDetailToolbar[\s\S]{0,300}backLabel="К списку задач"/u);
-    assert.match(app, /<EntityDetailToolbar[\s\S]{0,400}backLabel="К списку приборов"/u);
+    assert.match(app, /<EntityDetailToolbar[\s\S]{0,400}backLabel="К приборам"/u);
     assert.ok(!app.includes("title={`${record.model} · S/N"));
-    assert.match(app, /className="equipment-overview__stats"/u);
+    // Паспорт прибора устроен как карточка задачи: свойства справа, открытые задачи сверху.
+    assert.match(app, /aria-label="Паспорт прибора"/u);
+    assert.match(app, /Открытые задачи/u);
     assert.match(workAct, /<EntityDetailToolbar[\s\S]{0,300}backLabel="К задаче"/u);
     assert.doesNotMatch(`${app}\n${workAct}`, /←\s*(?:Назад|К карточке|К реестру)/u);
   });
