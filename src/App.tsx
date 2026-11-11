@@ -613,7 +613,9 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
   </DialogForm>;
 }
 
-export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelated, initialTab = "overview" }: {
+export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelated, initialTab = "overview", backLabel = "К задачам" }: {
+  /** Подпись кнопки «назад»: «К прибору», если задачу открыли из паспорта. */
+  readonly backLabel?: string;
   readonly card: TaskCardResponse;
   readonly workTypes?: readonly ReferenceCatalogValue[];
   readonly onBack: () => void;
@@ -968,7 +970,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   );
   if (actOpen) return <><WorkAct act={buildWorkAct(card, { equipment: actEquipmentRows, works: actWorkRows })} onBack={() => setActOpen(false)} onEditRows={() => setActRowsEditing(true)} />{actRowsDialog}</>;
   return <>
-    <EntityDetailToolbar actions={<Button onClick={() => setActOpen(true)} variant="secondary">Акт для печати</Button>} backLabel="К задачам" onBack={onBack} />
+    <EntityDetailToolbar actions={<Button onClick={() => setActOpen(true)} variant="secondary">Акт для печати</Button>} backLabel={backLabel} onBack={onBack} />
     <header className="task-head">
       <div className="task-head__meta">
         <span className="task-head__number">{task.number}</span>
@@ -1421,7 +1423,11 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
       throw loadError;
     }
   };
-  const closeTask = () => { openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
+  const closeTask = () => {
+    // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
+    if ((window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId) { window.history.back(); return; }
+    openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
+  };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
   useEffect(() => () => { openRequest.current += 1; }, []);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
@@ -1478,7 +1484,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) return <TaskCardLoading onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
-  if (selectedTaskId && taskCard) return <TaskCard card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
+  if (selectedTaskId && taskCard) return <TaskCard backLabel={(window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
@@ -1890,8 +1896,10 @@ function EquipmentCard({
   const [manualOpen, setManualOpen] = useState(false);
   const [detailTab, setDetailTab] = useState<"history" | "meters" | "files" | "movements">("history");
   const [openTasks, setOpenTasks] = useState<readonly TaskApiRecord[] | null>(null);
+  // Инженер не видит плательщиков, в том числе в истории прибора.
+  const history = readOnly ? record.history.filter((event) => event.eventType !== "payer_change") : record.history;
   const siteChanges = record.history.filter((event) => event.eventType === "site_change");
-  const payerChanges = record.history.filter((event) => event.eventType === "payer_change");
+  const payerChanges = readOnly ? [] : record.history.filter((event) => event.eventType === "payer_change");
   const placeUnset = record.place === "Не указана";
   const payerUnset = record.payer === "Не указан";
   const organizationUnset = record.organization === "Не указана";
@@ -1899,15 +1907,17 @@ function EquipmentCard({
     // Открытые задачи по прибору: главное, что нужно знать о нём сейчас.
     let active = true;
     setOpenTasks(null);
-    void m2Api.tasksPage({ equipmentId: record.id, limit: 20, sort: "updated_desc" })
-      .then((page) => { if (active) setOpenTasks(page.items.filter((task) => task.status !== "closed" && task.status !== "cancelled")); })
+    void m2Api.tasksPage({ equipmentId: record.id, openOnly: true, limit: 20, sort: "deadline_asc" })
+      .then((page) => { if (active) setOpenTasks(page.items); })
       .catch(() => { if (active) setOpenTasks([]); });
     return () => { active = false; };
   }, [record.id]);
   const openTask = (id: string) => {
-    // Переход в раздел задач с открытой карточкой: тот же путь, что у ссылки из письма.
-    window.history.pushState(null, "", taskPathname(id));
-    window.dispatchEvent(new PopStateEvent("popstate"));
+    // Переход в раздел задач с открытой карточкой. Текущий шаг истории запоминает паспорт,
+    // чтобы «Назад» и «К прибору» вернули сюда, а не на доску задач.
+    window.history.replaceState({ view: "equipment", equipmentId: record.id }, "", window.location.pathname);
+    window.history.pushState({ fromEquipmentId: record.id }, "", taskPathname(id));
+    window.dispatchEvent(new PopStateEvent("popstate", { state: { fromEquipmentId: record.id } }));
   };
   const apply = async (change: NewEquipmentAssignmentChange) => {
     await onApply(change);
@@ -1940,7 +1950,7 @@ function EquipmentCard({
                 : <div className="task-section__empty"><p>Открытых задач по прибору нет.</p></div>}
           </section>
           <PageTabs items={[
-            { value: "history", label: "История", badge: record.historyTotal },
+            { value: "history", label: "История", badge: readOnly ? history.length : record.historyTotal },
             { value: "meters", label: "Счётчик", badge: record.meterReadingsTotal },
             { value: "files", label: "Файлы", badge: record.fileRecords.length },
             { value: "movements", label: "Перемещения", badge: siteChanges.length + payerChanges.length }
@@ -1950,7 +1960,7 @@ function EquipmentCard({
               <h3 id="equipment-history-title">История прибора</h3>
               {!readOnly ? <Button icon="plus" onClick={() => setManualOpen(true)} variant="secondary">Добавить прошлое событие</Button> : null}
             </header>
-            {record.history.length > 0 ? <ol className="equipment-history-list">{record.history.map((event) => <li className="task-history__item" key={event.id}>
+            {history.length > 0 ? <ol className="equipment-history-list">{history.map((event) => <li className="task-history__item" key={event.id}>
               <span aria-hidden="true" className={`task-history__dot task-history__dot--${event.eventType === "task" ? "success" : event.eventType === "part_replacement" ? "warning" : "info"}`} />
               <div className="task-history__body">
                 <div className="task-history__line">
@@ -1971,7 +1981,7 @@ function EquipmentCard({
               {record.meterReadings.map((reading, index) => {
                 const previous = record.meterReadings[index + 1];
                 const delta = previous ? reading.reading - previous.reading : undefined;
-                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `+${delta.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td></tr>;
+                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td></tr>;
               })}
             </tbody></table></div> : <div className="task-section__empty"><p>Показаний пока нет. Они появятся после принятого закрытия задачи.</p></div>}
             {record.meterReadings.length < record.meterReadingsTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreMeterReadings()} variant="secondary">Показать ещё показания</Button> : null}
@@ -2013,7 +2023,7 @@ function EquipmentCard({
   );
 }
 
-function EquipmentPage({ engineer = false }: { readonly engineer?: boolean }) {
+function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engineer?: boolean; readonly initialEquipmentId?: string | undefined }) {
   const pageSize = 50;
   const [records, setRecords] = useState<readonly EquipmentUiRecord[]>([]);
   const [total, setTotal] = useState(0);
@@ -2113,6 +2123,8 @@ function EquipmentPage({ engineer = false }: { readonly engineer?: boolean }) {
       }
     }
     await refreshRegistry();
+    // Открытый паспорт загружаем заново целиком: иначе история, счётчик и файлы пропадают.
+    if (selectedId) await openCard(selectedId);
     setFormOpen(false);
     setEditingId(null);
     if (uploadWarning) toast.warning(uploadWarning);
@@ -2140,6 +2152,16 @@ function EquipmentPage({ engineer = false }: { readonly engineer?: boolean }) {
       toast.error(error instanceof Error ? error.message : "Не получилось открыть паспорт прибора");
     }
   };
+
+  // Возврат из задачи «Назад»: открываем тот паспорт, из которого в неё перешли.
+  // Ждём первую загрузку списка, иначе она затрёт подробные данные паспорта.
+  const initialCardOpened = useRef(false);
+  useEffect(() => {
+    if (!initialEquipmentId || initialCardOpened.current || loading) return;
+    initialCardOpened.current = true;
+    void openCard(initialEquipmentId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading]);
 
   const applyAssignmentTo = async (record: EquipmentUiRecord, change: NewEquipmentAssignmentChange) => {
     await m2Api.changeEquipmentAssignment(record.id, change.kind, {
@@ -2316,16 +2338,16 @@ function NotificationsPage() {
             {items.map((notification) => {
               const open = openId === notification.id;
               return <React.Fragment key={notification.id}>
-                <tr aria-expanded={open} className={`data-table__selectable${notification.status === "failed" ? " notification-table__failed" : ""}`} onClick={() => setOpenId(open ? null : notification.id)} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setOpenId(open ? null : notification.id); } }} role="button" tabIndex={0}>
+                <tr className={`data-table__selectable${notification.status === "failed" ? " notification-table__failed" : ""}`} onClick={() => setOpenId(open ? null : notification.id)}>
                   <td className="notification-table__when">{formatDisplayDate(notification.createdAt, true)}</td>
                   <td>{notification.recipientAddress}</td>
-                  <td><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong><small>{eventLabel[notification.eventCode] ?? "Событие склада"}{notification.attempts > 1 ? ` · попыток: ${notification.attempts}` : ""}</small></td>
+                  <td><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button><small>{eventLabel[notification.eventCode] ?? "Событие склада"}{notification.attempts > 1 ? ` · попыток: ${notification.attempts}` : ""}</small></td>
                   <td>{channelLabel[notification.channel] ?? notification.channel}</td>
                   <td><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></td>
                 </tr>
-                {open ? <tr className="notification-table__detail"><td colSpan={5}>
+                {open ? <tr className="notification-table__detail" id={`notification-body-${notification.id}`}><td colSpan={5}>
                   <p className="notification-table__body">{notification.body}</p>
-                  {notification.diagnosticError ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError}</div> : null}
+                  {notification.diagnosticError || notification.lastError ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError ?? notification.lastError}</div> : null}
                 </td></tr> : null}
               </React.Fragment>;
             })}
@@ -2507,8 +2529,8 @@ function AdminReferencesPage() {
 function ReferencesWorkspace({ notificationTemplates = false }: { readonly notificationTemplates?: boolean }) {
   const [section, setSection] = useState<"catalogs" | "equipment" | "notifications">("catalogs");
   const tabItems = [
-    { value: "catalogs" as const, label: "Работы и статусы" },
-    { value: "equipment" as const, label: "Приборы" },
+    { value: "catalogs" as const, label: "Списки значений" },
+    { value: "equipment" as const, label: "Дерево приборов" },
     ...(notificationTemplates ? [{ value: "notifications" as const, label: "Шаблоны писем" }] : [])
   ];
   return <>
@@ -2631,15 +2653,16 @@ function FinancePage() {
     <section className="card card--table"><CardHeader meta={`${invoices.length} документов`} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th></tr></thead><tbody>{invoices.map((invoice) => <tr key={invoice.id}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td></tr>)}</tbody></table></div>}</section></>;
 }
 
-function CoordinatorWorkspace({ view, taskRouteId, onTaskRouteChange }: {
+function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onTaskRouteChange }: {
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
+  readonly equipmentRouteId?: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
     case "tasks": return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} />;
     case "maintenance": return <MaintenancePlanPage />;
-    case "equipment": return <EquipmentPage />;
+    case "equipment": return <EquipmentPage initialEquipmentId={equipmentRouteId} />;
     case "engineers": return <OperationsEngineersPage />;
     case "warehouse": return <OperationsWarehousePage />;
     case "notifications": return <NotificationsPage />;
@@ -2651,14 +2674,15 @@ function CoordinatorWorkspace({ view, taskRouteId, onTaskRouteChange }: {
   }
 }
 
-function AdminWorkspace({ view, taskRouteId, onTaskRouteChange }: {
+function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onTaskRouteChange }: {
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
+  readonly equipmentRouteId?: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   if (view === "access") return <AccessAdminPage />;
   if (view === "references") return <ReferencesWorkspace notificationTemplates />;
-  return <CoordinatorWorkspace onTaskRouteChange={onTaskRouteChange} taskRouteId={taskRouteId} view={view} />;
+  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} onTaskRouteChange={onTaskRouteChange} taskRouteId={taskRouteId} view={view} />;
 }
 
 function engineerDate(value: string | undefined): string {
@@ -2769,7 +2793,11 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
       throw loadError;
     }
   };
-  const closeTask = () => { openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
+  const closeTask = () => {
+    // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
+    if ((window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId) { window.history.back(); return; }
+    openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
+  };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
   useEffect(() => () => { openRequest.current += 1; }, []);
   useEffect(() => {
@@ -2806,6 +2834,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
   }
   if (selectedTaskId && taskCard) {
     return <TaskCard
+      backLabel={(window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId ? "К прибору" : "К задачам"}
       card={taskCard}
       onBack={closeTask}
       onChanged={async () => {
@@ -2845,15 +2874,16 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
   </>;
 }
 
-function EngineerWorkspace({ view, user, taskRouteId, onTaskRouteChange }: {
+function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onTaskRouteChange }: {
   readonly view: NavigationId;
   readonly user: ApiSessionUser;
   readonly taskRouteId: string | undefined;
+  readonly equipmentRouteId?: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
     case "tasks": return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} user={user} />;
-    case "equipment": return <EquipmentPage engineer />;
+    case "equipment": return <EquipmentPage engineer initialEquipmentId={equipmentRouteId} />;
     case "notifications": return <NotificationsPage />;
     default: return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} user={user} />;
   }
@@ -2964,6 +2994,8 @@ function App() {
   });
   // Каждый клик по разделу в меню открывает его с начала (у задач это доска, а не список или карточка).
   const [navigationKey, setNavigationKey] = useState(0);
+  // Паспорт прибора, в который вернуться «Назад» из задачи, открытой из паспорта.
+  const [equipmentRouteId, setEquipmentRouteId] = useState<string | undefined>(undefined);
   const navigation = navigationForSession(role, sessionUser);
   const groups = groupNavigation(navigation);
   const activeItem = navigation.find((item) => item.id === activeView) ?? navigation[0];
@@ -2984,6 +3016,15 @@ function App() {
   useEffect(() => {
     const restoreRoute = () => {
       const taskId = taskIdFromPathname(window.location.pathname);
+      const state = window.history.state as { readonly view?: string; readonly equipmentId?: string } | null;
+      if (!taskId && state?.view === "equipment" && state.equipmentId) {
+        setTaskRouteId(undefined);
+        setEquipmentRouteId(state.equipmentId);
+        setActiveView("equipment");
+        setNavigationKey((value) => value + 1);
+        return;
+      }
+      setEquipmentRouteId(undefined);
       setTaskRouteId(taskId);
       if (taskId) setActiveView("tasks");
     };
@@ -2993,6 +3034,7 @@ function App() {
 
   const navigate = (id: NavigationId) => {
     setActiveView(id);
+    setEquipmentRouteId(undefined);
     setNavigationKey((value) => value + 1);
     setTaskRouteId(undefined);
     if (window.location.pathname !== "/") window.history.pushState(null, "", "/");
@@ -3031,10 +3073,10 @@ function App() {
       userName={sessionUser.fullName}
     >
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
-      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
-      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
+      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
       {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace key={navigationKey} view={activeView} /> : null}
-      {navigation.length > 0 && role === "admin" ? <AdminWorkspace key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
     </AppShell>
   );
 }

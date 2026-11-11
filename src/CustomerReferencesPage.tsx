@@ -54,6 +54,9 @@ export function CustomerReferencesPage() {
   // Раскрытые площадки: по умолчанию все свёрнуты, чтобы список читался целиком.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [search, setSearch] = useState("");
+  // Во время поиска найденные площадки раскрыты; щелчок по заголовку сворачивает их.
+  const [closedInSearch, setClosedInSearch] = useState<ReadonlySet<string>>(() => new Set());
+  useEffect(() => { setClosedInSearch(new Set()); }, [search]);
   const [showInactive, setShowInactive] = useState(false);
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pendingStateChange, setPendingStateChange] = useState<PendingStateChange | null>(null);
@@ -209,17 +212,18 @@ export function CustomerReferencesPage() {
           : <div className="customer-site-list">
           {visibleSites.map((site) => {
             const people = sitePeople(site);
-            const peopleOpen = collapsed.has(site.id) || Boolean(query);
+            const peopleOpen = query ? !closedInSearch.has(site.id) : collapsed.has(site.id);
             const activePeople = people.filter((person) => person.isActive).length;
-            const contacts = people.filter((person) => person.contactId);
-            const legalEntities = people.filter((person) => !person.contactId);
             return <article className={`customer-site-card${site.isActive ? "" : " customer-site-card--inactive"}`} key={site.id}>
               <header className="customer-site-card__header">
                 <button
                   aria-controls={`site-people-${site.id}`}
                   aria-expanded={peopleOpen}
                   className="customer-site-card__toggle"
-                  onClick={() => togglePeople(site.id)}
+                  onClick={() => {
+                    if (!query) { togglePeople(site.id); return; }
+                    setClosedInSearch((current) => { const next = new Set(current); if (next.has(site.id)) next.delete(site.id); else next.add(site.id); return next; });
+                  }}
                   type="button"
                 >
                   <span aria-hidden="true" className={`customer-site-card__chevron${peopleOpen ? " is-open" : ""}`} />
@@ -244,16 +248,16 @@ export function CustomerReferencesPage() {
 
               {peopleOpen ? <div className="customer-site-card__people" id={`site-people-${site.id}`}>
                 {people.length === 0
-                  ? <p className="customer-site-card__empty">Пока никого нет. Добавьте контакт для выезда или юрлицо с реквизитами для счетов.</p>
-                  : <>
-                    {contacts.length > 0 ? <div className="customer-people-group"><h4>Контакты</h4><ul className="customer-people-list">
-                    {contacts.map((person) => <li className={`customer-person${person.isActive ? "" : " is-inactive"}`} key={person.key}>
+                  ? <p className="customer-site-card__empty">Пока никого нет. Добавьте человека: телефон для выезда и реквизиты для счетов в одной записи.</p>
+                  : <ul className="customer-people-list">
+                    {people.map((person) => <li className={`customer-person${person.isActive ? "" : " is-inactive"}`} key={person.key}>
                       <div className="customer-person__body">
                         <div className="customer-person__line">
                           <strong>{person.fullName}</strong>
                           {person.isPrimary && person.isActive
                             ? <StatusBadge tone="info">Основной</StatusBadge>
                             : null}
+                          {person.inn ? <StatusBadge tone="info">для счетов</StatusBadge> : null}
                           {!person.isActive
                             ? <StatusBadge tone="neutral">Неактивен</StatusBadge>
                             : null}
@@ -276,39 +280,7 @@ export function CustomerReferencesPage() {
                         />
                       </div>
                     </li>)}
-                    </ul></div> : null}
-                    {legalEntities.length > 0 ? <div className="customer-people-group"><h4>Юрлица для счетов</h4><ul className="customer-people-list">
-                    {legalEntities.map((person) => <li className={`customer-person${person.isActive ? "" : " is-inactive"}`} key={person.key}>
-                      <div className="customer-person__body">
-                        <div className="customer-person__line">
-                          <strong>{person.fullName}</strong>
-                          {person.isPrimary && person.isActive
-                            ? <StatusBadge tone="info">Основной</StatusBadge>
-                            : null}
-                          {!person.isActive
-                            ? <StatusBadge tone="neutral">Неактивен</StatusBadge>
-                            : null}
-                        </div>
-                        <p>{formatSitePersonDetails(person)}</p>
-                      </div>
-                      <div className="table-actions">
-                        <IconButton icon="edit" label="Изменить" onClick={() => { setFormError(null); setEditor({ kind: "person", siteId: site.id, person }); }} />
-                        <IconButton
-                          icon={person.isActive ? "disable" : "enable"}
-                          label={person.isActive ? "Отключить" : "Включить"}
-                          onClick={() => setPendingStateChange({
-                            kind: "person",
-                            siteId: site.id,
-                            person,
-                            id: person.contactId ?? person.payerId ?? person.key,
-                            label: person.fullName,
-                            isActive: person.isActive
-                          })}
-                        />
-                      </div>
-                    </li>)}
-                    </ul></div> : null}
-                  </>}
+                  </ul>}
                 <div className="customer-site-card__actions">
                   <Button
                     className="button--compact"

@@ -195,7 +195,6 @@ export function MaintenancePlanPage() {
   const existingPlanCount = items.filter((item) => item.equipmentId === equipmentId).length;
   const generatedCount = items.filter((item) => item.generatedTaskId).length;
   const organizations = new Set(items.map((item) => item.organizationId).filter(Boolean)).size;
-  const yearOptions = [year - 1, year, year + 1];
 
   const eligibleCount = items.filter((item) => item.status === "planned").length;
   const today = todayPercent(year);
@@ -221,7 +220,7 @@ export function MaintenancePlanPage() {
     />
     <ConfirmationDialog
       confirmLabel={`Создать ${plural(eligibleCount, "задачу", "задачи", "задач")}`}
-      description={`Строки не выбраны, поэтому задачи будут созданы по всем запланированным периодам ${year} года: ${plural(eligibleCount, "период", "периода", "периодов")}. Назначенным инженерам уйдут уведомления.`}
+      description={`Строки не выбраны, поэтому задачи будут созданы по всем запланированным периодам ${year} года: ${plural(eligibleCount, "период", "периода", "периодов")}. Они появятся на доске в колонке «Новая».`}
       onConfirm={generate}
       onOpenChange={setConfirmAll}
       open={confirmAll}

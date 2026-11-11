@@ -307,7 +307,7 @@
 .report-bar i { display: block; min-width: 2px; height: 100%; border-radius: inherit; background: var(--color-accent); }
 .report-bar strong { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .report-bar strong small { color: var(--color-muted); font-size: 12px; font-weight: 500; }
-.report-bar--closed i { background: var(--color-success); }
+.report-bar--closed i { background: #4f6470; }
 .report-bar--in_progress i { background: var(--color-success); }
 .report-bar--under_review i { background: var(--color-accent); }
 .report-bar--cancelled i { background: #8a9aa3; }
@@ -8389,7 +8389,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .equipment-tasks__item small { grid-column: 2 / -1; color: var(--color-muted); font-size: 12.5px; }
 
 .equipment-meters-table { min-width: 520px; }
-.task-section .history-feed { padding: 0; }
 .equipment-card-view .task-work .card { margin: 0; }
 .equipment-history-list { display: grid; margin: 0; padding: 0; list-style: none; }
 .equipment-history-list .task-history__line strong { min-width: 0; overflow-wrap: anywhere; }
@@ -8443,3 +8442,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .task-board__column.task-board__column--drop { border-color: var(--color-accent); box-shadow: inset 0 0 0 2px rgb(35 142 190 / 18%); }
 /* Кольцо фокуса у вкладок не срезается */
 .page-tabs button:focus-visible { outline-offset: -2px; }
+
+.notification-table__toggle { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.notification-table__toggle:hover strong { color: var(--color-accent-dark); text-decoration: underline; }
+.notification-table__toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }

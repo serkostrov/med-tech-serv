@@ -1073,6 +1073,9 @@ export class M2ApiClient {
     if (query.channel) request = request.eq("channel", query.channel);
     if (query.status) request = request.eq("status", query.status);
     if (query.eventCode) request = request.eq("event_code", query.eventCode);
+    // Фильтр «Адресат» раньше не уходил в запрос: ищем по адресу получателя.
+    const recipient = query.recipient ? escapeIlikePattern(query.recipient.trim()) : "";
+    if (recipient) request = request.ilike("recipient_address", `%${recipient}%`);
     const { data, error, count } = await request;
     throwIfError(error);
     return {
@@ -1715,6 +1718,8 @@ export class M2ApiClient {
     readonly engineerId?: string;
     /** Задачи одного прибора (для паспорта). */
     readonly equipmentId?: string;
+    /** Только незакрытые задачи (без «Закрыта» и «Отменена»). */
+    readonly openOnly?: boolean;
     readonly siteId?: string;
     readonly workTypeCode?: string;
     readonly priority?: "urgent" | "planned";
@@ -1749,6 +1754,7 @@ export class M2ApiClient {
       if (query.status) next = next.eq("status_code", query.status);
       if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
       if (query.equipmentId) next = next.eq("equipment_id", query.equipmentId);
+      if (query.openOnly) next = next.not("status_code", "in", "(closed,cancelled)");
       if (query.siteId) next = next.eq("site_id", query.siteId);
       if (query.workTypeCode) next = next.eq("work_type_code", query.workTypeCode);
       if (query.priority) next = next.eq("priority", query.priority);

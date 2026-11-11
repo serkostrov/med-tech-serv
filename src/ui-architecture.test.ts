@@ -38,7 +38,7 @@ describe("shared UI architecture", () => {
     const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
     assert.match(app, /case "customers": return <CustomersPage \/>/u);
     assert.match(app, /useState<"catalogs" \| "equipment" \| "notifications">\("catalogs"\)/u);
-    assert.match(app, /value: "equipment" as const, label: "Приборы"/u);
+    assert.match(app, /value: "equipment" as const, label: "Дерево приборов"/u);
     assert.doesNotMatch(app, /notificationTemplates \? "notifications"/u);
     assert.doesNotMatch(app, /value: "customers", label: "Площадки и плательщики"/u);
   });
