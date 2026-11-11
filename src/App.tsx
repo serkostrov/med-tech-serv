@@ -164,7 +164,7 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
             return (
             <tr className="task-registry-row" key={task.id} onClick={() => onOpen(task.id)}>
               <td className="task-select-cell" onClick={(event) => event.stopPropagation()}><input aria-label={`Выбрать задачу ${task.number}`} checked={selectedTaskIds.has(task.id)} onChange={(event) => onToggle(task.id, event.target.checked)} type="checkbox" /></td>
-              <td><button className="text-button" onClick={() => onOpen(task.id)} type="button"><strong>{task.number}</strong></button></td>
+              <td><button className="text-button" onClick={(event) => { event.stopPropagation(); onOpen(task.id); }} type="button"><strong>{task.number}</strong></button></td>
               <td><strong>{task.title}</strong></td>
               <td>{task.customer?.siteName ?? "Не выбрана"}</td>
               <td className="muted">{device ? `${device.model} · S/N ${device.serialNumber}` : "Не выбран"}</td>
@@ -1141,7 +1141,18 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
     return next;
   });
   const openRequest = useRef(0);
-  const openTask = async (id: string, updateRoute = true) => {
+  const openInFlight = useRef<{ readonly id: string; readonly promise: Promise<void> } | null>(null);
+  const openTask = (id: string, updateRoute = true): Promise<void> => {
+    // Повторный клик по той же задаче, пока она грузится, не запускает вторую загрузку.
+    // Обновление после действия (updateRoute = false) всегда грузит заново.
+    if (updateRoute && openInFlight.current?.id === id) return openInFlight.current.promise;
+    const promise = loadTaskCard(id, updateRoute).finally(() => {
+      if (openInFlight.current?.promise === promise) openInFlight.current = null;
+    });
+    openInFlight.current = { id, promise };
+    return promise;
+  };
+  const loadTaskCard = async (id: string, updateRoute: boolean) => {
     // Сразу показываем, что задача открывается, а не ждём молча всю карточку.
     const request = ++openRequest.current;
     const previous = taskCard;
@@ -1167,7 +1178,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
       throw loadError;
     }
   };
-  const closeTask = () => { openRequest.current += 1; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
+  const closeTask = () => { openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
   useEffect(() => () => { openRequest.current += 1; }, []);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
@@ -1212,6 +1223,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
     if (initialTaskId && initialTaskId === selectedTaskId) return;
     if (!initialTaskId) {
       openRequest.current += 1;
+      openInFlight.current = null;
       setSelectedTaskId(null);
       setTaskCard(null);
       return;
@@ -2412,7 +2424,18 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
   const openRequest = useRef(0);
-  const openTask = async (id: string, updateRoute = true) => {
+  const openInFlight = useRef<{ readonly id: string; readonly promise: Promise<void> } | null>(null);
+  const openTask = (id: string, updateRoute = true): Promise<void> => {
+    // Повторный клик по той же задаче, пока она грузится, не запускает вторую загрузку.
+    // Обновление после действия (updateRoute = false) всегда грузит заново.
+    if (updateRoute && openInFlight.current?.id === id) return openInFlight.current.promise;
+    const promise = loadTaskCard(id, updateRoute).finally(() => {
+      if (openInFlight.current?.promise === promise) openInFlight.current = null;
+    });
+    openInFlight.current = { id, promise };
+    return promise;
+  };
+  const loadTaskCard = async (id: string, updateRoute: boolean) => {
     const request = ++openRequest.current;
     const previous = taskCard;
     setSelectedTaskId(id);
@@ -2435,7 +2458,7 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
       throw loadError;
     }
   };
-  const closeTask = () => { openRequest.current += 1; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
+  const closeTask = () => { openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
   useEffect(() => () => { openRequest.current += 1; }, []);
   useEffect(() => {
@@ -2455,6 +2478,7 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
     if (initialTaskId && initialTaskId === selectedTaskId) return;
     if (!initialTaskId) {
       openRequest.current += 1;
+      openInFlight.current = null;
       setSelectedTaskId(null);
       setTaskCard(null);
       return;
