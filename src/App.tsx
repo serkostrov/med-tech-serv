@@ -1252,10 +1252,10 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
 }
 
 /** Экран на время загрузки карточки: сразу видно, какая задача открывается. */
-function TaskCardLoading({ task, onBack }: { readonly task?: { readonly number?: string; readonly title?: string }; readonly onBack: () => void }) {
+function TaskCardLoading({ task, onBack, backLabel = "К задачам" }: { readonly task?: { readonly number?: string; readonly title?: string }; readonly onBack: () => void; readonly backLabel?: string }) {
   // Тот же каркас, что у открытой карточки: при загрузке ничего не перескакивает.
   return <div aria-busy="true" className="task-card-loading" role="status">
-    <EntityDetailToolbar backLabel="К списку задач" onBack={onBack} />
+    <EntityDetailToolbar backLabel={backLabel} onBack={onBack} />
     <EntityDetailHeader description={task?.number ?? ""} title={task?.title ?? "Открываем задачу…"} />
     <span className="sr-only">Открываем задачу</span>
     <div className="task-card-loading__bar"><Skeleton className="skeleton-line skeleton-line--w60" /><Skeleton className="skeleton-line skeleton-line--w30" /></div>
@@ -1263,7 +1263,9 @@ function TaskCardLoading({ task, onBack }: { readonly task?: { readonly number?:
   </div>;
 }
 
-function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
+function CoordinatorTasks({ initialTaskId, onTaskRouteChange, returnToEquipment = false }: {
+  /** Задачу открыли из паспорта прибора: «назад» возвращает в паспорт. */
+  readonly returnToEquipment?: boolean;
   readonly initialTaskId: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
@@ -1425,7 +1427,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
   };
   const closeTask = () => {
     // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
-    if ((window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId) { window.history.back(); return; }
+    if (returnToEquipment) { window.history.back(); return; }
     openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
@@ -1483,8 +1485,8 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
         toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
       });
   }, [initialTaskId]);
-  if (selectedTaskId && !taskCard) return <TaskCardLoading onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
-  if (selectedTaskId && taskCard) return <TaskCard backLabel={(window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
+  if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={returnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
+  if (selectedTaskId && taskCard) return <TaskCard backLabel={returnToEquipment ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
@@ -1950,7 +1952,7 @@ function EquipmentCard({
                 : <div className="task-section__empty"><p>Открытых задач по прибору нет.</p></div>}
           </section>
           <PageTabs items={[
-            { value: "history", label: "История", badge: readOnly ? history.length : record.historyTotal },
+            { value: "history", label: "История", ...(readOnly ? {} : { badge: record.historyTotal }) },
             { value: "meters", label: "Счётчик", badge: record.meterReadingsTotal },
             { value: "files", label: "Файлы", badge: record.fileRecords.length },
             { value: "movements", label: "Перемещения", badge: siteChanges.length + payerChanges.length }
@@ -2055,7 +2057,13 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
       ...(filters.site ? { site: filters.site } : {}),
       ...(filters.payer ? { payer: filters.payer } : {})
     });
-    setRecords(page.items.map((item) => equipmentUiRecord(item)));
+    // Подробная запись открытого паспорта не затирается строкой списка (иначе мигают история и форма).
+    setRecords((current) => {
+      const rows = page.items.map((item) => equipmentUiRecord(item));
+      const detailed = selectedId ? current.find((item) => item.id === selectedId) : undefined;
+      if (!detailed) return rows;
+      return rows.some((item) => item.id === detailed.id) ? rows.map((item) => item.id === detailed.id ? detailed : item) : [detailed, ...rows];
+    });
     setTotal(page.total);
   };
 
@@ -2220,7 +2228,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   if (selectedRecord) {
     return (
       <>
-        <EquipmentCard key={selectedRecord.id} onAddManual={addManualHistoryRecord} onApply={applyAssignment} onBack={() => setSelectedId(null)} {...(engineer ? {} : { onEdit: () => openEdit(selectedRecord.id) })} onLoadMoreHistory={loadMoreHistory} onLoadMoreMeterReadings={loadMoreMeterReadings} payers={payers} readOnly={engineer} record={selectedRecord} sites={sites} />
+        <EquipmentCard key={selectedRecord.id} onAddManual={addManualHistoryRecord} onApply={applyAssignment} onBack={() => { setSelectedId(null); if ((window.history.state as { readonly view?: string } | null)?.view === "equipment") window.history.replaceState(null, "", window.location.pathname); }} {...(engineer ? {} : { onEdit: () => openEdit(selectedRecord.id) })} onLoadMoreHistory={loadMoreHistory} onLoadMoreMeterReadings={loadMoreMeterReadings} payers={payers} readOnly={engineer} record={selectedRecord} sites={sites} />
         {!engineer ? <EquipmentPassportForm key={editingId ?? "card-edit"} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
       </>
     );
@@ -2279,6 +2287,25 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   );
 }
 
+// Технические коды ошибок отправки простыми словами; незнакомый код показываем как есть.
+const NOTIFICATION_ERROR_TEXT: Readonly<Record<string, string>> = {
+  max_attempts_exceeded: "не удалось отправить после нескольких попыток",
+  smtp_connection_failed: "почтовый сервер недоступен",
+  smtp_auth_failed: "почтовый сервер не принял логин и пароль",
+  smtp_rejected: "почтовый сервер отклонил письмо",
+  smtp_recipient_rejected: "почтовый сервер не знает такого адреса",
+  smtp_timeout: "почтовый сервер не ответил вовремя",
+  telegram_chat_not_found: "в Telegram не найден такой чат",
+  telegram_blocked: "получатель заблокировал бота в Telegram",
+  telegram_failed: "Telegram не принял сообщение",
+  recipient_missing: "у получателя не указан адрес",
+  channel_disabled: "канал отправки выключен"
+};
+
+function notificationErrorText(code: string): string {
+  return code.split(":").map((part) => NOTIFICATION_ERROR_TEXT[part.trim()] ?? part.trim()).filter(Boolean).join(": ");
+}
+
 function NotificationsPage() {
   const pageSize = 50;
   const [items, setItems] = useState<readonly NotificationJournalRecord[]>([]);
@@ -2328,7 +2355,7 @@ function NotificationsPage() {
       <label>Канал<Select onChange={(event) => changeFilter("channel", event.target.value)} value={filters.channel}><option value="">Все каналы</option><option value="email">E-mail</option><option value="telegram">Telegram</option></Select></label>
       <label>Событие<Select onChange={(event) => changeFilter("eventCode", event.target.value)} value={filters.eventCode}><option value="">Все события</option>{Object.entries(eventLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>
       <label>Статус<Select onChange={(event) => changeFilter("status", event.target.value)} value={filters.status}><option value="">Все статусы</option>{Object.entries(statusLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>
-      <label className="filter-field--search">Адресат<input onChange={(event) => changeFilter("recipient", event.target.value)} placeholder="Имя или e-mail" type="search" value={filters.recipient} /></label>
+      <label className="filter-field--search">Адресат<input onChange={(event) => changeFilter("recipient", event.target.value)} placeholder="E-mail или номер чата" type="search" value={filters.recipient} /></label>
     </FilterBar>
     <section className="card card--table" aria-label="Журнал уведомлений">
       <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Журнал отправки" />
@@ -2347,7 +2374,7 @@ function NotificationsPage() {
                 </tr>
                 {open ? <tr className="notification-table__detail" id={`notification-body-${notification.id}`}><td colSpan={5}>
                   <p className="notification-table__body">{notification.body}</p>
-                  {notification.diagnosticError || notification.lastError ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError ?? notification.lastError}</div> : null}
+                  {notification.status === "failed" && (notification.diagnosticError || notification.lastError) ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError ?? notificationErrorText(notification.lastError ?? "")}</div> : null}
                 </td></tr> : null}
               </React.Fragment>;
             })}
@@ -2653,14 +2680,15 @@ function FinancePage() {
     <section className="card card--table"><CardHeader meta={`${invoices.length} документов`} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th></tr></thead><tbody>{invoices.map((invoice) => <tr key={invoice.id}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td></tr>)}</tbody></table></div>}</section></>;
 }
 
-function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onTaskRouteChange }: {
+function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, returnToEquipment = false, onTaskRouteChange }: {
+  readonly returnToEquipment?: boolean;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
   readonly equipmentRouteId?: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
-    case "tasks": return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} />;
+    case "tasks": return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} />;
     case "maintenance": return <MaintenancePlanPage />;
     case "equipment": return <EquipmentPage initialEquipmentId={equipmentRouteId} />;
     case "engineers": return <OperationsEngineersPage />;
@@ -2670,11 +2698,12 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onTaskRoute
     case "customers": return <CustomersPage />;
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
-    default: return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} />;
+    default: return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} />;
   }
 }
 
-function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onTaskRouteChange }: {
+function AdminWorkspace({ view, taskRouteId, equipmentRouteId, returnToEquipment = false, onTaskRouteChange }: {
+  readonly returnToEquipment?: boolean;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
   readonly equipmentRouteId?: string | undefined;
@@ -2682,7 +2711,7 @@ function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onTaskRouteChange
 }) {
   if (view === "access") return <AccessAdminPage />;
   if (view === "references") return <ReferencesWorkspace notificationTemplates />;
-  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} onTaskRouteChange={onTaskRouteChange} taskRouteId={taskRouteId} view={view} />;
+  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} taskRouteId={taskRouteId} view={view} />;
 }
 
 function engineerDate(value: string | undefined): string {
@@ -2746,7 +2775,8 @@ const ENGINEER_BOARD_STATUSES: readonly ReferenceCatalogValue[] = (["assigned", 
   attributes: { sortOrder: index, ...(code === "closed" ? { isTerminal: true } : {}) }
 }));
 
-function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
+function EngineerTasks({ user, initialTaskId, onTaskRouteChange, returnToEquipment = false }: {
+  readonly returnToEquipment?: boolean;
   readonly user: ApiSessionUser;
   readonly initialTaskId: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
@@ -2795,7 +2825,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
   };
   const closeTask = () => {
     // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
-    if ((window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId) { window.history.back(); return; }
+    if (returnToEquipment) { window.history.back(); return; }
     openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
@@ -2830,11 +2860,11 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) {
-    return <TaskCardLoading onBack={closeTask} task={page?.items.find((item) => item.id === selectedTaskId)} />;
+    return <TaskCardLoading backLabel={returnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={page?.items.find((item) => item.id === selectedTaskId)} />;
   }
   if (selectedTaskId && taskCard) {
     return <TaskCard
-      backLabel={(window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId ? "К прибору" : "К задачам"}
+      backLabel={returnToEquipment ? "К прибору" : "К задачам"}
       card={taskCard}
       onBack={closeTask}
       onChanged={async () => {
@@ -2874,7 +2904,8 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
   </>;
 }
 
-function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onTaskRouteChange }: {
+function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, returnToEquipment = false, onTaskRouteChange }: {
+  readonly returnToEquipment?: boolean;
   readonly view: NavigationId;
   readonly user: ApiSessionUser;
   readonly taskRouteId: string | undefined;
@@ -2882,10 +2913,10 @@ function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onTaskRo
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
-    case "tasks": return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} user={user} />;
+    case "tasks": return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} user={user} />;
     case "equipment": return <EquipmentPage engineer initialEquipmentId={equipmentRouteId} />;
     case "notifications": return <NotificationsPage />;
-    default: return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} user={user} />;
+    default: return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} returnToEquipment={returnToEquipment} user={user} />;
   }
 }
 
@@ -2995,7 +3026,14 @@ function App() {
   // Каждый клик по разделу в меню открывает его с начала (у задач это доска, а не список или карточка).
   const [navigationKey, setNavigationKey] = useState(0);
   // Паспорт прибора, в который вернуться «Назад» из задачи, открытой из паспорта.
-  const [equipmentRouteId, setEquipmentRouteId] = useState<string | undefined>(undefined);
+  const [equipmentRouteId, setEquipmentRouteId] = useState<string | undefined>(() => {
+    if (typeof window === "undefined" || taskIdFromPathname(window.location.pathname)) return undefined;
+    const state = window.history.state as { readonly view?: string; readonly equipmentId?: string } | null;
+    return state?.view === "equipment" ? state.equipmentId : undefined;
+  });
+  // Текущая задача открыта из паспорта: кнопка «назад» ведёт в паспорт и подписана «К прибору».
+  const [fromEquipmentId, setFromEquipmentId] = useState<string | undefined>(() =>
+    typeof window === "undefined" ? undefined : (window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId);
   const navigation = navigationForSession(role, sessionUser);
   const groups = groupNavigation(navigation);
   const activeItem = navigation.find((item) => item.id === activeView) ?? navigation[0];
@@ -3006,7 +3044,9 @@ function App() {
       const nextNavigation = navigationForSession(nextRole, user);
       setSessionUser(user);
       setRole(nextRole);
-      setActiveView(taskRouteId && nextNavigation.some((item) => item.id === "tasks") ? "tasks" : nextNavigation[0]?.id ?? getDefaultView(nextRole));
+      setActiveView(taskRouteId && nextNavigation.some((item) => item.id === "tasks") ? "tasks"
+        : equipmentRouteId && nextNavigation.some((item) => item.id === "equipment") ? "equipment"
+          : nextNavigation[0]?.id ?? getDefaultView(nextRole));
     }).catch((error: unknown) => {
       if (error instanceof M2ApiError && error.status === 401) setSessionUser(null);
       else setSessionUser(null);
@@ -3016,7 +3056,8 @@ function App() {
   useEffect(() => {
     const restoreRoute = () => {
       const taskId = taskIdFromPathname(window.location.pathname);
-      const state = window.history.state as { readonly view?: string; readonly equipmentId?: string } | null;
+      const state = window.history.state as { readonly view?: string; readonly equipmentId?: string; readonly fromEquipmentId?: string } | null;
+      setFromEquipmentId(taskId ? state?.fromEquipmentId : undefined);
       if (!taskId && state?.view === "equipment" && state.equipmentId) {
         setTaskRouteId(undefined);
         setEquipmentRouteId(state.equipmentId);
@@ -3037,11 +3078,15 @@ function App() {
     setEquipmentRouteId(undefined);
     setNavigationKey((value) => value + 1);
     setTaskRouteId(undefined);
+    setFromEquipmentId(undefined);
     if (window.location.pathname !== "/") window.history.pushState(null, "", "/");
+    else if (window.history.state) window.history.replaceState(null, "", "/");
   };
 
   const changeTaskRoute = (taskId?: string, replace = false) => {
     setTaskRouteId(taskId);
+    // Новый шаг истории без метки паспорта: обычная задача, «назад» ведёт к задачам.
+    setFromEquipmentId(undefined);
     const pathname = taskId ? taskPathname(taskId) : "/";
     if (window.location.pathname === pathname) return;
     // Откат после неудачного открытия не оставляет лишний шаг в истории браузера.
@@ -3073,10 +3118,10 @@ function App() {
       userName={sessionUser.fullName}
     >
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
-      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
-      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
+      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} returnToEquipment={Boolean(fromEquipmentId)} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} returnToEquipment={Boolean(fromEquipmentId)} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
       {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace key={navigationKey} view={activeView} /> : null}
-      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} returnToEquipment={Boolean(fromEquipmentId)} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
     </AppShell>
   );
 }
