@@ -80,3 +80,8 @@ DROP TRIGGER IF EXISTS tasks_enqueue_business_events ON tasks;
 CREATE TRIGGER tasks_enqueue_business_events
 AFTER INSERT OR UPDATE OF status_code, engineer_id ON tasks
 FOR EACH ROW EXECUTE FUNCTION enqueue_task_business_events();
+
+-- Как и все служебные триггеры (0009), функция работает от владельца схемы:
+-- CREATE OR REPLACE сбрасывает это свойство, без него смена статуса инженером
+-- падает на записи в очередь событий («недостаточно прав»).
+ALTER FUNCTION public.enqueue_task_business_events() SECURITY DEFINER SET search_path = public, pg_temp;
