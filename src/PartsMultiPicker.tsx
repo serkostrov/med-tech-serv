@@ -262,6 +262,7 @@ export function PartsMultiPicker({
         ) : null}
       </div>
 
+      <p className="parts-multi-picker__hint">Это запчасти, которые понадобятся на выезде. Со склада сразу ничего не списываем.</p>
       <div className="parts-multi-picker__flags">
         <label className="parts-multi-picker__flag">
           <input

@@ -93,7 +93,7 @@ describe("shared UI architecture", () => {
     assert.doesNotMatch(app, /className="card equipment-passport"/u);
     assert.doesNotMatch(app, /equipment-change-form__heading/u);
     assert.match(app, /submitLabel=\{record \? "Сохранить изменения" : "Создать паспорт"\}/u);
-    assert.match(app, /footer=\{<>[\s\S]*Сохранить строки/u);
+    assert.match(app, /footer=\{<>[\s\S]*Открыть акт для печати/u);
     assert.match(app, /form="task-parts-editor-form"/u);
   });
 

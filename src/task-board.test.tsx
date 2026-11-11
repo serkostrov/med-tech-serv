@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TaskBoard } from "./TaskBoard.js";
+import { TaskBoard, boardDropDecision } from "./TaskBoard.js";
 
 it("builds kanban columns from the editable status catalog and keeps task cards openable", () => {
   const html = renderToStaticMarkup(<TaskBoard
@@ -25,9 +25,19 @@ it("builds kanban columns from the editable status catalog and keeps task cards 
   assert.match(html, /Диагностика/u);
   assert.match(html, /Инженер Тестовый/u);
   assert.match(html, /SN-1/u);
-  assert.match(html, /Изменить статус задачи З-1/u);
   assert.match(html, /draggable="true"/u);
-  assert.match(html, /Перетащите задачу сюда/u);
+  assert.doesNotMatch(html, /Перетащите задачу сюда/u);
+});
+
+it("moves on the board only to the next step and sends steps that need data to the card", () => {
+  assert.equal(boardDropDecision({}, "assigned", "in_progress").kind, "move");
+  assert.equal(boardDropDecision({ engineerId: "e-1" }, "new", "assigned").kind, "move");
+  assert.equal(boardDropDecision({}, "new", "assigned").kind, "card");
+  assert.equal(boardDropDecision({}, "in_progress", "under_review").kind, "card");
+  assert.equal(boardDropDecision({}, "under_review", "closed").kind, "card");
+  assert.equal(boardDropDecision({}, "new", "cancelled").kind, "card");
+  assert.equal(boardDropDecision({}, "new", "closed").kind, "no");
+  assert.equal(boardDropDecision({}, "closed", "in_progress").kind, "no");
 });
 
 it("hides completed board columns until they are explicitly shown", () => {

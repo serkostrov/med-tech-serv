@@ -67,15 +67,15 @@ describe("coordinator closure review", () => {
     }));
 
     for (const expected of [
-      "Проверка закрытия", "Акт выполненных работ", "акт-тест-35.jpg", "Вложения", "фото-работы-35.jpg",
-      "Использованные запчасти", "TEST-PART-35", "Н · новая", "Износ / естественная эксплуатация",
+      "Проверка закрытия", "Открыть акт", "акт-тест-35.jpg", "Фото, видео и документы", "фото-работы-35.jpg",
+      "Использованные запчасти", "TEST-PART-35", "Н, новая", "Износ / естественная эксплуатация",
       "Прибор не запускается", "Выполнена диагностика и замена узла", "Проверить через месяц", "Замечаний нет",
       "Показание счётчика", "1350", "Работы выполнены полностью", "Аппарат исправен и допущен",
       "Заказчик претензий не имеет", "Продолжение первичной заявки", "Проверено — закрыть", "На доработку"
     ]) assert.ok(markup.includes(expected), expected);
   });
 
-  it("requires an inline engineer comment and disables an empty return", () => {
+  it("puts the decision buttons at the top and asks for a comment only on return", () => {
     const markup = renderToStaticMarkup(createElement(ClosureReview, {
       card,
       busy: false,
@@ -85,8 +85,17 @@ describe("coordinator closure review", () => {
       onClose: async () => undefined,
       onReturn: async () => undefined
     }));
-    assert.match(markup, /<textarea[^>]*placeholder="Что именно нужно исправить или дополнить"[^>]*required=""/u);
-    assert.match(markup, /<button[^>]*disabled=""[^>]*>На доработку<\/button>/u);
+    // Кнопки решения стоят в шапке, раньше полей акта.
+    assert.ok(markup.indexOf("Проверено — закрыть") < markup.indexOf("Причина вызова"));
+    // Поле комментария появляется только после нажатия «На доработку».
+    assert.doesNotMatch(markup, /<textarea/u);
     assert.doesNotMatch(markup, /Проверить акт/u);
+    // Фото показываются превью, если есть ссылка.
+    const withUrl = renderToStaticMarkup(createElement(ClosureReview, {
+      card: { ...card, files: card.files.map((file) => ({ ...file, url: `https://files.test/${file.id}` })) },
+      busy: false, canClose: true, canReturn: true,
+      onOpenAct: () => undefined, onClose: async () => undefined, onReturn: async () => undefined
+    }));
+    assert.match(withUrl, /<img[^>]*src="https:\/\/files\.test\/photo-test-35"/u);
   });
 });

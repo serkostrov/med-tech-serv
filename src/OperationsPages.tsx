@@ -50,7 +50,7 @@ export function EngineersPage() {
     <PageIntro description="Кто сейчас занят, у кого просрочки и кому можно дать новую заявку." title="Инженеры" />
     <div className="metric-grid metric-grid--three">
       <MetricCard icon="engineers" label="Активные инженеры" value={String(active.length)} />
-      <MetricCard icon="tasks" label="Назначенные задачи" tone="purple" value={String(assigned)} />
+      <MetricCard icon="tasks" label="Назначенные задачи" tone="yellow" value={String(assigned)} />
       <MetricCard icon="clock" label="Просроченные" tone="orange" value={String(overdue)} />
     </div>
     <DataTableShell meta={`${engineers.length} человек`} title="Загрузка">{loading && engineers.length === 0 ? <ResourceState description="Подождите, список инженеров сейчас появится." status="loading" title="Загружаем инженеров" /> : engineers.length === 0 ? <ResourceState description="Когда появятся сотрудники с ролью инженера, они отобразятся здесь." status="empty" title="Инженеров пока нет" /> : <div className="table-scroll"><table className="data-table engineer-load-table"><thead><tr><th>Инженер</th><th>Компетенции</th><th>Загрузка</th><th className="numeric">Назначено</th><th className="numeric">В работе</th><th className="numeric">Просрочено</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{engineers.map((engineer) => <tr className={engineer.isActive ? "" : "reference-admin-table__inactive"} key={engineer.id}><td><strong>{engineer.fullName}</strong></td><td>{competencyText(engineer)}</td><td><div aria-label={`Загрузка: ${engineer.assignedTaskCount} задач`} className="load-cell"><span><i style={{ width: `${Math.max(4, engineer.assignedTaskCount / maxLoad * 100)}%` }} /></span></div></td><td className="numeric">{engineer.assignedTaskCount}</td><td className="numeric">{engineer.inProgressTaskCount}</td><td className="numeric"><strong className={engineer.overdueTaskCount ? "danger-text" : ""}>{engineer.overdueTaskCount}</strong></td><td><StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "warning" : "success"}>{engineer.isActive ? "Доступен" : "Неактивен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(engineer); }} /></div></td></tr>)}</tbody></table></div>}</DataTableShell>
@@ -269,7 +269,7 @@ export function ReportsPage() {
             detail={report.metrics.closedCount === 0 ? "ещё нет закрытых" : `${report.metrics.closedOnTimePercent}% закрыто вовремя`}
             icon="check"
             label="Закрыто"
-            tone="green"
+            tone="red"
             value={String(report.metrics.closedCount)}
           />
           <MetricCard
@@ -283,7 +283,7 @@ export function ReportsPage() {
             detail={report.metrics.taskCount === 0 ? "нет заявок за период" : openCount === 0 ? "все закрыты или отменены" : "ещё в работе"}
             icon="engineers"
             label="Открытые"
-            tone="purple"
+            tone="green"
             value={String(openCount)}
           />
         </div>

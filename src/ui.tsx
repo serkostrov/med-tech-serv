@@ -160,7 +160,7 @@ export function Field({
   );
 }
 
-export type StatusTone = "danger" | "info" | "neutral" | "success" | "warning" | "purple";
+export type StatusTone = "danger" | "info" | "neutral" | "success" | "warning" | "purple" | "orange";
 export type ButtonVariant = "danger" | "ghost" | "primary" | "secondary" | "success";
 
 export interface ButtonProps extends Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> {
@@ -372,7 +372,8 @@ const statusVariant = {
   neutral: "outline",
   success: "success",
   warning: "warning",
-  purple: "purple"
+  purple: "purple",
+  orange: "warning"
 } as const;
 
 export function StatusBadge({ children, tone }: { readonly children: ReactNode; readonly tone: StatusTone }) {
@@ -390,7 +391,7 @@ export function MetricCard({
   readonly label: string;
   readonly value: string;
   readonly detail?: string;
-  readonly tone?: "blue" | "green" | "orange" | "purple";
+  readonly tone?: "blue" | "green" | "orange" | "purple" | "red" | "yellow";
   readonly icon?: IconName;
   readonly onClick?: () => void;
 }) {

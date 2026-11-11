@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, type DragEvent, type UIEvent } from "react";
 import type { EquipmentApiRecord, ReferenceCatalogValue, TaskApiRecord } from "./m2-api.js";
-import { TASK_STATUS_LABELS } from "./domain/task-status.js";
-import { StatusBadge, type StatusTone } from "./ui.js";
+import { TASK_STATUS_LABELS, TASK_STATUS_TONES, TASK_STATUS_TRANSITIONS } from "./domain/task-status.js";
+import { StatusBadge, toast, type StatusTone } from "./ui.js";
 
 const COLUMN_PAGE_SIZE = 12;
 
@@ -19,11 +19,7 @@ export interface TaskBoardPage {
 }
 
 function tone(status: string, terminal: boolean): StatusTone {
-  if (status === "closed") return "success";
-  if (status === "cancelled" || terminal) return "neutral";
-  if (status === "in_progress") return "purple";
-  if (status === "under_review") return "info";
-  return "warning";
+  return TASK_STATUS_TONES[status] ?? (terminal ? "neutral" : "warning");
 }
 
 function isCompletedBoardStatus(status: ReferenceCatalogValue): boolean {
@@ -32,7 +28,26 @@ function isCompletedBoardStatus(status: ReferenceCatalogValue): boolean {
   return (status.attributes as Readonly<Record<string, string | number | boolean | null>>)["isTerminal"] === true;
 }
 
-export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, onMove, loadColumn, queryKey = "initial", visibleStatus = "", showCompleted = false }: {
+/**
+ * Что будет, если бросить задачу в колонку: просто сменить этап, открыть карточку
+ * (там нужны данные: инженер, причина, проверка акта) или ничего (этап не следующий).
+ */
+export function boardDropDecision(task: Pick<TaskApiRecord, "engineerId">, from: string, to: string, engineerMode = false): { readonly kind: "move" } | { readonly kind: "card"; readonly reason: string } | { readonly kind: "no" } {
+  if (from === to || !(TASK_STATUS_TRANSITIONS[from] ?? []).includes(to)) return { kind: "no" };
+  // Инженер не закрывает и не возвращает задачу с проверки: это решает координатор.
+  if (engineerMode && from === "under_review") return { kind: "no" };
+  if (to === "assigned" && !task.engineerId) return { kind: "card", reason: "Выберите инженера в карточке задачи" };
+  if (to === "cancelled") return { kind: "card", reason: "Отменить задачу можно в карточке, указав причину" };
+  if (from === "under_review") return { kind: "card", reason: "Проверьте акт и фото в карточке, там же кнопки «Закрыть» и «На доработку»" };
+  if (to === "under_review") return { kind: "card", reason: "Заполните результат и фото акта в карточке, затем нажмите «Передать на проверку»" };
+  return { kind: "move" };
+}
+
+export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, onMove, loadColumn, queryKey = "initial", visibleStatus = "", showCompleted = false, hideEngineer = false, engineerMode = false }: {
+  /** Доска инженера: с «На проверке» задачу не двигает. */
+  readonly engineerMode?: boolean;
+  /** На доске инженера строка «Инженер» лишняя: все задачи его. */
+  readonly hideEngineer?: boolean;
   readonly tasks?: readonly TaskApiRecord[];
   readonly statuses: readonly ReferenceCatalogValue[];
   readonly equipment: readonly EquipmentApiRecord[];
@@ -119,6 +134,15 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     if (!sourceStatus || sourceStatus === targetStatus || moving.has(taskId)) return;
     const task = itemsFor(sourceStatus).find((item) => item.id === taskId);
     if (!task) return;
+    const decision = boardDropDecision(task, sourceStatus, targetStatus, engineerMode);
+    if (decision.kind !== "move") {
+      setDraggedId(null);
+      setDropTarget(null);
+      if (decision.kind === "card") { toast.info(decision.reason); onOpen(taskId); }
+      else if (engineerMode && sourceStatus === "under_review") toast.info("Задача на проверке у координатора. Если нужно что-то исправить, он вернёт её вам");
+      else toast.warning(`Из «${TASK_STATUS_LABELS[sourceStatus] ?? sourceStatus}» сразу в «${TASK_STATUS_LABELS[targetStatus] ?? targetStatus}» нельзя, только в следующий этап`);
+      return;
+    }
     const before = pages;
     setMoving((state) => new Set(state).add(taskId));
     if (loadColumn) {
@@ -151,8 +175,11 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     const total = totalFor(code);
     const page = pages[code];
     const terminal = (status.attributes as Readonly<Record<string, string | number | boolean | null>>)["isTerminal"] === true;
-    return <section className={`task-board__column task-board__column--${code}${dropTarget === code ? " task-board__column--drop" : ""}`} key={status.id} onDragEnter={() => setDropTarget(code)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }} onDrop={(event) => { event.preventDefault(); const taskId = event.dataTransfer.getData("text/plain") || draggedId; if (taskId) void move(taskId, code); }}>
-      <header><div><StatusBadge tone={tone(code, terminal)}>{status.name}</StatusBadge><strong>{total}</strong></div><span>{terminal ? "Дальше не двигается" : "Перетащите задачу сюда"}</span></header>
+    const draggedTask = draggedId ? columns.flatMap((column) => itemsFor(column.code ?? column.id)).find((item) => item.id === draggedId) : undefined;
+    const draggedFrom = draggedTask?.status;
+    const blocked = Boolean(draggedTask && draggedFrom && draggedFrom !== code && boardDropDecision(draggedTask, draggedFrom, code, engineerMode).kind === "no");
+    return <section className={`task-board__column task-board__column--${code}${dropTarget === code && !blocked ? " task-board__column--drop" : ""}${blocked ? " task-board__column--blocked" : ""}`} key={status.id} onDragEnter={() => setDropTarget(code)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }} onDrop={(event) => { event.preventDefault(); const taskId = event.dataTransfer.getData("text/plain") || draggedId; if (taskId) void move(taskId, code); }}>
+      <header><div><StatusBadge tone={tone(code, terminal)}>{status.name}</StatusBadge><strong>{total}</strong></div></header>
       <div className="task-board__cards" onScroll={(event) => handleScroll(code, event)}>
         {page?.loading ? <p className="task-board__empty">Загружаем задачи…</p> : null}
         {items.map((task) => {
@@ -160,7 +187,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
           const engineer = engineers.find((item) => item.id === task.engineerId);
           const isMoving = moving.has(task.id);
           return <article aria-busy={isMoving} className={`task-board-card${task.isOverdue ? " task-board-card--overdue" : ""}${draggedId === task.id ? " task-board-card--dragging" : ""}`} draggable={!isMoving} key={task.id} onDragEnd={() => { setDraggedId(null); setDropTarget(null); }} onDragStart={(event) => startDrag(event, task.id)}>
-            <button className="task-board-card__open" onClick={() => onOpen(task.id)} type="button"><span>{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span><strong>{task.title}</strong><small>{task.customer?.siteName ?? "Площадка не выбрана"}</small><dl><div><dt>Прибор</dt><dd>{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</dd></div><div><dt>Инженер</dt><dd>{task.engineerName ?? engineer?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</dd></div></dl></button>
+            <button className="task-board-card__open" onClick={() => onOpen(task.id)} type="button"><span>{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span><strong>{task.title}</strong><small>{task.customer?.siteName ?? "Площадка не выбрана"}</small><dl><div><dt>Прибор</dt><dd>{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</dd></div>{hideEngineer ? null : <div><dt>Инженер</dt><dd>{task.engineerName ?? engineer?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</dd></div>}</dl></button>
           </article>;
         })}
         {!page?.loading && items.length === 0 ? <p className="task-board__empty">В этом статусе пока нет задач.</p> : null}

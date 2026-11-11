@@ -50,6 +50,7 @@ import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
+import { FileGallery } from "./FileGallery.js";
 import {
   EngineersPage as OperationsEngineersPage,
   ReportsPage as OperationsReportsPage,
@@ -88,8 +89,8 @@ import {
   Select,
   toast
 } from "./ui.js";
-import { formatDisplayDate } from "./date-format.js";
-import { TASK_STATUS_LABELS } from "./domain/task-status.js";
+import { formatDisplayDate, todayIsoDate } from "./date-format.js";
+import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { toTechnicalCode } from "./slug.js";
 import { AppShell } from "./components/app-shell.js";
 
@@ -102,11 +103,7 @@ const FILE_KIND_LABELS: Readonly<Record<string, string>> = {
 };
 
 function taskStatusTone(status: string): StatusTone {
-  if (status === "closed") return "success";
-  if (status === "under_review") return "info";
-  if (status === "in_progress") return "purple";
-  if (status === "cancelled") return "neutral";
-  return "warning";
+  return TASK_STATUS_TONES[status] ?? "warning";
 }
 
 function formatTaskDate(value: string | undefined, withTime = false): string {
@@ -170,7 +167,7 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
               <td><strong>{task.title}</strong></td>
               <td>{task.customer?.siteName ?? "Не выбрана"}</td>
               <td className="muted">{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · S/N ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · S/N ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</td>
-              <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="urgent-label">срочно</span> : null}{task.isOverdue ? <span className="status-badge status-badge--danger">просрочена</span> : null}</td>
+              <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="urgent-label">срочно</span> : null}{task.isOverdue ? <span className="status-badge status-badge--orange task-overdue-badge">просрочена</span> : null}</td>
               <td>{task.engineerName ?? engineers.find((engineer) => engineer.id === task.engineerId)?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</td>
               <td><StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge></td>
             </tr>
@@ -182,8 +179,12 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
   );
 }
 
-function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = "", initialWorkTypeCode, initialComment = "", initialEquipment, mail, onOpenChange, onCreated, onEquipmentAttached }: {
+function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], canAssignEngineer = false, initialTitle = "", initialWorkTypeCode, initialComment = "", initialEquipment, mail, onOpenChange, onCreated, onEquipmentAttached }: {
   readonly open: boolean;
+  /** Инженеры для необязательного назначения сразу при создании. */
+  readonly engineers?: readonly { readonly id: string; readonly fullName: string }[];
+  /** Назначать инженера при создании может только роль с правом назначения. */
+  readonly canAssignEngineer?: boolean;
   readonly initialComment?: string;
   /** Прибор, найденный по S/N из письма: подставляется сразу, его можно сменить. */
   readonly initialEquipment?: EquipmentApiRecord;
@@ -205,9 +206,14 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
   const [priority, setPriority] = useState<"planned" | "urgent">("planned");
   const [initiatorContactId, setInitiatorContactId] = useState("");
   const [siteContactId, setSiteContactId] = useState("");
-  const [callDate, setCallDate] = useState("");
-  const [periodFrom, setPeriodFrom] = useState("");
-  const [periodTo, setPeriodTo] = useState("");
+  // Сроки по умолчанию: вызов сегодня, срочная до завтра, плановая за неделю. Их можно поменять.
+  const plusDays = (days: number) => { const date = new Date(); date.setDate(date.getDate() + days); return todayIsoDate(date); };
+  const [callDate, setCallDate] = useState(() => todayIsoDate());
+  const [periodFrom, setPeriodFrom] = useState(() => todayIsoDate());
+  const [periodTo, setPeriodTo] = useState(() => plusDays(7));
+  const [periodTouched, setPeriodTouched] = useState(false);
+  const [partsOpen, setPartsOpen] = useState(false);
+  const [engineerId, setEngineerId] = useState("");
   const [selectedParts, setSelectedParts] = useState<readonly SelectedTaskPart[]>([]);
   const [partsWarranty, setPartsWarranty] = useState(false);
   const [partsForSale, setPartsForSale] = useState(false);
@@ -271,6 +277,9 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
 
   useEffect(() => {
     if (open) return;
+    setCallDate(todayIsoDate()); setPeriodFrom(todayIsoDate()); setPeriodTo(plusDays(7)); setPeriodTouched(false); setPartsOpen(false);
+    setPriority("planned");
+    setEngineerId("");
     setSelectedParts([]);
     setPartsWarranty(false);
     setPartsForSale(false);
@@ -438,16 +447,22 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
         ...(callDate ? { callDate: taskCalendarDate(callDate) } : {}),
         ...(comment ? { callReason: comment } : {})
       });
+      let created = task;
+      if (engineerId) {
+        try { created = await m2Api.assignTask(task.id, engineerId); }
+        catch (assignError) { toast.warning(`Задача создана, но инженер не назначен: ${assignError instanceof Error ? assignError.message : "ошибка"}. Назначьте в карточке.`); }
+      }
       if (selectedParts.length > 0) {
+        // Задача уже создана: ошибка запчастей не должна выглядеть как «не создана», иначе повтор создаст дубль.
         await m2Api.replaceTaskParts(task.id, selectedParts.map((part) => ({
           articleNumber: part.articleNumber,
           name: part.name,
           quantity: part.quantity,
           condition: partsWarranty ? "G" : "N",
           ...(partsForSale ? { forSale: true } : {})
-        })));
+        }))).catch((partsError: unknown) => toast.warning(`Задача ${task.number} создана, но запчасти не сохранились: ${partsError instanceof Error ? partsError.message : "ошибка"}. Добавьте их в карточке.`));
       }
-      await onCreated(task);
+      await onCreated(created);
     } catch (createError) {
       toast.error(createError instanceof Error ? createError.message : "Не получилось создать задачу");
     } finally {
@@ -461,22 +476,22 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
       ? "Нет людей в справочнике «Клиенты»"
       : "Не выбран";
 
-  return <DialogForm busy={busy} description={mail ? "Поля заполнены по письму. Проверьте и поправьте их перед созданием: после создания клиенту уйдёт автоответ с номером заявки." : "Инициатор и клиент — люди из справочника «Клиенты». Выбор сохраняет площадку и плательщика в паспорте прибора."} onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title={mail ? "Задача из письма" : "Новая задача"}>
+  // Сначала люди с площадки прибора. Выбор человека с другой площадки переносит прибор туда, это подписано.
+  const orderedContacts = [...contactChoices].sort((left, right) => Number(left.siteId !== selectedEquipment?.siteId) - Number(right.siteId !== selectedEquipment?.siteId));
+  const contactLabel = (person: (typeof contactChoices)[number]) => {
+    const base = showSiteInContactLabel ? `${person.fullName} · ${person.siteName}` : person.fullName;
+    return selectedEquipment?.siteId && person.siteId !== selectedEquipment.siteId ? `${base} (прибор переедет на эту площадку)` : base;
+  };
+
+  const changePriority = (urgent: boolean) => {
+    setPriority(urgent ? "urgent" : "planned");
+    // Пока срок не меняли руками, подстраиваем его под срочность.
+    if (!periodTouched) { setPeriodFrom(todayIsoDate()); setPeriodTo(plusDays(urgent ? 1 : 7)); }
+  };
+
+  return <DialogForm busy={busy} description={mail ? "Поля заполнены по письму. Проверьте их: после создания клиенту уйдёт автоответ с номером заявки." : "Выберите прибор, и клиент с плательщиком подставятся сами. Поля со звёздочкой обязательны."} onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title={mail ? "Задача из письма" : "Новая задача"}>
       {mail ? <MailSourcePanel mail={mail} /> : null}
-      <label className="field-wide">Название задачи *<input autoFocus defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, диагностика анализатора" required /></label>
-      <label>Вид работ *<Select onChange={(event) => setWorkTypeCode(event.target.value)} required value={workTypeCode}>{activeWorkTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
-      <label className="task-priority-check">
-        <input
-          checked={priority === "urgent"}
-          onChange={(event) => setPriority(event.target.checked ? "urgent" : "planned")}
-          type="checkbox"
-        />
-        <span className="task-priority-check__text">
-          <strong>Срочная</strong>
-          <small>Реакция до 24 ч · иначе плановая</small>
-        </span>
-      </label>
-      <label className="field-wide">Комментарий<textarea defaultValue={initialComment} maxLength={2000} name="comment" placeholder="Кратко опишите суть обращения" rows={3} /></label>
+      <h3 className="task-form-step field-wide"><span>1</span>Прибор</h3>
       <div className="equipment-picker field-wide">
         <span className="equipment-picker__label">Прибор *</span>
         {selectedEquipment && !pickingEquipment ? (
@@ -491,8 +506,59 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
           <EquipmentFolderPicker equipment={equipmentOptions} onSelect={selectEquipment} />
         )}
       </div>
-      <div className="equipment-picker field-wide">
-        <span className="equipment-picker__label">Запчасти</span>
+      <h3 className="task-form-step field-wide"><span>2</span>Клиент</h3>
+      <label>Клиент (контакт на площадке)
+        <Select
+          disabled={!selectedEquipment || contactChoices.length === 0}
+          onChange={(event) => void selectClient(event.target.value)}
+          value={siteContactId}
+        >
+          <option value="">{contactPlaceholder}</option>
+          {orderedContacts.map((person) => (
+            <option key={`client-${person.contactId}`} value={person.contactId}>
+              {contactLabel(person)}
+            </option>
+          ))}
+        </Select>
+      </label>
+      <label>Кто обратился (инициатор)
+        <Select
+          disabled={!selectedEquipment || contactChoices.length === 0}
+          onChange={(event) => void selectInitiator(event.target.value)}
+          value={initiatorContactId}
+        >
+          <option value="">{contactPlaceholder}</option>
+          {orderedContacts.map((person) => (
+            <option key={`initiator-${person.contactId}`} value={person.contactId}>
+              {contactLabel(person)}
+            </option>
+          ))}
+        </Select>
+      </label>
+      <h3 className="task-form-step field-wide"><span>3</span>Что сделать</h3>
+      <label className="field-wide">Название задачи *<input defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, не включается анализатор" required /></label>
+      <label>Вид работ *<Select onChange={(event) => setWorkTypeCode(event.target.value)} required value={workTypeCode}>{activeWorkTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
+      <label className="task-priority-check">
+        <input
+          checked={priority === "urgent"}
+          onChange={(event) => changePriority(event.target.checked)}
+          type="checkbox"
+        />
+        <span className="task-priority-check__text">
+          <strong>Срочная</strong>
+          <small>Выезд в течение 24 часов</small>
+        </span>
+      </label>
+      <label className="field-wide">Причина вызова (со слов клиента)<textarea defaultValue={initialComment} maxLength={2000} name="comment" placeholder="Что случилось с прибором. Инженер увидит это в акте и сможет уточнить" rows={3} /></label>
+      <h3 className="task-form-step field-wide"><span>4</span>Сроки и исполнитель</h3>
+      <div className="dialog-form-row-3">
+        <label>Дата вызова<DatePicker onChange={setCallDate} value={callDate} /></label>
+        <label>Выполнить с *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodFrom(value); }} required value={periodFrom} /></label>
+        <label>Выполнить до *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodTo(value); }} required value={periodTo} /></label>
+      </div>
+      {canAssignEngineer && engineers.length ? <label className="field-wide">Инженер (можно назначить позже)<Select onChange={(event) => setEngineerId(event.target.value)} value={engineerId}><option value="">Назначу позже</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label> : null}
+      {partsOpen || selectedParts.length > 0 ? <div className="equipment-picker field-wide">
+        <span className="equipment-picker__label">Запчасти для выезда</span>
         <PartsMultiPicker
           forSale={partsForSale}
           onChange={setSelectedParts}
@@ -501,40 +567,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, initialTitle = ""
           value={selectedParts}
           warranty={partsWarranty}
         />
-      </div>
-      <label>Инициатор
-        <Select
-          disabled={!selectedEquipment || contactChoices.length === 0}
-          onChange={(event) => void selectInitiator(event.target.value)}
-          value={initiatorContactId}
-        >
-          <option value="">{contactPlaceholder}</option>
-          {contactChoices.map((person) => (
-            <option key={`initiator-${person.contactId}`} value={person.contactId}>
-              {showSiteInContactLabel ? `${person.fullName} · ${person.siteName}` : person.fullName}
-            </option>
-          ))}
-        </Select>
-      </label>
-      <label>Клиент
-        <Select
-          disabled={!selectedEquipment || contactChoices.length === 0}
-          onChange={(event) => void selectClient(event.target.value)}
-          value={siteContactId}
-        >
-          <option value="">{contactPlaceholder}</option>
-          {contactChoices.map((person) => (
-            <option key={`client-${person.contactId}`} value={person.contactId}>
-              {showSiteInContactLabel ? `${person.fullName} · ${person.siteName}` : person.fullName}
-            </option>
-          ))}
-        </Select>
-      </label>
-      <div className="dialog-form-row-3">
-        <label>Дата вызова<DatePicker onChange={setCallDate} value={callDate} /></label>
-        <label>Период с *<DatePicker onChange={setPeriodFrom} required value={periodFrom} /></label>
-        <label>Период по *<DatePicker onChange={setPeriodTo} required value={periodTo} /></label>
-      </div>
+      </div> : <button className="task-form-add field-wide" onClick={() => setPartsOpen(true)} type="button">+ Добавить запчасти со склада (необязательно)</button>}
   </DialogForm>;
 }
 
@@ -562,6 +595,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [resultEditing, setResultEditing] = useState(false);
   const [overviewEditing, setOverviewEditing] = useState(false);
   const [detailTab, setDetailTab] = useState<"overview" | "result" | "materials" | "history">(initialTab);
+  const [resultCatalogs, setResultCatalogs] = useState<{ readonly reasons: readonly ReferenceCatalogValue[]; readonly workTypes: readonly ReferenceCatalogValue[] }>({ reasons: [], workTypes: [] });
   const task = card.task;
   type PartDraft = Omit<TaskPartPosition, "id" | "quantity"> & { readonly key: string; readonly quantity: string };
   const toPartDrafts = (parts: readonly TaskPartPosition[]): readonly PartDraft[] => parts.map((part) => ({
@@ -577,6 +611,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [actEquipmentRows, setActEquipmentRows] = useState<readonly WorkActEquipmentRow[]>(initialAct.equipment);
   const [actWorkRows, setActWorkRows] = useState<readonly WorkActWorkRow[]>(initialAct.works);
   const canAssign = card.availableActions.some((action) => action.code === "assign");
+  // Сменить инженера можно, пока задача не на проверке: например, если назначенный заболел.
+  const canReassign = card.canReassign === true;
   const canCloseReview = card.availableActions.some((action) => action.code === "verify_closure" || action.code === "close");
   const canReturnReview = card.availableActions.some((action) => action.code === "return_for_rework");
 
@@ -591,7 +627,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   }, [task.id]);
 
   useEffect(() => {
-    if (!canAssign || !card.equipment) return;
+    if ((!canAssign && !canReassign) || !card.equipment) return;
     void m2Api.taskAssignmentSuggestions(task.id, card.equipment.manufacturer, card.equipment.model)
       .then((items) => {
         const ranked = [...items].sort((left, right) => {
@@ -602,10 +638,20 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           return left.fullName.localeCompare(right.fullName, "ru");
         });
         setSuggestions(ranked);
-        setEngineerId(ranked[0]?.engineerId ?? "");
+        setEngineerId(ranked.find((item) => item.engineerId !== card.engineer?.id)?.engineerId ?? ranked[0]?.engineerId ?? "");
       })
       .catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить список инженеров"));
-  }, [task.id, canAssign, card.equipment?.id]);
+  }, [task.id, canAssign, canReassign, card.equipment?.id]);
+
+  useEffect(() => {
+    // Справочники для формы результата грузим, когда её открывают.
+    if (!resultEditing) return;
+    void Promise.all([m2Api.listCatalogValues("task-reasons"), m2Api.listCatalogValues("work-types")])
+      .then(([reasons, types]) => setResultCatalogs({ reasons: reasons.filter((item) => item.isActive), workTypes: types }))
+      .catch(() => toast.warning("Не получилось загрузить справочник причин. Обновите страницу, если списка нет."));
+  }, [resultEditing]);
+  const hoursRequired = (resultCatalogs.workTypes.length ? resultCatalogs.workTypes : workTypes)
+    .find((item) => (item.code ?? item.id) === (task.workTypeCode ?? card.workType?.code))?.attributes.requiresHours === true;
 
   const perform = async (code: string, suppliedComment?: string) => {
     setBusy(true);
@@ -613,7 +659,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     try {
       if (code === "assign") {
         if (!engineerId) throw new Error("Выберите инженера");
-        await m2Api.assignTask(task.id, engineerId);
+        if (canReassign) await m2Api.reassignTask(task.id, engineerId);
+        else await m2Api.assignTask(task.id, engineerId);
         setAssignDialogOpen(false);
       } else if (code === "verify_closure") {
         await m2Api.acceptTaskClosure(task.id, "Проверено координатором");
@@ -716,20 +763,34 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     }
   };
 
+  // Текущее фото акта: то, что записано в закрытии, иначе последнее загруженное.
+  const latestActFile = card.files.find((file) => file.id === card.closure?.actFileId) ?? [...card.files].reverse().find((file) => file.kind === "act");
+  const photoCount = card.files.filter((file) => file.kind === "photo").length;
+  const videoCount = card.files.filter((file) => file.kind === "video").length;
+  const mediaQuotaError = (photos: number, videos: number): string | null => {
+    if (photoCount + photos > 10) return `К задаче можно приложить не больше 10 фото. Уже есть ${photoCount}, можно добавить ещё ${Math.max(0, 10 - photoCount)}.`;
+    if (videoCount + videos > 2) return `К задаче можно приложить не больше 2 видео. Уже есть ${videoCount}, можно добавить ещё ${Math.max(0, 2 - videoCount)}.`;
+    return null;
+  };
+
   const saveResult = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
     setFormError(null);
     try {
       const data = new FormData(event.currentTarget);
-      const existingActId = card.closure?.actFileId ?? card.files.find((file) => file.kind === "act")?.id;
+      const existingActId = card.closure?.actFileId ?? latestActFile?.id;
       const actFiles = data.getAll("actPhoto").filter((item): item is File => item instanceof File && item.size > 0);
-      let actFileId = existingActId;
-      if (actFiles.length) {
-        const uploaded = await m2Api.uploadTaskFiles(task.id, actFiles, "act");
-        actFileId = [...uploaded].reverse().find((file) => file.kind === "act")?.id ?? actFileId;
-      }
-      await m2Api.updateTaskResult(task.id, {
+      const media = data.getAll("fieldMedia").filter((item): item is File => item instanceof File && item.size > 0);
+      const videos = media.filter((file) => file.type.startsWith("video/"));
+      const photos = media.filter((file) => !file.type.startsWith("video/"));
+      // Лимит базы: 10 фото и 2 видео на задачу. Проверяем до сохранения, чтобы не загрузить часть.
+      const quotaError = mediaQuotaError(photos.length, videos.length);
+      if (quotaError) throw new Error(quotaError);
+      const numberField = (name: string) => String(data.get(name) ?? "").trim() === "" ? null : Number(String(data.get(name)).replace(",", "."));
+      const reasonCode = String(data.get("reasonCode") ?? "") || null;
+      const workModifier = (String(data.get("workModifier") ?? "") || null) as "G" | "N" | null;
+      const payload = {
         callReason: String(data.get("callReason") ?? "").trim(),
         workDescription: String(data.get("workDescription") ?? "").trim(),
         recommendations: String(data.get("recommendations") ?? "").trim(),
@@ -738,8 +799,29 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         apparatusApproved: data.get("apparatusApproved") === "on",
         customerHasNoClaims: data.get("customerHasNoClaims") === "on",
         continuedInPrimary: data.get("continuedInPrimary") === "on",
-        ...(actFileId ? { actFileId } : {})
-      });
+        // Отправляем только то, что поменяли: так не сотрём значение, которого нет в списке.
+        ...(data.has("reasonCode") && reasonCode !== (task.reasonCode ?? card.reason?.code ?? null) ? { reasonCode } : {}),
+        ...(data.has("workModifier") && workModifier !== (task.workModifier ?? null) ? { workModifier } : {}),
+        ...(data.has("meterReading") && numberField("meterReading") !== (task.meterReading ?? null) ? { meterReading: numberField("meterReading") } : {}),
+        ...(data.has("hours") && numberField("hours") !== (task.hours ?? null) ? { hours: numberField("hours") } : {})
+      };
+      // Сначала текст: если база его не примет, файлы не загрузятся зря.
+      await m2Api.updateTaskResult(task.id, { ...payload, ...(existingActId ? { actFileId: existingActId } : {}) });
+      try {
+        if (actFiles.length) {
+          const uploaded = await m2Api.uploadTaskFiles(task.id, actFiles, "act");
+          const actFileId = [...uploaded].reverse().find((file) => file.kind === "act")?.id;
+          if (actFileId) await m2Api.updateTaskResult(task.id, { ...payload, actFileId });
+        }
+        if (photos.length) await m2Api.uploadTaskFiles(task.id, photos, "photo");
+        if (videos.length) await m2Api.uploadTaskFiles(task.id, videos, "video");
+      } catch (uploadError) {
+        // Текст уже сохранён: закрываем форму и показываем, что есть, чтобы повтор не дублировал файлы.
+        setResultEditing(false);
+        toast.warning(`Результат сохранён, но часть файлов не загрузилась: ${uploadError instanceof Error ? uploadError.message : "ошибка"}. Проверьте вкладку «Файлы и запчасти» и догрузите недостающие.`);
+        await onChanged();
+        return;
+      }
       setResultEditing(false);
       await onChanged();
     } catch (saveError) {
@@ -755,6 +837,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     const selected = [...(event.target.files ?? [])];
     event.target.value = "";
     if (!selected.length) return;
+    const kindOf = (file: File) => kind ?? (file.type.startsWith("video/") ? "video" : file.type.startsWith("image/") ? "photo" : "document");
+    const quotaError = mediaQuotaError(selected.filter((file) => kindOf(file) === "photo").length, selected.filter((file) => kindOf(file) === "video").length);
+    if (quotaError) { toast.warning(quotaError); return; }
     setBusy(true);
     try {
       const groups = new Map<"act" | "photo" | "video" | "document", File[]>();
@@ -779,7 +864,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     }
   };
 
-  const canEditResult = card.canEditParts === true;
+  // Результат правит инженер задачи (пока она в работе) или координатор с полным правом на задачи.
+  const canEditResult = card.canSubmitResult === true || card.canSetWorkModifier === true;
   const canUploadFiles = card.canUploadFiles === true || canEditResult;
 
   const workTypeLabel = card.workType?.name ? `${card.workType.name}${task.workModifier ? ` · ${task.workModifier}` : ""}` : "—";
@@ -789,12 +875,47 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const workflowActions = card.availableActions.filter((action) => action.code !== "assign" && action.code !== "cancel" && (task.status !== "under_review" || (action.code !== "verify_closure" && action.code !== "close" && action.code !== "return_for_rework")));
   const overviewHeaderActions = (card.canEditOverview || canCancel) ? <>
     {card.canEditOverview ? <Button onClick={() => { setFormError(null); setOverviewEditing(true); }} variant="secondary">Изменить задачу</Button> : null}
-    {canCancel ? <IconButton disabled={busy} icon="trash" label="Удалить задачу" onClick={() => setActionDialog("cancel")} variant="danger" /> : null}
+    {canCancel ? <Button className="button--danger-outline" disabled={busy} onClick={() => setActionDialog("cancel")} variant="secondary">Отменить задачу</Button> : null}
   </> : undefined;
+  // Что делать дальше по задаче: одна понятная подсказка и главные кнопки над вкладками.
+  const hasActPhoto = Boolean(latestActFile);
+  // Результат заполняет инженер задачи; координатор может дописать его за инженера.
+  const isTaskEngineer = card.canSubmitResult === true;
+  const needsResult = task.status === "in_progress" && canEditResult;
+  const resultFilled = Boolean(task.callReason?.trim() && task.workDescription?.trim());
+  const reworkNote = task.status === "in_progress" && task.reworkComment ? task.reworkComment : undefined;
+  const nextStep: { readonly title: string; readonly hint: string; readonly tone?: "warning" } | null =
+    canAssign ? { title: "Назначьте инженера", hint: "Задача ждёт исполнителя. После назначения инженер получит уведомление." }
+      : workflowActions.some((action) => action.code === "accept") ? (card.isTaskEngineer ? { title: "Примите задачу", hint: "Подтвердите, что берёте задачу в работу. Координатор увидит, что вы приступили." } : { title: `Задача ждёт, когда инженер${card.engineer ? ` ${card.engineer.fullName}` : ""} её примет`, hint: "Принять за инженера можно, если он подтвердил выезд по телефону." })
+        : reworkNote && isTaskEngineer ? { title: "Задачу вернули на доработку", hint: `Что исправить: ${reworkNote}. Поправьте результат или фото и снова передайте на проверку.`, tone: "warning" }
+          : workflowActions.some((action) => action.code === "submit_for_review") && resultFilled ? { title: "Всё заполнено, можно передать на проверку", hint: "Координатор проверит акт и фото и закроет задачу." }
+            : needsResult && isTaskEngineer ? { title: "Заполните результат работ", hint: hasActPhoto ? "Опишите причину вызова и работы, отметьте пункты акта. Потом появится кнопка «Передать на проверку»." : "Опишите работы и загрузите фото подписанного акта. Потом появится кнопка «Передать на проверку»." }
+              : needsResult ? { title: `Задача в работе у инженера${card.engineer ? ` ${card.engineer.fullName}` : ""}`, hint: reworkNote ? `Возвращена на доработку: ${reworkNote}` : "Инженер заполнит результат и передаст задачу на проверку. При необходимости результат можно дописать за него." }
+                : workflowActions.some((action) => action.code === "activate") ? { title: "Задача запланирована", hint: "Когда подойдёт срок, отметьте её как новую, чтобы назначить инженера." }
+                  : task.status === "under_review" && !canCloseReview && !canReturnReview ? { title: "Задача на проверке", hint: "Координатор проверяет акт и фото. Если нужно что-то исправить, задача вернётся с комментарием." }
+                    : workflowActions.length ? { title: "Следующий шаг", hint: "Выберите действие по задаче." }
+                      : null;
   if (actOpen) return <WorkAct act={buildWorkAct(card, { equipment: actEquipmentRows, works: actWorkRows })} onBack={() => setActOpen(false)} />;
   return <>
     <EntityDetailToolbar actions={<Button onClick={() => setActOpen(true)} variant="secondary">Открыть акт</Button>} backLabel="К списку задач" onBack={onBack} />
     <EntityDetailHeader aside={<StatusBadge tone={taskStatusTone(task.status)}>{card.status.name}</StatusBadge>} description={`${card.workType?.name ?? "Вид работ не указан"} · ${task.customer?.siteName ?? "Площадка не указана"}`} meta={task.isOverdue ? <span className="entity-detail-heading__overdue">Срок истёк</span> : undefined} title={task.title} />
+    {nextStep ? <section aria-label="Следующий шаг" className={`task-next-step${nextStep.tone === "warning" ? " task-next-step--warning" : ""}`}>
+      <div className="task-next-step__text"><strong>{nextStep.title}</strong><span>{nextStep.hint}</span></div>
+      <div className="task-next-step__actions">
+        {needsResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={workflowActions.length || !isTaskEngineer ? "secondary" : "primary"}>{!isTaskEngineer ? "Заполнить результат за инженера" : task.callReason ? "Изменить результат и фото" : "Заполнить результат и фото"}</Button> : null}
+        {canAssign ? <Button disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)}>Назначить инженера</Button> : null}
+        {workflowActions.filter((action) => action.code !== "submit_for_review" || resultFilled).map((action) => <Button busy={busy} disabled={busy} key={action.code} onClick={() => void perform(action.code)}>{action.label}</Button>)}
+      </div>
+    </section> : null}
+    {task.status === "under_review" && (canCloseReview || canReturnReview) ? <ClosureReview
+      busy={busy}
+      canClose={canCloseReview}
+      canReturn={canReturnReview}
+      card={card}
+      onClose={async () => { await perform(card.availableActions.some((action) => action.code === "verify_closure") ? "verify_closure" : "close"); }}
+      onOpenAct={() => setActOpen(true)}
+      onReturn={async (comment) => { await perform("return_for_rework", comment); }}
+    /> : null}
     <PageTabs items={[{ value: "overview", label: "Обзор" }, { value: "result", label: "Результат и акт" }, { value: "materials", label: "Файлы и запчасти", badge: card.files.length + card.parts.length }, { value: "history", label: "История", badge: card.journal.length }]} label="Разделы карточки задачи" onValueChange={setDetailTab} value={detailTab} />
     {detailTab === "overview" ? <section className="card task-card-summary">
       <CardHeader action={overviewHeaderActions} meta="Основные параметры" title="О задаче" />
@@ -844,9 +965,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             <dl className="task-field-grid">
               <div><dt>Площадка</dt><dd className={task.customer?.siteName ? undefined : "is-empty"}>{task.customer?.siteName ?? "—"}{task.customer?.address ? <small>{task.customer.address}</small> : null}</dd></div>
               <div><dt>Инициатор</dt><dd className={task.initiator?.fullName || task.initiatorName ? undefined : "is-empty"}>{task.initiator?.fullName ?? task.initiatorName ?? "—"}</dd></div>
-              <div><dt>Клиент</dt><dd className={task.customer?.contactFullName ? undefined : "is-empty"}>{task.customer?.contactFullName ?? "—"}{contactDetails ? <small>{contactDetails}</small> : null}</dd></div>
+              <div><dt>Клиент</dt><dd className={task.customer?.contactFullName ? undefined : "is-empty"}>{task.customer?.contactFullName ?? "—"}{contactDetails ? <small className="task-contact-links">{task.customer?.contactPhone ? <a href={`tel:${task.customer.contactPhone.replace(/[^\d+]/gu, "")}`}>{task.customer.contactPhone}</a> : null}{task.customer?.contactEmail ? <a href={`mailto:${task.customer.contactEmail}`}>{task.customer.contactEmail}</a> : null}</small> : null}</dd></div>
               <div><dt>Плательщик</dt><dd className={task.customer?.payerName ? undefined : "is-empty"}>{task.customer?.payerName ?? "—"}</dd></div>
-              <div><dt>Инженер</dt><dd className={card.engineer ? undefined : "is-empty"}>{card.engineer?.fullName ?? "Не назначен"}</dd></div>
+              <div><dt>Инженер</dt><dd className={card.engineer ? undefined : "is-empty"}>{card.engineer?.fullName ?? "Не назначен"}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить инженера</button> : null}</dd></div>
               <div><dt>Договор</dt><dd className={task.contractNumber || task.contractId ? undefined : "is-empty"}>{task.contractNumber ?? task.contractId ?? "—"}</dd></div>
             </dl>
           </div>
@@ -859,24 +980,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
               <div><dt>Показание счётчика</dt><dd className={meterLabel === undefined ? "is-empty" : undefined}>{meterLabel ?? "—"}</dd></div>
             </dl>
           </div>
-          {canAssign || workflowActions.length > 0 ? <div className="task-workflow-bar">
-            {canAssign ? <div className="assignment-control">
-              <Button disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)}>Назначить инженера</Button>
-            </div> : null}
-            {workflowActions.map((action) => <Button disabled={busy} key={action.code} onClick={() => action.code === "return_for_rework" ? setActionDialog(action.code) : void perform(action.code)} variant={action.code === "return_for_rework" ? "secondary" : "primary"}>{action.label}</Button>)}
-          </div> : null}
         </div>
       </div>
     </section> : null}
-    {detailTab === "overview" && task.status === "under_review" ? <ClosureReview
-      busy={busy}
-      canClose={canCloseReview}
-      canReturn={canReturnReview}
-      card={card}
-      onClose={async () => { await perform(card.availableActions.some((action) => action.code === "verify_closure") ? "verify_closure" : "close"); }}
-      onOpenAct={() => setActOpen(true)}
-      onReturn={async (comment) => { await perform("return_for_rework", comment); }}
-    /> : null}
     {detailTab === "result" ? <section className="card task-result-card">
       <CardHeader
         action={<>
@@ -896,7 +1002,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         <div className="task-flag-grid" role="list">
           <article role="listitem"><span>Работы выполнены полностью</span><TaskFlag value={task.workCompleted ?? card.closure?.workCompleted} /></article>
           <article role="listitem"><span>Аппарат исправен и допущен</span><TaskFlag value={task.apparatusApproved ?? card.closure?.apparatusApproved} /></article>
-          <article role="listitem"><span>Претензий нет</span><TaskFlag value={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims} /></article>
+          <article role="listitem"><span>Заказчик претензий не имеет</span><TaskFlag value={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims} /></article>
           <article role="listitem"><span>Продолжение первичной заявки</span><TaskFlag value={task.continuedInPrimary} /></article>
         </div>
       </div>
@@ -917,13 +1023,20 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <label className="field-wide">Описание работ<textarea defaultValue={task.workDescription ?? ""} maxLength={4000} name="workDescription" required rows={4} /></label>
       <label className="field-wide">Рекомендации<textarea defaultValue={task.recommendations ?? ""} maxLength={2000} name="recommendations" rows={3} /></label>
       <label className="field-wide">Замечания пользователя<textarea defaultValue={task.userRemarks ?? ""} maxLength={2000} name="userRemarks" rows={3} /></label>
+      <label>Причина неисправности<Select defaultValue={task.reasonCode ?? card.reason?.code ?? ""} name="reasonCode"><option value="">Не выбрана</option>{card.reason && !resultCatalogs.reasons.some((item) => (item.code ?? item.id) === card.reason?.code) ? <option value={card.reason.code}>{card.reason.name}</option> : null}{resultCatalogs.reasons.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
+      {card.canSetWorkModifier ? <label>Гарантия или неправильная эксплуатация<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Обычная работа</option><option value="G">Г, гарантийная</option><option value="N">Н, неправильная эксплуатация</option></Select></label> : null}
+      {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
+      {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
+      <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
       <label className="field-check"><input defaultChecked={task.workCompleted ?? card.closure?.workCompleted === true} name="workCompleted" type="checkbox" /><span>Работы выполнены полностью</span></label>
       <label className="field-check"><input defaultChecked={task.apparatusApproved ?? card.closure?.apparatusApproved === true} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>
-      <label className="field-check"><input defaultChecked={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims === true} name="customerHasNoClaims" type="checkbox" /><span>Претензий нет</span></label>
+      <label className="field-check"><input defaultChecked={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims === true} name="customerHasNoClaims" type="checkbox" /><span>Заказчик претензий не имеет</span></label>
       <label className="field-check"><input defaultChecked={task.continuedInPrimary === true} name="continuedInPrimary" type="checkbox" /><span>Продолжение первичной заявки</span></label>
-      <FileDropField accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hint={card.closure?.actFileId || card.files.some((file) => file.kind === "act") ? "Фото акта уже есть, можно заменить новым" : "Нужно для передачи на проверку: JPEG, PNG, WebP или HEIC"} name="actPhoto" title="Фото акта" />
+      </fieldset>
+      <FileDropField accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hint={hasActPhoto ? "Фото акта уже есть, можно заменить новым" : "Обязательно для передачи на проверку: JPEG, PNG, WebP или HEIC"} name="actPhoto" title="Фото подписанного акта" />
+      <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Необязательно. Можно выбрать сразу несколько: всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео).`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
-    <Dialog footer={<><Button onClick={() => setActRowsEditing(false)} variant="secondary">Сохранить строки</Button><Button onClick={() => setActOpen(true)}>Открыть акт</Button></>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Данные печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
+    <Dialog description="Строки нужны только для печатной формы акта и в задаче не сохраняются. Заполните их перед печатью." footer={<><Button onClick={() => setActRowsEditing(false)} variant="secondary">Готово</Button><Button onClick={() => setActOpen(true)}>Открыть акт для печати</Button></>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Строки печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
       <h3>Оборудование</h3>
       <div className="work-act-row-editor__list">{actEquipmentRows.map((item, index) => <div className="work-act-row-editor__equipment" key={`equipment-${index}`}><input aria-label={`Наименование прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="Наименование прибора" value={item.name} /><input aria-label={`Серийный номер прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, serialNumber: event.target.value } : row))} placeholder="Серийный номер" value={item.serialNumber} /><input aria-label={`Показание счётчика прибора ${index + 1}`} inputMode="decimal" onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => {
         if (rowIndex !== index) return row;
@@ -945,15 +1058,23 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     </section></Dialog>
     {detailTab === "materials" ? <div className="task-card-columns">
       <section className="card task-materials-card">
-        <CardHeader meta={formatRussianCount(card.files.length, ["файл", "файла", "файлов"])} title="Файлы" />
-        <div className="task-card-panel">
-          {card.files.length > 0
-            ? <div className="task-card-list">{card.files.map((file) => <a href={file.url ?? "#"} key={file.id}><strong>{file.originalName}</strong><span>{FILE_KIND_LABELS[file.kind] ?? "Файл"} · {(file.byteSize / 1024).toFixed(1)} КБ</span></a>)}</div>
-            : <div className="task-empty task-empty--compact"><Icon name="open" size={18} /><div><strong>Файлов пока нет</strong><p>Добавьте фото акта и фотофиксацию</p></div></div>}
-          {canUploadFiles ? <div className="task-materials-actions">
-            <label className="task-materials-action"><input accept="image/jpeg,image/png,image/webp,image/heic,image/heif" disabled={busy} onChange={(event) => void uploadTaskMaterials(event, "act")} type="file" /><span>Фото акта</span></label>
-            <label className="task-materials-action"><input accept="image/*" disabled={busy} multiple onChange={(event) => void uploadTaskMaterials(event, "photo")} type="file" /><span>Фото</span></label>
-            <label className="task-materials-action"><input accept="video/*" disabled={busy} multiple onChange={(event) => void uploadTaskMaterials(event, "video")} type="file" /><span>Видео</span></label>
+        <CardHeader
+          action={canUploadFiles ? <label className={`button button--primary task-upload-button${busy ? " is-disabled" : ""}`}><input accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx" disabled={busy} multiple onChange={(event) => void uploadTaskMaterials(event)} type="file" /><Icon name="plus" size={16} />{busy ? "Загружаем…" : "Добавить файлы"}</label> : undefined}
+          meta={formatRussianCount(card.files.length, ["файл", "файла", "файлов"])}
+          title="Файлы"
+        />
+        <div className="task-card-panel task-files">
+          <div className="task-files__group">
+            <div className="task-files__head"><h4>Фото подписанного акта</h4>{canUploadFiles ? <label className="text-button task-upload-link"><input accept="image/jpeg,image/png,image/webp,image/heic,image/heif" disabled={busy} onChange={(event) => void uploadTaskMaterials(event, "act")} type="file" />{hasActPhoto ? "Заменить" : "Загрузить"}</label> : null}</div>
+            <FileGallery emptyText="Фото акта ещё не загружено. Оно нужно, чтобы передать задачу на проверку." files={latestActFile ? [latestActFile] : []} />
+          </div>
+          <div className="task-files__group">
+            <div className="task-files__head"><h4>Фото и видео с выезда</h4></div>
+            <FileGallery emptyText="Фото и видео пока нет. Нажмите «Добавить файлы», можно выбрать сразу несколько." files={card.files.filter((file) => file.kind === "photo" || file.kind === "video")} />
+          </div>
+          {card.files.some((file) => file.kind !== "photo" && file.kind !== "video" && file.id !== latestActFile?.id) ? <div className="task-files__group">
+            <div className="task-files__head"><h4>Документы, письма и прежние фото акта</h4></div>
+            <FileGallery files={card.files.filter((file) => file.kind !== "photo" && file.kind !== "video" && file.id !== latestActFile?.id)} />
           </div> : null}
         </div>
       </section>
@@ -997,7 +1118,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       </>}
       onOpenChange={setAssignDialogOpen}
       open={assignDialogOpen}
-      title="Выбор инженера"
+      title={canReassign ? "Смена инженера" : "Выбор инженера"}
     >
       {suggestions.length === 0 ? (
         <p className="form-hint">Инженеров пока нет. Добавьте их в разделе «Инженеры».</p>
@@ -1158,6 +1279,8 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
   const [mailDraft, setMailDraft] = useState<MailInboxRecord | null>(null);
   const [mailEquipment, setMailEquipment] = useState<EquipmentApiRecord | undefined>(undefined);
   const [mailRefresh, setMailRefresh] = useState(0);
+  const [canAssignEngineer, setCanAssignEngineer] = useState(false);
+  useEffect(() => { void m2Api.hasPermission("tasks.assign").then(setCanAssignEngineer).catch(() => setCanAssignEngineer(false)); }, []);
   const reloadTasks = async (currentFilters = appliedFilters, targetPageIndex = pageIndex) => {
     setLoading(true);
     try {
@@ -1359,7 +1482,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
         ) : null}
       </div>
 
-      <TaskCreationForm equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject.replace(/^(?:(?:re|fwd?|ответ|пересл)\s*:\s*)+/iu, "").slice(0, 200) } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} {...(mailDraft && !mailDraft.lowConfidence && mailDraft.status !== "failed" ? { initialComment: mailCommentDraft(mailDraft) } : {})} {...(mailEquipment ? { initialEquipment: mailEquipment } : {})} {...(mailDraft ? { mail: mailDraft } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) { setMailDraft(null); setMailEquipment(undefined); } }} onCreated={async (task) => {
+      <TaskCreationForm canAssignEngineer={canAssignEngineer} engineers={engineers} equipment={equipment} sites={sites} {...(mailDraft?.subject ? { initialTitle: mailDraft.subject.replace(/^(?:(?:re|fwd?|ответ|пересл)\s*:\s*)+/iu, "").slice(0, 200) } : {})} {...(mailDraft?.workTypeCode ? { initialWorkTypeCode: mailDraft.workTypeCode } : {})} {...(mailDraft && !mailDraft.lowConfidence && mailDraft.status !== "failed" ? { initialComment: mailCommentDraft(mailDraft) } : {})} {...(mailEquipment ? { initialEquipment: mailEquipment } : {})} {...(mailDraft ? { mail: mailDraft } : {})} key={mailDraft?.id ?? "manual-task"} onEquipmentAttached={(device) => setEquipment((current) => current.some((item) => item.id === device.id) ? current : [...current, device])} onOpenChange={(open) => { setFormOpen(open); if (!open) { setMailDraft(null); setMailEquipment(undefined); } }} onCreated={async (task) => {
         const draft = mailDraft;
         // Задача уже создана: форму закрываем сразу, чтобы повторное нажатие не создало вторую.
         setFormOpen(false); setMailDraft(null); setMailEquipment(undefined);
@@ -2538,7 +2661,13 @@ function EngineerTaskCard({ task, onOpen }: {
   </button>;
 }
 
-function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
+// Этапы доски инженера: от назначения до закрытия. Закрытые видны всегда, отдельной колонкой.
+const ENGINEER_BOARD_STATUSES: readonly ReferenceCatalogValue[] = (["assigned", "in_progress", "under_review", "closed"] as const).map((code, index) => ({
+  id: code, code, name: TASK_STATUS_LABELS[code] ?? code, isActive: true,
+  attributes: { sortOrder: index, ...(code === "closed" ? { isTerminal: true } : {}) }
+}));
+
+function EngineerTasks({ user, initialTaskId, onTaskRouteChange }: {
   readonly user: ApiSessionUser;
   readonly initialTaskId: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
@@ -2547,6 +2676,7 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
+  const [view, setView] = useState<"board" | "list">("board");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
   const openRequest = useRef(0);
@@ -2630,14 +2760,36 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
       onOpenRelated={async (id) => { await openTask(id); }}
     />;
   }
+  const openFromList = (id: string) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"));
   return <>
-    <PageIntro description="Ваши выезды: адрес, прибор и сроки." title="Мои задачи" />
-    <section aria-busy={loading} aria-labelledby="engineer-task-list-title"><div className="section-heading"><div><h2 id="engineer-task-list-title">Назначенные выезды</h2></div>{page ? <span className="muted">{engineerTaskCount(page.total)}</span> : null}</div>
+    <PageIntro description="Ваши выезды: адрес, прибор и сроки. Откройте задачу, чтобы работать с ней." title="Мои задачи" />
+    <div className="task-view-toolbar">
+      <PageTabs items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать задачи" onValueChange={(next) => { setView(next); setReload((value) => value + 1); }} value={view} />
+    </div>
+    {view === "board" ? <TaskBoard
+      engineers={[]}
+      equipment={[]}
+      loadColumn={async (status, offset, limit) => {
+        const page = await m2Api.tasksPage({ engineerId: user.id, status, sort: status === "closed" ? "updated_desc" : "deadline_asc", limit, offset });
+        return { items: page.items, total: page.total };
+      }}
+      onMove={async (id, status) => {
+        try { await m2Api.transitionTask(id, status); }
+        catch (moveError) { toast.error(moveError instanceof Error ? moveError.message : "Не получилось изменить этап"); throw moveError; }
+      }}
+      onOpen={openFromList}
+      engineerMode
+      hideEngineer
+      queryKey={`engineer#${reload}`}
+      showCompleted
+      statuses={ENGINEER_BOARD_STATUSES}
+    /> : null}
+    {view === "list" ? <section aria-busy={loading} aria-labelledby="engineer-task-list-title"><div className="section-heading"><div><h2 id="engineer-task-list-title">Назначенные выезды</h2></div>{page ? <span className="muted">{engineerTaskCount(page.total)}</span> : null}</div>
       {loading ? <div className="mobile-task-list" role="status"><span className="sr-only">Загрузка задач…</span><div className="mobile-task-skeleton" /><div className="mobile-task-skeleton" /></div> : null}
       {!loading && error ? <div className="mobile-task-error" role="alert"><strong>Список не загрузился</strong><span>{error}</span><Button onClick={() => setReload((value) => value + 1)} variant="secondary">Повторить</Button></div> : null}
       {!loading && !error && page?.items.length === 0 ? <ResourceState description="Когда координатор назначит задачу, она появится здесь." status="empty" title="Назначенных выездов пока нет" /> : null}
-      {!loading && !error && page ? <div className="mobile-task-list">{page.items.map((task) => <EngineerTaskCard key={task.id} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} task={task} />)}</div> : null}
-    </section>
+      {!loading && !error && page ? <div className="mobile-task-list">{page.items.map((task) => <EngineerTaskCard key={task.id} onOpen={openFromList} task={task} />)}</div> : null}
+    </section> : null}
   </>;
 }
 
@@ -2748,8 +2900,18 @@ function App() {
   const [sessionUser, setSessionUser] = useState<ApiSessionUser | null | undefined>(undefined);
   const [role, setRole] = useState<AppRole>("coordinator");
   const [activeView, setActiveView] = useState<NavigationId>(getDefaultView("coordinator"));
-  const [taskRouteId, setTaskRouteId] = useState<string | undefined>(() =>
-    typeof window === "undefined" ? undefined : taskIdFromPathname(window.location.pathname));
+  const [taskRouteId, setTaskRouteId] = useState<string | undefined>(() => {
+    if (typeof window === "undefined") return undefined;
+    // Обновление страницы возвращает на доску; карточку по ссылке (из письма) открываем как раньше.
+    const navigationEntry = window.performance?.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
+    if (navigationEntry?.type === "reload" && taskIdFromPathname(window.location.pathname)) {
+      window.history.replaceState(null, "", "/");
+      return undefined;
+    }
+    return taskIdFromPathname(window.location.pathname);
+  });
+  // Каждый клик по разделу в меню открывает его с начала (у задач это доска, а не список или карточка).
+  const [navigationKey, setNavigationKey] = useState(0);
   const navigation = navigationForSession(role, sessionUser);
   const groups = groupNavigation(navigation);
   const activeItem = navigation.find((item) => item.id === activeView) ?? navigation[0];
@@ -2779,6 +2941,7 @@ function App() {
 
   const navigate = (id: NavigationId) => {
     setActiveView(id);
+    setNavigationKey((value) => value + 1);
     setTaskRouteId(undefined);
     if (window.location.pathname !== "/") window.history.pushState(null, "", "/");
   };
@@ -2816,10 +2979,10 @@ function App() {
       userName={sessionUser.fullName}
     >
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
-      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
-      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
-      {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace view={activeView} /> : null}
-      {navigation.length > 0 && role === "admin" ? <AdminWorkspace onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
+      {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace key={navigationKey} view={activeView} /> : null}
+      {navigation.length > 0 && role === "admin" ? <AdminWorkspace key={navigationKey} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
     </AppShell>
   );
 }

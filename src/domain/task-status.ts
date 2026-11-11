@@ -20,6 +20,20 @@ export const TASK_STATUS_LABELS: Readonly<Record<string, string>> = {
   cancelled: "Отменена"
 };
 
+/**
+ * Цвета этапов, одни на доске, в значках и отчётах:
+ * назначена жёлтая, в работе зелёная, на проверке синяя, закрыта красная.
+ */
+export const TASK_STATUS_TONES: Readonly<Record<string, "neutral" | "orange" | "warning" | "success" | "info" | "danger">> = {
+  planned: "neutral",
+  new: "orange",
+  assigned: "warning",
+  in_progress: "success",
+  under_review: "info",
+  closed: "danger",
+  cancelled: "neutral"
+};
+
 export type TaskStatus = string;
 
 export const TASK_STATUS_TRANSITIONS: Readonly<Record<string, readonly string[]>> = {

@@ -188,6 +188,14 @@ export interface TaskCardResponse {
   readonly canEditOverview?: boolean;
   readonly canEditParts: boolean;
   readonly canUploadFiles?: boolean;
+  /** Сменить инженера (право назначения, задача назначена или в работе). */
+  readonly canReassign?: boolean;
+  /** Заполнить результат и сдать задачу: инженер этой задачи с правом закрытия. */
+  readonly canSubmitResult?: boolean;
+  /** Ставить Г/Н: от этого зависит счёт, поэтому только координатор (tasks.write). */
+  readonly canSetWorkModifier?: boolean;
+  /** Открывший карточку — инженер этой задачи. */
+  readonly isTaskEngineer?: boolean;
   readonly files: readonly EquipmentFileResponse[];
   readonly journal: readonly {
     readonly id: string;
@@ -462,6 +470,15 @@ export function publicApiErrorMessage(message: string | undefined, fallback = "�
   }
   if (/tasks_engineer_required_after_assignment/iu.test(text)) {
     return "Для этого статуса нужно назначить инженера.";
+  }
+  // Коды статусов из базы («under_review») показываем по-русски.
+  const transition = /Недопустимый переход задачи: (\w+) -> (\w+)/u.exec(text) ?? /перевести задачу из «(\w+)» в «(\w+)»/u.exec(text);
+  if (transition) {
+    const from = TASK_STATUS_LABELS[transition[1] ?? ""] ?? transition[1];
+    const to = TASK_STATUS_LABELS[transition[2] ?? ""] ?? transition[2];
+    return /Недостаточно прав/u.test(text)
+      ? `Перевести задачу из «${from}» в «${to}» может только координатор.`
+      : `Задачу нельзя перевести из «${from}» сразу в «${to}». Двигайте её по этапам по порядку.`;
   }
   if (/invalid input syntax for type uuid|22P02/iu.test(text)) {
     return "Некорректное значение фильтра. Сбросьте фильтры и выберите значение из списка.";
@@ -817,6 +834,12 @@ export class M2ApiClient {
   private sessionCache: { readonly userId: string; readonly at: number; readonly value: Promise<ApiSessionUser> } | undefined;
   /** Справочники меняются редко: держим 5 минут, сбрасываем при правке справочника, входе и выходе. */
   private readonly catalogCache = new Map<string, { readonly at: number; readonly value: Promise<readonly ReferenceCatalogValue[]> }>();
+
+  /** Есть ли у текущего пользователя право (из памяти, без лишнего запроса). */
+  public async hasPermission(permission: string): Promise<boolean> {
+    const session = await this.cachedSession();
+    return session.permissions?.includes(permission) === true;
+  }
 
   /** Права текущего пользователя для экранов: из памяти, если вход тот же и прошло меньше минуты. */
   private async cachedSession(): Promise<ApiSessionUser> {
@@ -1844,7 +1867,7 @@ export class M2ApiClient {
         isNew: task.status === "new" || task.status === "assigned",
         isOverdue: task.isOverdue === true,
         site: { name: task.customer?.siteName ?? "", address: task.customer?.address ?? "" },
-        equipment: { id: task.equipmentId ?? "", serialNumber: "", manufacturer: "", model: "" },
+        equipment: { id: task.equipmentId ?? "", serialNumber: task.equipmentLabel?.serialNumber ?? "", manufacturer: task.equipmentLabel?.manufacturer ?? "", model: task.equipmentLabel?.model ?? "" },
         dates: { call: task.callDate, periodFrom: task.periodFrom, periodTo: task.periodTo, visit: task.visitDate }
       })),
       total: page.total,
@@ -1944,8 +1967,17 @@ export class M2ApiClient {
     readonly customerHasNoClaims: boolean;
     readonly continuedInPrimary: boolean;
     readonly actFileId?: string;
+    /** Поля ниже пишутся, только если переданы (undefined не трогает значение, null очищает). */
+    readonly reasonCode?: string | null;
+    readonly workModifier?: "G" | "N" | null;
+    readonly meterReading?: number | null;
+    readonly hours?: number | null;
   }): Promise<TaskCardResponse> {
     const { error } = await this.db().from("tasks").update({
+      ...(input.reasonCode !== undefined ? { reason_code: input.reasonCode } : {}),
+      ...(input.workModifier !== undefined ? { work_modifier: input.workModifier } : {}),
+      ...(input.meterReading !== undefined ? { meter_reading: input.meterReading } : {}),
+      ...(input.hours !== undefined ? { hours: input.hours } : {}),
       call_reason: input.callReason || null,
       work_description: input.workDescription || null,
       recommendations: input.recommendations || null,
@@ -2267,6 +2299,10 @@ export class M2ApiClient {
       canEditOverview: !terminal && canWrite,
       canEditParts: !terminal && canWrite,
       canUploadFiles: !terminal && session.permissions?.includes("files.write") === true,
+      canReassign: Boolean(task.engineerId) && ["assigned", "in_progress"].includes(task.status) && session.permissions?.includes("tasks.assign") === true && session.permissions?.includes("tasks.write") === true,
+      canSubmitResult: task.status === "in_progress" && task.engineerId === session.id && session.permissions?.includes("tasks.close") === true,
+      canSetWorkModifier: !terminal && session.permissions?.includes("tasks.write") === true,
+      isTaskEngineer: Boolean(task.engineerId) && task.engineerId === session.id,
       files: mappedFiles,
       journal: (journal.data ?? []).map((item) => {
         const row = asRow(item);
@@ -2618,6 +2654,13 @@ export class M2ApiClient {
 
   public async assignTask(id: string, engineerId: string, _comment?: string): Promise<TaskApiRecord> {
     const { error } = await this.db().from("tasks").update({ engineer_id: engineerId, status_code: "assigned" }).eq("id", id);
+    throwIfError(error);
+    return this.loadTask(id);
+  }
+
+  /** Сменить инженера у уже назначенной задачи (статус не меняется). */
+  public async reassignTask(id: string, engineerId: string): Promise<TaskApiRecord> {
+    const { error } = await this.db().from("tasks").update({ engineer_id: engineerId }).eq("id", id);
     throwIfError(error);
     return this.loadTask(id);
   }
