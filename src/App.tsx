@@ -861,7 +861,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       } catch (uploadError) {
         // Текст уже сохранён: закрываем форму и показываем, что есть, чтобы повтор не дублировал файлы.
         setResultEditing(false);
-        toast.warning(`Результат сохранён, но часть файлов не загрузилась: ${uploadError instanceof Error ? uploadError.message : "ошибка"}. Проверьте вкладку «Файлы и запчасти» и догрузите недостающие.`);
+        toast.warning(`Результат сохранён, но часть файлов не загрузилась: ${uploadError instanceof Error ? uploadError.message : "ошибка"}. Проверьте вкладку «Работа и акт» и догрузите недостающие.`);
         await onChanged();
         return;
       }
@@ -917,11 +917,14 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const canCancel = card.availableActions.some((action) => action.code === "cancel");
   const workflowActions = card.availableActions.filter((action) => action.code !== "assign" && action.code !== "cancel" && (task.status !== "under_review" || (action.code !== "verify_closure" && action.code !== "close" && action.code !== "return_for_rework")));
   // Править задачу целиком, видеть плательщика и договор: только координатор (tasks.write).
-  const canManageTask = card.canEditOverview === true && card.canSetWorkModifier === true;
-  const showFinance = card.canSetWorkModifier === true;
+  // Ограничения только для инженера этой задачи; координатор и инициатор работают как раньше.
+  const engineerOnly = card.isTaskEngineer === true && card.canSetWorkModifier !== true;
+  const canManageTask = card.canEditOverview === true && !engineerOnly;
+  // Плательщик и договор: по праву на финансы, в том числе в закрытых задачах (для счёта).
+  const showFinance = card.canSeeFinance === true;
   // Инженер добавляет файлы и запчасти, когда принял задачу; координатор в любой открытой задаче.
-  const canEditPartsNow = card.canEditParts === true && (card.canSetWorkModifier === true || task.status === "in_progress");
-  const canAddFilesNow = canUploadFiles && (card.canSetWorkModifier === true || task.status === "in_progress");
+  const canEditPartsNow = card.canEditParts === true && (!engineerOnly || task.status === "in_progress");
+  const canAddFilesNow = canUploadFiles && (!engineerOnly || task.status === "in_progress");
   // Что делать дальше по задаче: одна понятная подсказка и главные кнопки над вкладками.
   const hasActPhoto = Boolean(latestActFile);
   // Результат заполняет инженер задачи; координатор может дописать его за инженера.

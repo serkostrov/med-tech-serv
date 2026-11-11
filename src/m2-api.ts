@@ -194,6 +194,8 @@ export interface TaskCardResponse {
   readonly canSubmitResult?: boolean;
   /** Ставить Г/Н: от этого зависит счёт, поэтому только координатор (tasks.write). */
   readonly canSetWorkModifier?: boolean;
+  /** Видеть плательщика и договор (finance.read), на любом этапе задачи. */
+  readonly canSeeFinance?: boolean;
   /** Открывший карточку — инженер этой задачи. */
   readonly isTaskEngineer?: boolean;
   readonly files: readonly EquipmentFileResponse[];
@@ -2305,6 +2307,7 @@ export class M2ApiClient {
       canReassign: Boolean(task.engineerId) && ["assigned", "in_progress"].includes(task.status) && session.permissions?.includes("tasks.assign") === true && session.permissions?.includes("tasks.write") === true,
       canSubmitResult: task.status === "in_progress" && task.engineerId === session.id && session.permissions?.includes("tasks.close") === true,
       canSetWorkModifier: !terminal && session.permissions?.includes("tasks.write") === true,
+      canSeeFinance,
       isTaskEngineer: Boolean(task.engineerId) && task.engineerId === session.id,
       files: mappedFiles,
       journal: (journal.data ?? []).map((item) => {

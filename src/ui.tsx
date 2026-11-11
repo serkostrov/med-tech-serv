@@ -369,9 +369,9 @@ export function ViewSwitch<Value extends string>({ label, items, value, onValueC
   readonly onValueChange: (value: Value) => void;
 }) {
   return (
-    <div aria-label={label} className="view-switch" role="radiogroup">
+    <div aria-label={label} className="view-switch" role="group">
       {items.map((item) => (
-        <button aria-checked={item.value === value} className={item.value === value ? "view-switch__on" : undefined} key={item.value} onClick={() => onValueChange(item.value)} role="radio" type="button">
+        <button aria-pressed={item.value === value} className={item.value === value ? "view-switch__on" : undefined} key={item.value} onClick={() => onValueChange(item.value)} type="button">
           {item.label}{item.badge ? <small>{item.badge}</small> : null}
         </button>
       ))}
@@ -515,6 +515,7 @@ export function FilterBar({
   const [mobileOpen, setMobileOpen] = useState(false);
   const [panelOpen, setPanelOpen] = useState(false);
   const [activeCount, setActiveCount] = useState(0);
+  const [searchFilled, setSearchFilled] = useState(false);
   const formRef = useRef<HTMLFormElement | null>(null);
   // Поле поиска (класс filter-field--search) стоит в строке; остальные поля при большом
   // количестве прячутся в панель «Фильтры», чтобы не занимать пол-экрана.
@@ -531,6 +532,7 @@ export function FilterBar({
       return control.value.trim() !== "";
     })).length;
     setActiveCount(count);
+    setSearchFilled(Boolean(formRef.current?.querySelector<HTMLInputElement>(".filter-bar__search input")?.value.trim()));
   });
   const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setPanelOpen(false); void onSubmit(); };
   const submitMobile = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void Promise.resolve(onSubmit()).then(() => setMobileOpen(false)); };
@@ -551,7 +553,7 @@ export function FilterBar({
                 {activeCount ? `Фильтры · ${activeCount}` : "Фильтры"}
               </Button>
             : <div className="filter-bar__inline">{fields}</div>}
-          {collapsed ? <>{onReset && activeCount ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null}{search ? <Button busy={loading} busyLabel="Ищем…" type="submit" variant="secondary">Найти</Button> : null}</> : actions}
+          {collapsed ? <>{onReset && (activeCount || searchFilled) ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null}{search ? <Button busy={loading} busyLabel="Ищем…" type="submit" variant="secondary">Найти</Button> : null}</> : actions}
         </div>
         {collapsed ? <div className="filter-bar__panel" hidden={!panelOpen}>
           <div className="filter-bar__fields">{fields}</div>

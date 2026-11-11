@@ -8429,3 +8429,17 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .notification-table__detail td { background: #fafbfc; }
 .notification-table__body { margin: 0; max-width: 90ch; color: var(--color-ink); font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
 .notification-table__detail .notification-item__error { margin-top: 10px; }
+
+/* ===== Исправления по проверке ===== */
+/* Заготовки загрузки на всю ширину (центрирование сжимало их до нуля) */
+.resource-state.resource-state--skeleton { place-content: stretch; justify-items: stretch; width: 100%; }
+/* Шапка: выравнивание по центру только на компьютере, на узких экранах — как было */
+@media (max-width: 900px) { .page-intro__row { align-items: stretch; } }
+/* Доска: резиновые колонки только на широких экранах, подсветка колонки при перетаскивании */
+@media (max-width: 760px) {
+  .task-board { grid-auto-columns: 82vw; }
+  .task-board__column { width: 82vw; min-width: 82vw; }
+}
+.task-board__column.task-board__column--drop { border-color: var(--color-accent); box-shadow: inset 0 0 0 2px rgb(35 142 190 / 18%); }
+/* Кольцо фокуса у вкладок не срезается */
+.page-tabs button:focus-visible { outline-offset: -2px; }
