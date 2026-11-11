@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import React, { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import type { BulkTaskCommandResponse, EngineerTaskListItem, EngineerTaskListResponse, EquipmentHistoryEvent, EquipmentMeterReading, MailInboxRecord, NotificationJournalRecord, NotificationTemplateResponse, TaskPartPosition } from "./types.js";
 import {
   getDefaultView,
@@ -1041,9 +1041,21 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
   </>;
 }
 
+/** Экран на время загрузки карточки: сразу видно, какая задача открывается. */
+function TaskCardLoading({ task, onBack }: { readonly task?: { readonly number?: string; readonly title?: string }; readonly onBack: () => void }) {
+  return <>
+    <PageIntro
+      actions={<Button onClick={onBack} variant="secondary">К списку задач</Button>}
+      description={task?.title || "Загружаем данные задачи"}
+      title={task?.number ? `Задача ${task.number}` : "Открываем задачу"}
+    />
+    <ResourceState description="Подождите, карточка сейчас откроется." status="loading" title="Открываем задачу" />
+  </>;
+}
+
 function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
   readonly initialTaskId: string | undefined;
-  readonly onTaskRouteChange: (taskId?: string) => void;
+  readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   const pageSize = 100;
   const [tasks, setTasks] = useState<readonly TaskApiRecord[]>([]);
@@ -1128,12 +1140,36 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
     if (selected) next.add(id); else next.delete(id);
     return next;
   });
+  const openRequest = useRef(0);
   const openTask = async (id: string, updateRoute = true) => {
-    const loaded = await m2Api.taskCard(id);
+    // Сразу показываем, что задача открывается, а не ждём молча всю карточку.
+    const request = ++openRequest.current;
+    const previous = taskCard;
     setSelectedTaskId(id);
-    setTaskCard(loaded);
+    if (previous?.task.id !== id) setTaskCard(null);
     if (updateRoute) onTaskRouteChange(id);
+    try {
+      const loaded = await m2Api.taskCard(id);
+      if (request === openRequest.current) setTaskCard(loaded);
+    } catch (loadError) {
+      // Ответ устарел (пользователь уже открыл другое): ничего не трогаем.
+      if (request !== openRequest.current) return;
+      if (previous) {
+        // Не удалось обновить или открыть связанную: остаёмся на текущей карточке.
+        setSelectedTaskId(previous.task.id);
+        setTaskCard(previous);
+        if (updateRoute) onTaskRouteChange(previous.task.id, true);
+      } else {
+        setSelectedTaskId(null);
+        setTaskCard(null);
+        if (updateRoute) onTaskRouteChange(undefined, true);
+      }
+      throw loadError;
+    }
   };
+  const closeTask = () => { openRequest.current += 1; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
+  // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
+  useEffect(() => () => { openRequest.current += 1; }, []);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
     const page = await m2Api.tasksPage({
       ...(appliedFilters.search ? { search: appliedFilters.search } : {}),
@@ -1147,20 +1183,35 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
       ...(appliedFilters.overdue ? { overdue: true } : {}),
       sort: appliedFilters.sort,
       limit,
-      offset
+      offset,
+      withAttention: false
     });
     return { items: page.items, total: page.total };
   };
   useEffect(() => {
-    Promise.all([m2Api.tasksPage({ limit: pageSize, offset: 0 }), m2Api.listEquipment(), m2Api.listSites(), m2Api.listCatalogValues("work-types"), m2Api.listCatalogValues("task-statuses"), m2Api.listTaskEngineers()])
-      .then(([taskPage, loadedEquipment, loadedSites, loadedWorkTypes, loadedTaskStatuses, loadedEngineers]) => {
-        setTasks(taskPage.items); setTotal(taskPage.total); setEquipment(loadedEquipment); setSites(loadedSites); setWorkTypes(loadedWorkTypes); setTaskStatuses(loadedTaskStatuses); setEngineers(loadedEngineers);
-      }).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить задачи"))
+    // Каждый список показываем, как только он пришёл: доске нужны только статусы,
+    // приборы и площадки (форма создания, подписи на карточках) догружаются следом.
+    let reported = false;
+    const report = (loadError: unknown) => {
+      if (reported) return;
+      reported = true;
+      toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить задачи");
+    };
+    void m2Api.listCatalogValues("task-statuses").then(setTaskStatuses).catch(report);
+    void m2Api.listCatalogValues("work-types").then(setWorkTypes).catch(report);
+    void m2Api.listTaskEngineers().then(setEngineers).catch(report);
+    void m2Api.listEquipment().then(setEquipment).catch(report);
+    void m2Api.listSites().then(setSites).catch(report);
+    void m2Api.tasksPage({ limit: pageSize, offset: 0 })
+      .then((taskPage) => { setTasks(taskPage.items); setTotal(taskPage.total); })
+      .catch(report)
       .finally(() => setLoading(false));
   }, []);
   useEffect(() => {
-    if (initialTaskId && initialTaskId === selectedTaskId && taskCard) return;
+    // Задача уже открыта или открывается по клику: повторно не загружаем.
+    if (initialTaskId && initialTaskId === selectedTaskId) return;
     if (!initialTaskId) {
+      openRequest.current += 1;
       setSelectedTaskId(null);
       setTaskCard(null);
       return;
@@ -1172,7 +1223,8 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange }: {
         toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
       });
   }, [initialTaskId]);
-  if (selectedTaskId && taskCard) return <TaskCard card={taskCard} onBack={() => { setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); }} onChanged={async () => { await Promise.all([reloadTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
+  if (selectedTaskId && !taskCard) return <TaskCardLoading onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
+  if (selectedTaskId && taskCard) return <TaskCard card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([reloadTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
@@ -2266,7 +2318,7 @@ function FinancePage() {
 function CoordinatorWorkspace({ view, taskRouteId, onTaskRouteChange }: {
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
-  readonly onTaskRouteChange: (taskId?: string) => void;
+  readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
     case "tasks": return <CoordinatorTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} />;
@@ -2286,7 +2338,7 @@ function CoordinatorWorkspace({ view, taskRouteId, onTaskRouteChange }: {
 function AdminWorkspace({ view, taskRouteId, onTaskRouteChange }: {
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
-  readonly onTaskRouteChange: (taskId?: string) => void;
+  readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   if (view === "access") return <AccessAdminPage />;
   if (view === "references") return <ReferencesWorkspace notificationTemplates />;
@@ -2351,7 +2403,7 @@ function EngineerTaskCard({ task, onOpen }: {
 function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
   readonly user: ApiSessionUser;
   readonly initialTaskId: string | undefined;
-  readonly onTaskRouteChange: (taskId?: string) => void;
+  readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   const [page, setPage] = useState<EngineerTaskListResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -2359,12 +2411,33 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
   const [reload, setReload] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
+  const openRequest = useRef(0);
   const openTask = async (id: string, updateRoute = true) => {
-    const loaded = await m2Api.taskCard(id);
+    const request = ++openRequest.current;
+    const previous = taskCard;
     setSelectedTaskId(id);
-    setTaskCard(loaded);
+    if (previous?.task.id !== id) setTaskCard(null);
     if (updateRoute) onTaskRouteChange(id);
+    try {
+      const loaded = await m2Api.taskCard(id);
+      if (request === openRequest.current) setTaskCard(loaded);
+    } catch (loadError) {
+      if (request !== openRequest.current) return;
+      if (previous) {
+        setSelectedTaskId(previous.task.id);
+        setTaskCard(previous);
+        if (updateRoute) onTaskRouteChange(previous.task.id, true);
+      } else {
+        setSelectedTaskId(null);
+        setTaskCard(null);
+        if (updateRoute) onTaskRouteChange(undefined, true);
+      }
+      throw loadError;
+    }
   };
+  const closeTask = () => { openRequest.current += 1; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); };
+  // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
+  useEffect(() => () => { openRequest.current += 1; }, []);
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -2379,8 +2452,9 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
     return () => { active = false; };
   }, [reload]);
   useEffect(() => {
-    if (initialTaskId && initialTaskId === selectedTaskId && taskCard) return;
+    if (initialTaskId && initialTaskId === selectedTaskId) return;
     if (!initialTaskId) {
+      openRequest.current += 1;
       setSelectedTaskId(null);
       setTaskCard(null);
       return;
@@ -2392,10 +2466,13 @@ function EngineerTasks({ initialTaskId, onTaskRouteChange }: {
         toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
       });
   }, [initialTaskId]);
+  if (selectedTaskId && !taskCard) {
+    return <TaskCardLoading onBack={closeTask} task={page?.items.find((item) => item.id === selectedTaskId)} />;
+  }
   if (selectedTaskId && taskCard) {
     return <TaskCard
       card={taskCard}
-      onBack={() => { setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange(); }}
+      onBack={closeTask}
       onChanged={async () => {
         setReload((value) => value + 1);
         await openTask(selectedTaskId, false);
@@ -2418,7 +2495,7 @@ function EngineerWorkspace({ view, user, taskRouteId, onTaskRouteChange }: {
   readonly view: NavigationId;
   readonly user: ApiSessionUser;
   readonly taskRouteId: string | undefined;
-  readonly onTaskRouteChange: (taskId?: string) => void;
+  readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
   switch (view) {
     case "tasks": return <EngineerTasks initialTaskId={taskRouteId} onTaskRouteChange={onTaskRouteChange} user={user} />;
@@ -2556,10 +2633,13 @@ function App() {
     if (window.location.pathname !== "/") window.history.pushState(null, "", "/");
   };
 
-  const changeTaskRoute = (taskId?: string) => {
+  const changeTaskRoute = (taskId?: string, replace = false) => {
     setTaskRouteId(taskId);
     const pathname = taskId ? taskPathname(taskId) : "/";
-    if (window.location.pathname !== pathname) window.history.pushState(null, "", pathname);
+    if (window.location.pathname === pathname) return;
+    // Откат после неудачного открытия не оставляет лишний шаг в истории браузера.
+    if (replace) window.history.replaceState(null, "", pathname);
+    else window.history.pushState(null, "", pathname);
   };
 
   const acceptLogin = (user: ApiSessionUser) => {

@@ -655,6 +655,11 @@ export class M2ApiClient {
   }
 
   private async actorId(): Promise<string> {
+    // Id берётся из локальной сессии без запроса к серверу: раньше каждое действие
+    // ждало лишний ответ сервера. Права всё равно проверяет база по токену (auth.uid()).
+    const { data: sessionData } = await this.db().auth.getSession();
+    const sessionUserId = sessionData.session?.user.id;
+    if (sessionUserId) return sessionUserId;
     const { data, error } = await this.db().auth.getUser();
     throwIfError(error, "Не удалось прочитать сессию");
     if (!data.user) throw new M2ApiError(401, "Нужна сессия");
@@ -707,43 +712,71 @@ export class M2ApiClient {
     return mapEquipment(asRow(data));
   }
 
-  private async signedFile(row: Row, canSeeFinance: boolean): Promise<EquipmentFileResponse | undefined> {
-    if (row.is_financial === true && !canSeeFinance) return undefined;
-    const key = text(row, "storage_key");
-    const { data } = key
-      ? await this.db().storage.from("medtech-files").createSignedUrl(key, 3600)
-      : { data: null };
-    return {
-      id: text(row, "id"),
-      kind: text(row, "kind") || "document",
-      originalName: text(row, "original_name"),
-      contentType: text(row, "content_type") || "application/octet-stream",
-      byteSize: numberValue(row.byte_size) ?? 0,
-      createdAt: iso(row.created_at),
-      equipmentId: optionalText(row, "equipment_id"),
-      url: data?.signedUrl
-    };
-  }
+
 
   private async mapFiles(rows: readonly unknown[] | null, canSeeFinance: boolean): Promise<EquipmentFileResponse[]> {
-    const files: EquipmentFileResponse[] = [];
-    for (const item of rows ?? []) {
-      const mapped = await this.signedFile(asRow(item), canSeeFinance);
-      if (mapped) files.push(mapped);
+    // Ссылки на все файлы одним запросом, а не по одному на файл.
+    const visible = (rows ?? []).map(asRow).filter((row) => !(row.is_financial === true && !canSeeFinance));
+    const keys = visible.map((row) => text(row, "storage_key")).filter(Boolean);
+    const urlByKey = new Map<string, string>();
+    if (keys.length) {
+      const { data } = await this.db().storage.from("medtech-files").createSignedUrls(keys, 3600);
+      for (const item of data ?? []) {
+        if (item.path && item.signedUrl) urlByKey.set(item.path, item.signedUrl);
+      }
     }
-    return files;
+    return visible.map((row) => {
+      const key = text(row, "storage_key");
+      return {
+        id: text(row, "id"),
+        kind: text(row, "kind") || "document",
+        originalName: text(row, "original_name"),
+        contentType: text(row, "content_type") || "application/octet-stream",
+        byteSize: numberValue(row.byte_size) ?? 0,
+        createdAt: iso(row.created_at),
+        equipmentId: optionalText(row, "equipment_id"),
+        url: key ? urlByKey.get(key) : undefined
+      };
+    });
+  }
+
+
+  private sessionCache: { readonly userId: string; readonly at: number; readonly value: Promise<ApiSessionUser> } | undefined;
+  /** Справочники меняются редко: держим 5 минут, сбрасываем при правке справочника, входе и выходе. */
+  private readonly catalogCache = new Map<string, { readonly at: number; readonly value: Promise<readonly ReferenceCatalogValue[]> }>();
+
+  /** Права текущего пользователя для экранов: из памяти, если вход тот же и прошло меньше минуты. */
+  private async cachedSession(): Promise<ApiSessionUser> {
+    const { data } = await this.db().auth.getSession();
+    const userId = data.session?.user.id;
+    const cached = this.sessionCache;
+    if (userId && cached && cached.userId === userId && Date.now() - cached.at < 60_000) return cached.value;
+    const value = this.session();
+    if (userId) this.sessionCache = { userId, at: Date.now(), value };
+    value.catch(() => { if (this.sessionCache?.value === value) this.sessionCache = undefined; });
+    return value;
   }
 
   public async session(): Promise<ApiSessionUser> {
-    const userId = await this.actorId();
-    const { data, error } = await this.db()
+    // Вход проверяет сервер (getUser), а профиль читаем параллельно по id из сохранённого входа.
+    const { data: localData } = await this.db().auth.getSession();
+    const localUserId = localData.session?.user.id;
+    const profileQuery = (userId: string) => this.db()
       .from("users")
       .select("id, full_name, role, email, is_active, access_role_key, access_role:access_roles(key, name, base_role)")
       .eq("id", userId)
       .maybeSingle();
-    throwIfError(error);
-    if (!data) throw new M2ApiError(403, "Профиль пользователя не найден");
-    const row = asRow(data);
+    const [auth, profileGuess] = await Promise.all([
+      this.db().auth.getUser(),
+      localUserId ? profileQuery(localUserId) : Promise.resolve(undefined)
+    ]);
+    throwIfError(auth.error, "Не удалось прочитать сессию");
+    if (!auth.data.user) throw new M2ApiError(401, "Нужна сессия");
+    const userId = auth.data.user.id;
+    const profile = profileGuess && localUserId === userId ? profileGuess : await profileQuery(userId);
+    throwIfError(profile.error);
+    if (!profile.data) throw new M2ApiError(403, "Профиль пользователя не найден");
+    const row = asRow(profile.data);
     const accessRole = related(row, "access_role");
     const roleKey = optionalText(row, "access_role_key") ?? text(row, "role");
     const { data: permissionRows, error: permissionError } = await this.db()
@@ -751,7 +784,7 @@ export class M2ApiClient {
       .select("permission_code")
       .eq("role_key", roleKey);
     throwIfError(permissionError);
-    return {
+    const result: ApiSessionUser = {
       id: text(row, "id"),
       fullName: text(row, "full_name"),
       role: optionalText(accessRole, "base_role") ?? text(row, "role"),
@@ -759,15 +792,22 @@ export class M2ApiClient {
       accessRoleName: optionalText(accessRole, "name"),
       permissions: (permissionRows ?? []).map((item) => text(asRow(item), "permission_code"))
     };
+    // Права уже проверены сервером: экраны в течение минуты берут их из памяти.
+    this.sessionCache = { userId, at: Date.now(), value: Promise.resolve(result) };
+    return result;
   }
 
   public async login(email: string, password: string): Promise<ApiSessionUser> {
+    this.sessionCache = undefined;
+    this.catalogCache.clear();
     const { error } = await this.db().auth.signInWithPassword({ email, password });
     throwIfError(error, "Неверный e-mail или пароль");
     return this.session();
   }
 
   public async logout(): Promise<void> {
+    this.sessionCache = undefined;
+    this.catalogCache.clear();
     const { error } = await this.db().auth.signOut();
     throwIfError(error);
   }
@@ -1577,6 +1617,8 @@ export class M2ApiClient {
     readonly sort?: "deadline_asc" | "deadline_desc" | "updated_asc" | "updated_desc";
     readonly limit?: number;
     readonly offset?: number;
+    /** Счётчики «новые» и «на проверке» (по умолчанию не запрашиваются: экраны их не показывают). */
+    readonly withAttention?: boolean;
   } = {}): Promise<ApiPage<TaskApiRecord> & { readonly attention: { readonly new: number; readonly overdue: number; readonly underReview: number } }> {
     const limit = query.limit ?? 100;
     const offset = query.offset ?? 0;
@@ -1593,9 +1635,15 @@ export class M2ApiClient {
       return next;
     };
     const select = this.taskSelect();
-    const primary = await applyTaskFilters(
-      this.db().from("tasks").select(select, { count: "exact" }).order(sortColumn, { ascending }).range(offset, offset + limit - 1)
-    );
+    const withAttention = query.withAttention === true;
+    // Список и счётчики идут одновременно, а не друг за другом.
+    const [primary, newCountResult, reviewCountResult] = await Promise.all([
+      applyTaskFilters(
+        this.db().from("tasks").select(select, { count: "exact" }).order(sortColumn, { ascending }).range(offset, offset + limit - 1)
+      ),
+      withAttention ? this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "new") : Promise.resolve({ count: 0 }),
+      withAttention ? this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "under_review") : Promise.resolve({ count: 0 })
+    ]);
     let rows = primary.data;
     let error = primary.error;
     let count = primary.count;
@@ -1612,8 +1660,8 @@ export class M2ApiClient {
     }
     throwIfError(error);
     const items = (rows ?? []).map((item) => mapTask(asRow(item)));
-    const { count: newCount } = await this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "new");
-    const { count: reviewCount } = await this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "under_review");
+    const newCount = newCountResult.count;
+    const reviewCount = reviewCountResult.count;
     return {
       items,
       total: count ?? 0,
@@ -2009,56 +2057,63 @@ export class M2ApiClient {
   }
 
   public async taskCard(id: string): Promise<TaskCardResponse> {
-    const task = await this.loadTask(id);
-    const session = await this.session();
-    const canSeeFinance = session.permissions?.includes("finance.read") === true;
-    let parts: { data: unknown[] | null; error: { message?: string } | null } = await this.db()
-      .from("task_parts")
-      .select("id, article_number_snapshot, name_snapshot, quantity, part_condition, for_sale")
-      .eq("task_id", id)
-      .order("position");
-    if (parts.error && /for_sale/iu.test(parts.error.message ?? "")) {
-      parts = await this.db()
+    // Шаг 1: всё, что зависит только от id задачи, одновременно.
+    const loadParts = async (): Promise<{ data: unknown[] | null; error: { message?: string } | null }> => {
+      const withSale = await this.db()
         .from("task_parts")
-        .select("id, article_number_snapshot, name_snapshot, quantity, part_condition")
+        .select("id, article_number_snapshot, name_snapshot, quantity, part_condition, for_sale")
         .eq("task_id", id)
         .order("position");
-    }
-    const [files, journal, engineer, workType, reason, closure, statusRow] = await Promise.all([
+      if (withSale.error && /for_sale/iu.test(withSale.error.message ?? "")) {
+        return this.db()
+          .from("task_parts")
+          .select("id, article_number_snapshot, name_snapshot, quantity, part_condition")
+          .eq("task_id", id)
+          .order("position");
+      }
+      return withSale;
+    };
+    const [task, session, parts, files, journal, closure] = await Promise.all([
+      this.loadTask(id),
+      this.cachedSession(),
+      loadParts(),
       this.db().from("files").select(FILE_SELECT).eq("task_id", id).order("created_at"),
       this.db().from("task_status_history").select("id, from_status, to_status, comment, changed_at, changed_by").eq("task_id", id).order("changed_at", { ascending: false }),
-      task.engineerId ? this.db().from("users").select("id, full_name").eq("id", task.engineerId).maybeSingle() : Promise.resolve({ data: null, error: null }),
-      task.workTypeCode ? this.db().from("work_types").select("code, name").eq("code", task.workTypeCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
-      task.reasonCode ? this.db().from("task_reasons").select("code, name").eq("code", task.reasonCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
-      this.db().from("task_closures").select("task_id, act_file_id, submitted_by, submitted_at, verified_by, verified_at, verification_comment").eq("task_id", id).maybeSingle(),
-      this.db().from("task_statuses").select("code, name").eq("code", task.status).maybeSingle()
+      this.db().from("task_closures").select("task_id, act_file_id, submitted_by, submitted_at, verified_by, verified_at, verification_comment").eq("task_id", id).maybeSingle()
     ]);
     throwIfError(parts.error);
     throwIfError(files.error);
     throwIfError(journal.error);
-    throwIfError(engineer.error);
-    throwIfError(workType.error);
-    throwIfError(reason.error);
     throwIfError(closure.error);
-    throwIfError(statusRow.error);
+    const canSeeFinance = session.permissions?.includes("finance.read") === true;
     const closureRow = closure.data ? asRow(closure.data) : undefined;
     const submitterId = closureRow ? optionalText(closureRow, "submitted_by") : undefined;
-    const submitter = submitterId
-      ? await this.db().from("users").select("full_name").eq("id", submitterId).maybeSingle()
-      : { data: null, error: null };
-    throwIfError(submitter.error);
-    const actorIds = [...new Set((journal.data ?? []).map((item) => optionalText(asRow(item), "changed_by")).filter((value): value is string => Boolean(value)))];
-    const actors = actorIds.length
-      ? await this.db().from("users").select("id, full_name").in("id", actorIds)
-      : { data: [], error: null };
-    throwIfError(actors.error);
-    const actorNameById = new Map((actors.data ?? []).map((item) => [text(asRow(item), "id"), text(asRow(item), "full_name")]));
-    const mappedFiles = await this.mapFiles(files.data, canSeeFinance);
+    const actorIds = [...new Set([
+      ...(journal.data ?? []).map((item) => optionalText(asRow(item), "changed_by")),
+      submitterId,
+      task.engineerId
+    ].filter((value): value is string => Boolean(value)))];
+    // Шаг 2: справочные данные и ссылки на файлы, тоже одновременно.
+    const [people, workType, reason, statusRow, equipment, mappedFiles] = await Promise.all([
+      actorIds.length ? this.db().from("users").select("id, full_name").in("id", actorIds) : Promise.resolve({ data: [], error: null }),
+      task.workTypeCode ? this.db().from("work_types").select("code, name").eq("code", task.workTypeCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
+      task.reasonCode ? this.db().from("task_reasons").select("code, name").eq("code", task.reasonCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
+      this.db().from("task_statuses").select("code, name").eq("code", task.status).maybeSingle(),
+      task.equipmentId ? this.loadEquipment(task.equipmentId) : Promise.resolve(undefined),
+      this.mapFiles(files.data, canSeeFinance)
+    ]);
+    throwIfError(people.error);
+    throwIfError(workType.error);
+    throwIfError(reason.error);
+    throwIfError(statusRow.error);
+    const actorNameById = new Map((people.data ?? []).map((item) => [text(asRow(item), "id"), text(asRow(item), "full_name")]));
+    const engineer = { data: task.engineerId && actorNameById.has(task.engineerId) ? { id: task.engineerId, full_name: actorNameById.get(task.engineerId) } : null };
+    const submitter = { data: submitterId && actorNameById.has(submitterId) ? { full_name: actorNameById.get(submitterId) } : null };
     const canWrite = session.permissions?.includes("tasks.write") === true || session.permissions?.includes("tasks.write_own") === true;
     const terminal = ["closed", "cancelled"].includes(task.status);
     return {
       task,
-      equipment: task.equipmentId ? await this.loadEquipment(task.equipmentId) : undefined,
+      equipment,
       engineer: engineer.data ? { id: text(asRow(engineer.data), "id"), fullName: text(asRow(engineer.data), "full_name") } : undefined,
       workType: workType.data ? { code: text(asRow(workType.data), "code"), name: text(asRow(workType.data), "name") } : undefined,
       reason: reason.data ? { code: text(asRow(reason.data), "code"), name: text(asRow(reason.data), "name") } : undefined,
@@ -2575,6 +2630,15 @@ export class M2ApiClient {
   }
 
   public async listCatalogValues(key: string): Promise<readonly ReferenceCatalogValue[]> {
+    const cached = this.catalogCache.get(key);
+    if (cached && Date.now() - cached.at < 5 * 60_000) return cached.value;
+    const value = this.fetchCatalogValues(key);
+    this.catalogCache.set(key, { at: Date.now(), value });
+    value.catch(() => { if (this.catalogCache.get(key)?.value === value) this.catalogCache.delete(key); });
+    return value;
+  }
+
+  private async fetchCatalogValues(key: string): Promise<readonly ReferenceCatalogValue[]> {
     const catalog = CATALOG_TABLE[key];
     if (!catalog) throw new M2ApiError(404, "Справочник не найден");
     const { data, error } = await this.db().from(catalog.table).select("*").order("sort_order").order("name");
@@ -2600,6 +2664,7 @@ export class M2ApiClient {
   }
 
   public async createCatalogValue(key: string, input: Readonly<Record<string, unknown>>): Promise<ReferenceCatalogValue> {
+    this.catalogCache.delete(key);
     const catalog = CATALOG_TABLE[key];
     if (!catalog) throw new M2ApiError(404, "Справочник не найден");
     const attributes = asRow(input.attributes);
@@ -2613,6 +2678,7 @@ export class M2ApiClient {
       payload.sort_order = maxOrder + 10;
     }
     const { error } = await this.db().from(catalog.table).insert(payload);
+    this.catalogCache.delete(key);
     throwIfError(error);
     const values = await this.listCatalogValues(key);
     const created = values.find((item) => item.name === input.name);
@@ -2621,6 +2687,7 @@ export class M2ApiClient {
   }
 
   public async updateCatalogValue(key: string, id: string, input: Readonly<Record<string, unknown>>): Promise<ReferenceCatalogValue> {
+    this.catalogCache.delete(key);
     const catalog = CATALOG_TABLE[key];
     if (!catalog) throw new M2ApiError(404, "Справочник не найден");
     const patch: Row = {};
@@ -2628,6 +2695,7 @@ export class M2ApiClient {
     if (input.isActive !== undefined) patch.is_active = input.isActive;
     if (input.attributes !== undefined) applyCatalogAttributes(patch, asRow(input.attributes));
     const { error } = await this.db().from(catalog.table).update(patch).eq(catalog.id, id);
+    this.catalogCache.delete(key);
     throwIfError(error);
     const values = await this.listCatalogValues(key);
     const updated = values.find((item) => item.id === id);
@@ -2638,7 +2706,9 @@ export class M2ApiClient {
   public async moveCatalogValue(key: string, id: string, direction: "up" | "down"): Promise<readonly ReferenceCatalogValue[]> {
     const catalog = CATALOG_TABLE[key];
     if (!catalog) throw new M2ApiError(404, "Справочник не найден");
+    this.catalogCache.delete(key);
     const values = [...await this.listCatalogValues(key)];
+    this.catalogCache.delete(key);
     const index = values.findIndex((item) => item.id === id);
     const target = direction === "up" ? index - 1 : index + 1;
     if (index < 0 || target < 0 || target >= values.length) return values;
@@ -2648,6 +2718,7 @@ export class M2ApiClient {
     const results = await Promise.all(values.map((item, position) =>
       this.db().from(catalog.table).update({ sort_order: (position + 1) * 10 }).eq(catalog.id, item.id)
     ));
+    this.catalogCache.delete(key);
     for (const result of results) throwIfError(result.error);
     return this.listCatalogValues(key);
   }
