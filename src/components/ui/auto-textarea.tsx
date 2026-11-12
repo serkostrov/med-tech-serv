@@ -54,7 +54,7 @@ export function fitTextareaHeight(node: HTMLTextAreaElement): void {
 
 /** Обычный textarea, который растёт под текст: всё написанное видно без прокрутки внутри поля. */
 export const AutoTextarea = React.forwardRef<HTMLTextAreaElement, React.ComponentPropsWithoutRef<"textarea">>(
-  function AutoTextarea({ onInput, ...props }, forwardedRef) {
+  function AutoTextarea({ onInput, style, ...props }, forwardedRef) {
     const node = React.useRef<HTMLTextAreaElement | null>(null);
     const setNode = React.useCallback((element: HTMLTextAreaElement | null) => {
       node.current = element;
@@ -64,7 +64,7 @@ export const AutoTextarea = React.forwardRef<HTMLTextAreaElement, React.Componen
 
     useIsoLayoutEffect(() => {
       if (node.current) fitTextareaHeight(node.current);
-    }, [props.value]);
+    }, [props.value, props.defaultValue]);
 
     React.useEffect(() => {
       const element = node.current;
@@ -75,14 +75,18 @@ export const AutoTextarea = React.forwardRef<HTMLTextAreaElement, React.Componen
       });
       if (typeof ResizeObserver === "undefined") return () => { cancelled = true; };
       let width = element.clientWidth;
+      let frame = 0;
+      // Высоту меняем на следующем кадре, а не внутри колбэка: иначе браузер пишет в консоль «ResizeObserver loop».
       const observer = new ResizeObserver(() => {
         if (element.clientWidth === width) return;
         width = element.clientWidth;
-        fitTextareaHeight(element);
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(() => fitTextareaHeight(element));
       });
       observer.observe(element);
       return () => {
         cancelled = true;
+        cancelAnimationFrame(frame);
         observer.disconnect();
       };
     }, []);
@@ -95,6 +99,8 @@ export const AutoTextarea = React.forwardRef<HTMLTextAreaElement, React.Componen
           onInput?.(event);
         }}
         ref={setNode}
+        // Высота и так под текст: ручное уменьшение только прятало бы строки.
+        style={{ resize: "none", ...style }}
       />
     );
   }

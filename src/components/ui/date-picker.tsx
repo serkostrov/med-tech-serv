@@ -21,7 +21,7 @@ import {
   todayIsoDate
 } from "../../date-format.js";
 import { cn } from "../../lib/utils.js";
-import { Select } from "./select.js";
+import { isOpenSelectList, Select } from "./select.js";
 
 const WEEKDAYS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"] as const;
 const MONTHS = [
@@ -160,7 +160,8 @@ export function DatePicker({
     const onPointer = (event: MouseEvent) => {
       const target = event.target;
       if (!(target instanceof Node)) return;
-      if (rootRef.current?.contains(target) || popoverRef.current?.contains(target)) return;
+      // Список месяцев и лет открывается поверх страницы, вне календаря: клик по нему не закрывает календарь.
+      if (rootRef.current?.contains(target) || popoverRef.current?.contains(target) || isOpenSelectList(target)) return;
       setOpen(false);
     };
     const onKey = (event: globalThis.KeyboardEvent) => {

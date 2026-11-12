@@ -1337,7 +1337,8 @@ h3 {
   overflow: hidden;
   /* Список ровно по ширине поля: края совпадают и не вылезают за окно, длинные строки переносятся. */
   width: var(--radix-select-trigger-width);
-  min-width: 8rem;
+  /* Самые узкие поля (год, «Показывать по») сами шире 6rem, так что и у них края совпадают. */
+  min-width: 6rem;
   max-width: calc(100vw - 24px);
   border: 1px solid var(--color-border);
   border-radius: 10px;
@@ -1355,10 +1356,12 @@ h3 {
 .ui-select__item {
   position: relative;
   display: flex;
+  /* Список не шире поля: длинный e-mail или S/N без пробелов переносится, а не обрезается. */
+  overflow-wrap: anywhere;
   align-items: center;
   gap: 8px;
   min-height: 34px;
-  padding: 7px 10px 7px 30px;
+  padding: 7px 8px 7px 26px;
   border-radius: 7px;
   color: var(--color-ink);
   font-size: 13px;
@@ -1485,10 +1488,9 @@ td .resource-state {
   gap: 8px;
   align-self: end;
   box-sizing: border-box;
-  height: var(--control-height);
   min-height: var(--control-height);
   margin: 0;
-  padding: 0 10px;
+  padding: 4px 10px;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-md);
   background: #ffffff;
@@ -3270,8 +3272,9 @@ td .resource-state {
 .equipment-combobox__list button.equipment-folder__row .equipment-folder__text,
 .equipment-folder__text {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 6px;
+  gap: 2px 6px;
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
@@ -3285,14 +3288,14 @@ td .resource-state {
   font-size: 13px;
   font-weight: 600;
   line-height: 1.25;
-  overflow-wrap: break-word; white-space: normal;
+  overflow-wrap: anywhere; white-space: normal;
 }
 
 .equipment-folder__text small {
   color: var(--color-muted);
   font-size: 12px;
   line-height: 1.25;
-  overflow-wrap: break-word; white-space: normal;
+  overflow-wrap: anywhere; white-space: normal;
 }
 
 .equipment-folder__count {
@@ -7329,7 +7332,7 @@ td .resource-state {
 .date-picker-popover__caption {
   display: grid;
   flex: 1;
-  grid-template-columns: minmax(0, 1.4fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 1fr) minmax(6rem, 0.8fr);
   gap: 6px;
 }
 
@@ -7671,6 +7674,10 @@ td .resource-state {
 .mail-recognized { display: grid; gap: 0.2rem; min-width: 14rem; max-width: 26rem; }
 .mail-recognized span { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
 .mail-recognized__summary { color: var(--muted-foreground); font-size: 0.85rem; overflow-wrap: anywhere; }
+/* Первые 4 строки, остальное по кнопке «Показать полностью». */
+.mail-recognized .clamped-text, .clamped-text { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 4; overflow: hidden; }
+.clamped-text__toggle { justify-self: start; padding: 4px 0; border: 0; background: none; color: var(--color-accent-dark); font-size: 12px; font-weight: 600; cursor: pointer; }
+.clamped-text__toggle:hover { text-decoration: underline; }
 .mail-confidence { color: var(--muted-foreground); font-size: 0.78rem; }
 .mail-source { display: grid; gap: 0.6rem; padding: 0.75rem 0.9rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); }
 .mail-source__warning { margin: 0; padding: 0.5rem 0.7rem; border-radius: calc(var(--radius) - 2px); background: #fff4e0; color: #7a4b00; font-size: 0.88rem; }
@@ -8422,7 +8429,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* ===== Списки: сколько строк показывать ===== */
 .registry-pagination__size { display: inline-flex; align-items: center; gap: 8px; margin-right: auto; white-space: nowrap; }
-.registry-pagination__size .ui-select__trigger { min-width: 76px; height: 34px; }
+.registry-pagination__size .ui-select__trigger { min-width: 6rem; height: 34px; }
 .registry-pagination__range { font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Много карточек в колонке: каждая своей высоты, колонка прокручивается (раньше карточки сплющивались). */
 .task-board__cards { grid-auto-rows: max-content; }

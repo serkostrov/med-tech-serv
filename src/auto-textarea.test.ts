@@ -36,5 +36,6 @@ describe("поле текста под содержимое", () => {
   it("рисуется обычным textarea с текстом и атрибутами", () => {
     const markup = renderToStaticMarkup(createElement(AutoTextarea, { defaultValue: "Не включается", name: "comment", rows: 3 }));
     assert.match(markup, /^<textarea[^>]*name="comment"[^>]*>Не включается<\/textarea>$/u);
+    assert.match(markup, /style="resize:none"/u);
   });
 });

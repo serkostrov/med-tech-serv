@@ -9,6 +9,11 @@ export function isSelectSurface(target: EventTarget | null): boolean {
   return target instanceof Element && Boolean(target.closest("[data-select-surface]"));
 }
 
+/** Клик внутри открытого списка вариантов (он вынесен поверх страницы), а не по самому полю. */
+export function isOpenSelectList(target: EventTarget | null): boolean {
+  return target instanceof Element && Boolean(target.closest('[role="listbox"][data-select-surface]'));
+}
+
 interface SelectOption {
   readonly value: string;
   readonly label: string;
