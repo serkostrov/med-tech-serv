@@ -181,7 +181,8 @@ describe("shared UI architecture", () => {
     assert.match(app, /EquipmentFolderPicker/u);
     assert.match(app, /Сменить/u);
     assert.match(picker, /equipment-combobox/u);
-    assert.match(picker, /equipment-folder/u);
+    assert.match(picker, /role="listbox"/u);
+    assert.doesNotMatch(picker, /buildEquipmentFolderTree/u);
     assert.match(picker, /Новый/u);
     assert.match(picker, /AddEquipmentDialog/u);
   });

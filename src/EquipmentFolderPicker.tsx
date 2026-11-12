@@ -1,17 +1,7 @@
-import React, { useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { AddEquipmentDialog } from "./AddEquipmentDialog.js";
-import {
-  buildEquipmentFolderTree,
-  equipmentFolderSearchExpandedIds,
-  filterEquipmentFolderTree,
-  flattenVisibleEquipmentFolders,
-  toEquipmentTreeModels,
-  type EquipmentFolderNode,
-  type EquipmentTreeManufacturer,
-  type EquipmentTreeModel,
-  type EquipmentTreeUnit
-} from "./equipment-tree.js";
 import type { SiteOption } from "./customer-selection.js";
+import { EQUIPMENT_OPTIONS_LIMIT, equipmentOptionMeta, equipmentOptionTitle, filterEquipmentOptions } from "./equipment-options.js";
 import { m2Api, type EquipmentApiRecord, type EquipmentPassportReferences } from "./m2-api.js";
 import { Button, toast } from "./ui.js";
 
@@ -22,33 +12,6 @@ const EMPTY_REFERENCES: EquipmentPassportReferences = {
   statuses: []
 };
 
-function toUnits(items: readonly EquipmentApiRecord[]): readonly EquipmentTreeUnit[] {
-  return items.map((item) => ({
-    id: item.id,
-    serialNumber: item.serialNumber,
-    modelId: item.modelId,
-    manufacturerId: item.manufacturerId,
-    site: item.site,
-    payer: item.payer,
-    status: item.status,
-    statusName: item.statusName
-  }));
-}
-
-function equipmentLabelsMap(
-  items: readonly EquipmentApiRecord[]
-): Readonly<Record<string, { readonly manufacturer: string; readonly model: string }>> {
-  const map: Record<string, { manufacturer: string; model: string }> = {};
-  for (const item of items) {
-    map[item.id] = { manufacturer: item.manufacturer, model: item.model };
-  }
-  return map;
-}
-
-function FolderChevron({ open }: { readonly open: boolean }) {
-  return <span aria-hidden="true" className={`equipment-folder__chevron${open ? " is-open" : ""}`} />;
-}
-
 export function EquipmentFolderPicker({
   equipment,
   onSelect
@@ -58,11 +21,7 @@ export function EquipmentFolderPicker({
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
-  const [expandedIds, setExpandedIds] = useState<ReadonlySet<string>>(() => new Set());
   const [highlightIndex, setHighlightIndex] = useState(0);
-  const [models, setModels] = useState<readonly EquipmentTreeModel[]>([]);
-  const [manufacturers, setManufacturers] = useState<readonly EquipmentTreeManufacturer[]>([]);
-  const [catalogReady, setCatalogReady] = useState(false);
   const [liveEquipment, setLiveEquipment] = useState(equipment);
   const [formOpen, setFormOpen] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -72,6 +31,10 @@ export function EquipmentFolderPicker({
   const [manufacturerId, setManufacturerId] = useState("");
   const [modelId, setModelId] = useState("");
   const rootRef = useRef<HTMLDivElement | null>(null);
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const listId = useId();
+  // Прокручиваем к выделенной строке только при ходьбе стрелками, а не при наведении мышью.
+  const scrollToActive = useRef(false);
 
   const [equipmentLoading, setEquipmentLoading] = useState(false);
   const [equipmentLoaded, setEquipmentLoaded] = useState(false);
@@ -83,35 +46,6 @@ export function EquipmentFolderPicker({
       return [...current, ...equipment.filter((item) => !known.has(item.id))];
     });
   }, [equipment]);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([
-      m2Api.listCatalogValues("equipment-models"),
-      m2Api.listCatalogValues("manufacturers")
-    ])
-      .then(([modelValues, manufacturerValues]) => {
-        if (cancelled) return;
-        setModels(toEquipmentTreeModels(modelValues));
-        setManufacturers(manufacturerValues.map((item) => ({
-          id: item.id,
-          name: item.name,
-          isActive: item.isActive
-        })));
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setModels([]);
-          setManufacturers([]);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) setCatalogReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -151,41 +85,22 @@ export function EquipmentFolderPicker({
     [references.models, manufacturerId]
   );
 
-  const tree = useMemo(() => {
-    if (!catalogReady && models.length === 0 && manufacturers.length === 0) {
-      // Пока справочники грузятся — дерево из подписей приборов.
-      return buildEquipmentFolderTree([], [], toUnits(liveEquipment), equipmentLabelsMap(liveEquipment));
-    }
-    return buildEquipmentFolderTree(models, manufacturers, toUnits(liveEquipment), equipmentLabelsMap(liveEquipment));
-  }, [catalogReady, models, manufacturers, liveEquipment]);
-
-  const visibleTree = useMemo(
-    () => filterEquipmentFolderTree(tree, query),
-    [tree, query]
-  );
-
-  const effectiveExpanded = useMemo(() => {
-    if (query.trim()) return equipmentFolderSearchExpandedIds(visibleTree);
-    return expandedIds;
-  }, [query, visibleTree, expandedIds]);
-
-  const flatNodes = useMemo(
-    () => flattenVisibleEquipmentFolders(visibleTree, effectiveExpanded),
-    [visibleTree, effectiveExpanded]
-  );
+  // Сразу список приборов, без папок: площадка, модель, заводской номер. Ввод сужает список.
+  const options = useMemo(() => filterEquipmentOptions(liveEquipment, query), [liveEquipment, query]);
+  // Список мог сократиться (догрузка, поиск): выделение всегда внутри него.
+  const lastIndex = options.items.length - 1;
+  const activeIndex = lastIndex < 0 ? -1 : Math.min(highlightIndex, lastIndex);
+  const activeDevice = activeIndex < 0 ? undefined : options.items[activeIndex];
 
   useEffect(() => {
     setHighlightIndex(0);
   }, [query, open]);
 
-  const toggleFolder = (nodeId: string) => {
-    setExpandedIds((current) => {
-      const next = new Set(current);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
-      return next;
-    });
-  };
+  useEffect(() => {
+    if (!open || !scrollToActive.current) return;
+    scrollToActive.current = false;
+    listRef.current?.querySelector<HTMLElement>(".is-active")?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
 
   const chooseEquipment = (equipmentId: string) => {
     const device = liveEquipment.find((item) => item.id === equipmentId);
@@ -193,14 +108,6 @@ export function EquipmentFolderPicker({
     onSelect(device);
     setQuery("");
     setOpen(false);
-  };
-
-  const activateNode = (node: EquipmentFolderNode) => {
-    if (node.kind === "equipment" && node.equipmentId) {
-      chooseEquipment(node.equipmentId);
-      return;
-    }
-    toggleFolder(node.id);
   };
 
   const openCreate = () => {
@@ -282,20 +189,21 @@ export function EquipmentFolderPicker({
     if (event.key === "ArrowDown") {
       event.preventDefault();
       setOpen(true);
-      setHighlightIndex((current) => Math.min(current + 1, Math.max(flatNodes.length - 1, 0)));
+      scrollToActive.current = true;
+      setHighlightIndex((current) => Math.max(0, Math.min(Math.min(current, lastIndex) + 1, lastIndex)));
       return;
     }
     if (event.key === "ArrowUp") {
       event.preventDefault();
       setOpen(true);
-      setHighlightIndex((current) => Math.max(current - 1, 0));
+      scrollToActive.current = true;
+      setHighlightIndex((current) => Math.max(Math.min(current, lastIndex) - 1, 0));
       return;
     }
     if (event.key === "Enter") {
-      const highlighted = flatNodes[highlightIndex];
-      if (open && highlighted) {
+      if (open && activeDevice) {
         event.preventDefault();
-        activateNode(highlighted);
+        chooseEquipment(activeDevice.id);
       }
       return;
     }
@@ -306,12 +214,20 @@ export function EquipmentFolderPicker({
   };
 
   return (
-    <div className="equipment-combobox" ref={rootRef}>
+    <div
+      className="equipment-combobox"
+      onBlur={(event) => {
+        // Фокус ушёл из поля и кнопки «Новый» (Tab дальше по форме): список закрываем.
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false);
+      }}
+      ref={rootRef}
+    >
       <div className="equipment-combobox__picker">
         <div className="equipment-combobox__search-row">
           <input
+            aria-activedescendant={open && activeDevice ? `${listId}-${activeIndex}` : undefined}
             aria-autocomplete="list"
-            aria-controls="equipment-combobox-list"
+            aria-controls={listId}
             aria-expanded={open}
             aria-label="Поиск прибора"
             onChange={(event) => {
@@ -329,57 +245,44 @@ export function EquipmentFolderPicker({
         </div>
         {open ? (
           <div
-            className="equipment-combobox__list equipment-folder"
-            id="equipment-combobox-list"
+            className="equipment-combobox__list"
+            // Клик по списку не уводит фокус из поля: список не закрывается, выбор стрелками продолжается.
+            onMouseDown={(event) => event.preventDefault()}
             onWheel={(event) => event.stopPropagation()}
-            role="tree"
+            ref={listRef}
+            // Браузер иначе делает прокручиваемый список отдельной остановкой Tab: по списку ходят стрелками из поля.
+            tabIndex={-1}
           >
-            {visibleTree.length === 0 ? (
+            <div aria-label="Приборы" id={listId} role="listbox">
+              {options.items.map((device, index) => (
+                <button
+                  aria-selected={index === activeIndex}
+                  className={index === activeIndex ? "equipment-option is-active" : "equipment-option"}
+                  id={`${listId}-${index}`}
+                  key={device.id}
+                  onClick={() => chooseEquipment(device.id)}
+                  onMouseEnter={() => { scrollToActive.current = false; setHighlightIndex(index); }}
+                  role="option"
+                  tabIndex={-1}
+                  type="button"
+                >
+                  <strong>{equipmentOptionTitle(device)}</strong>
+                  <span>{equipmentOptionMeta(device)}</span>
+                </button>
+              ))}
+            </div>
+            {options.items.length === 0 ? (
               <p className="equipment-combobox__empty">
                 {equipmentLoading && !equipmentLoaded
                   ? "Загружаем приборы…"
-                  : models.length === 0 && liveEquipment.length === 0
-                  ? "Справочник пуст. Нажмите «Новый», чтобы добавить прибор."
+                  : liveEquipment.length === 0
+                  ? "Приборов пока нет. Нажмите «Новый», чтобы добавить прибор."
                   : "Приборов по этому запросу нет"}
               </p>
-            ) : (
-              <ul className="equipment-folder__root">
-                {flatNodes.map((node, index) => {
-                  const depth = node.kind === "category" ? 0
-                    : node.kind === "manufacturer" ? 1
-                      : node.kind === "model" ? 2
-                        : 3;
-                  const isFolder = node.kind !== "equipment";
-                  const isOpen = effectiveExpanded.has(node.id);
-                  const highlighted = index === highlightIndex;
-                  return (
-                    <li key={node.id} role="none" style={{ "--folder-depth": depth } as React.CSSProperties}>
-                      <button
-                        aria-expanded={isFolder ? isOpen : undefined}
-                        aria-selected={highlighted}
-                        className={[
-                          "equipment-folder__row",
-                          `equipment-folder__row--${node.kind}`,
-                          highlighted ? "is-active" : "",
-                          isOpen ? "is-open" : ""
-                        ].filter(Boolean).join(" ")}
-                        onClick={() => activateNode(node)}
-                        onMouseEnter={() => setHighlightIndex(index)}
-                        role="treeitem"
-                        type="button"
-                      >
-                        <span className="equipment-folder__text">
-                          <strong>{node.label}</strong>
-                          {node.meta ? <small>{node.meta}</small> : null}
-                        </span>
-                        {isFolder && node.count > 0 ? <span className="equipment-folder__count">{node.count}</span> : null}
-                        {isFolder ? <FolderChevron open={isOpen} /> : <span className="equipment-folder__leaf-gap" />}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
+            ) : null}
+            {options.total > options.items.length ? (
+              <p className="equipment-combobox__more">Показаны первые {EQUIPMENT_OPTIONS_LIMIT} из {options.total}. Введите S/N, модель или площадку, чтобы найти нужный.</p>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -391,22 +294,7 @@ export function EquipmentFolderPicker({
         onManufacturerChange={changeManufacturer}
         onModelChange={setModelId}
         onOpenChange={setFormOpen}
-        onReferencesChange={(passport) => {
-          setReferences(passport);
-          void Promise.all([
-            m2Api.listCatalogValues("equipment-models"),
-            m2Api.listCatalogValues("manufacturers")
-          ]).then(([modelValues, manufacturerValues]) => {
-            setModels(toEquipmentTreeModels(modelValues));
-            setManufacturers(manufacturerValues.map((item) => ({
-              id: item.id,
-              name: item.name,
-              isActive: item.isActive
-            })));
-          }).catch(() => {
-            /* справочник диалога уже обновлён */
-          });
-        }}
+        onReferencesChange={setReferences}
         onSubmit={submitCreate}
         open={formOpen}
         references={references}
