@@ -2716,6 +2716,21 @@ export class M2ApiClient {
     };
   }
 
+  /** Лёгкая проверка перед переносом на проверку: есть ли результат и акт (два запроса вместо полной карточки). */
+  public async taskReviewReadiness(id: string): Promise<{ readonly hasClosure: boolean; readonly resultFilled: boolean }> {
+    const [task, closure] = await Promise.all([
+      this.db().from("tasks").select("call_reason, work_description").eq("id", id).maybeSingle(),
+      this.db().from("task_closures").select("task_id").eq("task_id", id).maybeSingle()
+    ]);
+    throwIfError(task.error);
+    throwIfError(closure.error);
+    const row = task.data ? asRow(task.data) : {};
+    return {
+      hasClosure: Boolean(closure.data),
+      resultFilled: Boolean(optionalText(row, "call_reason")?.trim() && optionalText(row, "work_description")?.trim())
+    };
+  }
+
   public async transitionTask(id: string, status: string, details: Readonly<Record<string, string>> = {}): Promise<TaskApiRecord> {
     const patch: Row = { status_code: status };
     if (details.cancellationReason) patch.cancellation_reason = details.cancellationReason;

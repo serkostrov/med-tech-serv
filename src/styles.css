@@ -8519,3 +8519,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .registry-pagination__range { font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Много карточек в колонке: каждая своей высоты, колонка прокручивается (раньше карточки сплющивались). */
 .task-board__cards { grid-auto-rows: max-content; }
+/* Сенсорный экран: перетаскивания нет, галочку не показываем, чтобы нажатие в угол открывало задачу. */
+@media (hover: none) {
+  .task-board-card__select { display: none; }
+  .task-board-card__open > .task-board-card__top { padding-right: 0; }
+}

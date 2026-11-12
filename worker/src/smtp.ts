@@ -18,6 +18,11 @@ export interface SmtpConfiguration {
   readonly timeoutMs: number;
   /** Имя своего узла в EHLO; по умолчанию домен адреса отправителя. */
   readonly ehloName?: string;
+  /**
+   * Тестовый стенд: все письма уходят на этот адрес, а в теме видно, кому они предназначались.
+   * Так настоящие клиенты из тестовых данных ничего не получают. Пусто — письма идут адресатам.
+   */
+  readonly testRedirectTo?: string;
 }
 
 export interface SmtpMessage {
@@ -87,8 +92,22 @@ export function smtpConfiguration(environment: NodeJS.ProcessEnv): SmtpConfigura
     fromName: environment.SMTP_FROM_NAME?.trim() || "МедТехСервис",
     // Не больше 30 с: вся сессия (4 × таймаут) должна укладываться в аренду попытки (120 с).
     timeoutMs: integerEnvironment(environment, "SMTP_TIMEOUT_MS", 15_000, 1_000, 30_000),
-    ...(environment.SMTP_EHLO_NAME?.trim() ? { ehloName: environment.SMTP_EHLO_NAME.trim() } : {})
+    ...(environment.SMTP_EHLO_NAME?.trim() ? { ehloName: environment.SMTP_EHLO_NAME.trim() } : {}),
+    ...testRedirectConfiguration(environment)
   };
+}
+
+function testRedirectConfiguration(environment: NodeJS.ProcessEnv): { readonly testRedirectTo?: string } {
+  const value = environment.EMAIL_TEST_REDIRECT_TO?.trim();
+  if (!value) return {};
+  if (!isValidEmailAddress(value)) throw new Error("EMAIL_TEST_REDIRECT_TO must be an e-mail address");
+  return { testRedirectTo: value };
+}
+
+/** Письмо для тестового стенда: на один адрес, в теме — кому оно предназначалось. */
+export function testRedirectedMessage(message: SmtpMessage, redirectTo: string | undefined): SmtpMessage {
+  if (!redirectTo || message.toAddress.toLowerCase() === redirectTo.toLowerCase()) return message;
+  return { ...message, toAddress: redirectTo, subject: `[Тест, для ${message.toAddress}] ${message.subject}` };
 }
 
 function assertMailbox(value: string): void {
@@ -255,9 +274,11 @@ export class NodeSmtpTransport implements SmtpTransport {
     private readonly connectionFactory: SmtpConnectionFactory = nodeSmtpConnectionFactory
   ) {}
 
-  public async send(message: SmtpMessage): Promise<void> {
+  public async send(original: SmtpMessage): Promise<void> {
     // Конверт проверяется до connect(): недоверенные данные не достигают ни
     // SMTP-команд, ни вообще какого-либо socket.write.
+    assertMessageEnvelope(original);
+    const message = testRedirectedMessage(original, this.configuration.testRedirectTo);
     assertMessageEnvelope(message);
     let socket: SmtpSocket | undefined;
     let deadline: ReturnType<typeof setTimeout> | undefined;

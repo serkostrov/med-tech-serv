@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState, type DragEvent, type UIEvent } from "react";
+import React, { useEffect, useMemo, useRef, useState, type DragEvent, type UIEvent } from "react";
 import type { EquipmentApiRecord, ReferenceCatalogValue, TaskApiRecord } from "./m2-api.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES, TASK_STATUS_TRANSITIONS } from "./domain/task-status.js";
 import { toast, type StatusTone } from "./ui.js";
@@ -126,6 +126,10 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     return true;
   }), [activeStatuses, missing, showCompleted, visibleStatus]);
   const [pages, setPages] = useState<Readonly<Record<string, ColumnPage>>>({});
+  // Свежие колонки для обновления после переноса; номер версии отбрасывает устаревшие ответы.
+  const pagesRef = useRef(pages);
+  pagesRef.current = pages;
+  const boardVersion = useRef(0);
   // Задачи, которые сейчас перетаскивают (одну или все отмеченные).
   const [draggedIds, setDraggedIds] = useState<readonly string[]>([]);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -136,10 +140,16 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
 
   // Другие фильтры или обновление доски: прежний выбор больше не относится к тому, что на экране.
   useEffect(() => { setSelected(new Set()); }, [queryKey, columnSignature]);
-  // Esc снимает выбор.
+  // Esc снимает выбор, если он не закрывает окно и не сбрасывает поле ввода.
   useEffect(() => {
     if (selected.size === 0) return undefined;
-    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setSelected(new Set()); };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.defaultPrevented) return;
+      const target = event.target instanceof Element ? event.target : null;
+      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='listbox']")) return;
+      if (document.querySelector("[role='dialog']")) return;
+      setSelected(new Set());
+    };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [selected.size]);
@@ -147,6 +157,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   useEffect(() => {
     if (!loadColumn || columns.length === 0) return undefined;
     let current = true;
+    boardVersion.current += 1;
     const codes = columns.map((status) => status.code ?? status.id);
     setPages(Object.fromEntries(codes.map((code) => [code, { items: [], total: 0, loading: true, loadingMore: false }] satisfies readonly [string, ColumnPage])));
     void Promise.all(codes.map(async (code) => {
@@ -208,6 +219,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   // Сразу показываем задачу в новой колонке; при отказе сервера возвращаем обратно.
   const shiftLocal = (task: TaskApiRecord, from: string, to: string) => {
     if (!loadColumn) return;
+    boardVersion.current += 1;
     const empty: ColumnPage = { items: [], total: 0, loading: false, loadingMore: false };
     setPages((state) => {
       const source = state[from] ?? empty;
@@ -225,6 +237,26 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
     return next;
   });
+
+  /**
+   * После переноса перечитываем уже загруженную часть колонок: сервер сортирует задачи по-своему,
+   * и без этого догрузка со смещением пропустила бы карточки. Если за это время доску
+   * снова поменяли, ответ устарел и не применяется (следующее обновление придёт само).
+   */
+  const refreshColumns = async (codes: readonly string[]) => {
+    if (!loadColumn) return;
+    const version = boardVersion.current;
+    await Promise.all([...new Set(codes)].map(async (code) => {
+      const limit = Math.max(COLUMN_PAGE_SIZE, pagesRef.current[code]?.items.length ?? 0);
+      try {
+        const page = await loadColumn(code, 0, limit);
+        if (version !== boardVersion.current) return;
+        setPages((state) => ({ ...state, [code]: { items: page.items, total: page.total, loading: false, loadingMore: false } }));
+      } catch {
+        // Не обновилось: на доске остаётся то, что показали сразу после переноса.
+      }
+    }));
+  };
 
   const report = (problems: readonly DropProblem[], moved: number, attempted: number, targetStatus: string) => {
     if (attempted === 1) {
@@ -244,19 +276,26 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     // Одинаковые причины одной строкой: «З-1, З-2: Сначала выберите инженера».
     const byReason = new Map<string, string[]>();
     for (const problem of problems) byReason.set(problem.reason, [...(byReason.get(problem.reason) ?? []), problem.task.number]);
-    const lines = [...byReason].map(([reason, numbers]) => `${numbers.length > 4 ? `${numbers.slice(0, 4).join(", ")} и ещё ${numbers.length - 4}` : numbers.join(", ")}: ${reason}`);
-    const details = lines.slice(0, 3).join(". ");
-    const more = lines.length > 3 ? `. И другие причины: ${lines.length - 3}` : "";
-    toast.error(`${details}${more}.`, { title: `Перенесено ${moved} из ${attempted}`, durationMs: 12000 });
+    const groups = [...byReason];
+    const lines = groups.slice(0, 3).map(([reason, numbers]) => `${numbers.join(", ")}: ${reason}`);
+    // Остальные причины не расписываем, но номера задач называем все.
+    const rest = groups.slice(3).flatMap(([, numbers]) => numbers);
+    const more = rest.length ? `. Также не перенесены: ${rest.join(", ")}` : "";
+    toast.error(`${lines.join(". ")}${more}.`, { title: `Перенесено ${moved} из ${attempted}`, durationMs: 12000 });
   };
 
   /** Переносит одну или несколько задач в колонку. Каждая задача проверяется отдельно. */
   const moveTasks = async (taskIds: readonly string[], targetStatus: string) => {
     setDraggedIds([]);
     setDropTarget(null);
-    const entries = taskIds.map(findEntry).filter((entry): entry is BoardEntry => Boolean(entry))
-      .filter((entry) => entry.source !== targetStatus && !moving.has(entry.task.id));
-    if (entries.length === 0) return;
+    const found = taskIds.map(findEntry).filter((entry): entry is BoardEntry => Boolean(entry));
+    // Уже лежат в этой колонке: переносить нечего, с выбора снимаем.
+    const alreadyThere = new Set(found.filter((entry) => entry.source === targetStatus).map((entry) => entry.task.id));
+    const entries = found.filter((entry) => entry.source !== targetStatus && !moving.has(entry.task.id));
+    if (entries.length === 0) {
+      if (alreadyThere.size) setSelected((current) => new Set([...current].filter((id) => !alreadyThere.has(id))));
+      return;
+    }
     const problems: DropProblem[] = [];
     const direct: BoardEntry[] = [];
     const checked: BoardEntry[] = [];
@@ -271,38 +310,36 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
         openable: decision.kind === "card"
       });
     }
+    const moved = new Set<string>();
     const working = [...direct, ...checked];
     if (working.length > 0) {
       for (const entry of direct) shiftLocal(entry.task, entry.source, targetStatus);
       setMoving((state) => new Set([...state, ...working.map((entry) => entry.task.id)]));
-      const results = await Promise.allSettled(working.map((entry) => onMove(entry.task.id, targetStatus)));
-      results.forEach((result, index) => {
-        const entry = working[index];
-        if (!entry) return;
-        const isDirect = index < direct.length;
-        if (result.status === "fulfilled") {
+      const directIds = new Set(direct.map((entry) => entry.task.id));
+      // Каждый ответ применяем сразу: отказ возвращает задачу, не дожидаясь остальных.
+      await Promise.all(working.map(async (entry) => {
+        try {
+          await onMove(entry.task.id, targetStatus);
+          moved.add(entry.task.id);
           // Проверенный перенос показываем, только когда сервер согласился.
-          if (!isDirect) shiftLocal(entry.task, entry.source, targetStatus);
-          return;
+          if (!directIds.has(entry.task.id)) shiftLocal(entry.task, entry.source, targetStatus);
+        } catch (moveError) {
+          if (directIds.has(entry.task.id)) shiftLocal({ ...entry.task, status: targetStatus }, targetStatus, entry.source);
+          problems.push({
+            task: entry.task,
+            reason: moveError instanceof Error ? moveError.message : "Не получилось изменить этап",
+            tone: "error",
+            openable: true
+          });
+        } finally {
+          setMoving((state) => { const next = new Set(state); next.delete(entry.task.id); return next; });
         }
-        if (isDirect) shiftLocal({ ...entry.task, status: targetStatus }, targetStatus, entry.source);
-        problems.push({
-          task: entry.task,
-          reason: result.reason instanceof Error ? result.reason.message : "Не получилось изменить этап",
-          tone: "error",
-          openable: true
-        });
-      });
-      setMoving((state) => {
-        const next = new Set(state);
-        for (const entry of working) next.delete(entry.task.id);
-        return next;
-      });
+      }));
+      // Порядок и счётчики колонок как на сервере: перенесённые и возвращённые задачи на своих местах.
+      void refreshColumns([targetStatus, ...working.map((entry) => entry.source)]);
     }
-    // Перенесённые задачи из выбора убираем; не перенесённые и другие отмеченные остаются.
-    const failed = new Set(problems.map((problem) => problem.task.id));
-    const moved = new Set(working.map((entry) => entry.task.id).filter((id) => !failed.has(id)));
-    setSelected((current) => new Set([...current].filter((id) => !moved.has(id))));
+    // С выбора снимаем перенесённые и те, что уже лежали в колонке; не перенесённые и другие остаются.
+    setSelected((current) => new Set([...current].filter((id) => !moved.has(id) && !alreadyThere.has(id))));
     report(problems, moved.size, entries.length, targetStatus);
   };
 

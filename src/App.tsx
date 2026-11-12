@@ -1270,9 +1270,9 @@ function TaskCardLoading({ task, onBack, backLabel = "К задачам" }: { re
  */
 async function moveTaskOnBoard(id: string, status: string): Promise<void> {
   if (status === "under_review") {
-    const card = await m2Api.taskCard(id);
-    if (!card.closure) throw new Error("Сначала заполните результат работ и загрузите фото акта в карточке задачи");
-    if (!card.task.callReason?.trim() || !card.task.workDescription?.trim()) throw new Error("Сначала заполните в карточке задачи причину вызова и описание работ");
+    const readiness = await m2Api.taskReviewReadiness(id);
+    if (!readiness.hasClosure) throw new Error("Сначала заполните результат работ и загрузите фото акта в карточке задачи");
+    if (!readiness.resultFilled) throw new Error("Сначала заполните в карточке задачи причину вызова и описание работ");
   }
   await m2Api.transitionTask(id, status);
 }
@@ -1328,6 +1328,12 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         ...(currentFilters.overdue ? { overdue: true } : {}), sort: currentFilters.sort,
         limit: pageSizeRef.current, offset: registryPageOffset(targetPageIndex, pageSizeRef.current)
       });
+      // Задач стало меньше, а мы на странице за концом списка: открываем последнюю настоящую.
+      const lastPage = Math.max(0, Math.ceil(page.total / pageSizeRef.current) - 1);
+      if (page.items.length === 0 && page.total > 0 && lastPage < targetPageIndex) {
+        setPageIndex(lastPage);
+        return reloadTasks(currentFilters, lastPage);
+      }
       setTasks(page.items); setTotal(page.total);
     } finally {
       // И при ошибке: вместо бесконечного индикатора — пустой список и сообщение об ошибке.
@@ -2914,7 +2920,14 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
     setLoading(true);
     setError(null);
     void m2Api.engineerTasks(listPageSize, listPageIndex * listPageSize).then((loaded) => {
-      if (active) setPage(loaded);
+      if (!active) return;
+      // Задач стало меньше (переназначили, закрыли): с пустой последней страницы уходим на настоящую последнюю.
+      const lastPage = Math.max(0, Math.ceil(loaded.total / listPageSize) - 1);
+      if (loaded.items.length === 0 && loaded.total > 0 && lastPage < listPageIndex) {
+        setListPageIndex(lastPage);
+        return;
+      }
+      setPage(loaded);
     }).catch((loadError: unknown) => {
       if (active) setError(loadError instanceof Error ? loadError.message : "Не получилось загрузить задачи");
     }).finally(() => {

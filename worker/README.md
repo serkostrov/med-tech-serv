@@ -29,6 +29,7 @@ Telegram получают только сотрудники с номером ч
 | `SMTP_EHLO_NAME` | имя своего узла для SMTP, по умолчанию домен адреса отправителя |
 | `EMAIL_NOTIFICATIONS_ENABLED` | по умолчанию `true` |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_STARTTLS`, `SMTP_USERNAME`, `SMTP_PASSWORD`, `SMTP_FROM_ADDRESS`, `SMTP_FROM_NAME` | почта отправителя |
+| `EMAIL_TEST_REDIRECT_TO` | тестовый стенд: все письма (уведомления и автоответы) уходят на этот адрес, в теме указано, кому предназначались. Пусто — письма идут адресатам |
 | `TELEGRAM_NOTIFICATIONS_ENABLED` | по умолчанию `false` |
 | `TELEGRAM_BOT_TOKEN` | токен бота от @BotFather |
 | `TELEGRAM_CHAT_ID_REPLIES` | бот отвечает номером чата на `/start`, по умолчанию `true` |
