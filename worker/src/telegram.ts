@@ -1,5 +1,6 @@
 import { renderNotificationTemplate, type BusinessEvent } from "./domain.js";
-import { chatIdWidgetHtml, clipUtf16, escapeHtml, taskWidgetHtml, widgetFitsLimits, type TaskWidgetData } from "./telegram-widget.js";
+import { escapeHtml, loadTaskCardFromPlan, type TaskCardData } from "./task-card.js";
+import { chatIdWidgetHtml, clipUtf16, taskWidgetHtml, widgetFitsLimits } from "./telegram-widget.js";
 import {
   ChannelDeliveryError,
   channelDeliveryIdempotencyKey,
@@ -95,7 +96,7 @@ export class TelegramClient {
 
 /** Данные для карточки задачи; undefined, если их не удалось получить (тогда уйдёт обычное сообщение). */
 export interface TelegramTaskCardSource {
-  load(delivery: ChannelDeliveryCommand): Promise<TaskWidgetData | undefined>;
+  load(delivery: ChannelDeliveryCommand): Promise<TaskCardData | undefined>;
 }
 
 /**
@@ -105,34 +106,9 @@ export interface TelegramTaskCardSource {
 export class PostgresTelegramTaskCardSource implements TelegramTaskCardSource {
   public constructor(private readonly database: OutboxSqlExecutor) {}
 
-  public async load(delivery: ChannelDeliveryCommand): Promise<TaskWidgetData | undefined> {
-    if (!delivery.outboxEventId) return undefined;
-    const result = await this.database.executeSql(
-      "SELECT recipient_address, variables FROM public.load_telegram_event_plan($1::uuid)",
-      [delivery.outboxEventId]
-    );
-    const row = result.rows.find((item) => typeof item.recipient_address === "string" && item.recipient_address.trim() === delivery.recipientAddress.trim());
-    const variables = row?.variables;
-    if (!variables || typeof variables !== "object" || Array.isArray(variables)) return undefined;
-    const text = (key: string): string | undefined => {
-      const value = (variables as Record<string, unknown>)[key];
-      return typeof value === "string" && value.trim() ? value : undefined;
-    };
-    return {
-      eventCode: delivery.eventCode,
-      ...optional("taskNumber", text("taskNumber")),
-      ...optional("taskTitle", text("taskTitle")),
-      ...optional("siteName", text("siteName")),
-      ...optional("engineerName", text("engineerName")),
-      ...optional("periodFrom", text("periodFrom")),
-      ...optional("periodTo", text("periodTo")),
-      ...optional("reworkComment", text("reworkComment"))
-    };
+  public load(delivery: ChannelDeliveryCommand): Promise<TaskCardData | undefined> {
+    return loadTaskCardFromPlan(this.database, "telegram", delivery);
   }
-}
-
-function optional<K extends string>(key: K, value: string | undefined): { readonly [P in K]?: string } {
-  return (value === undefined ? {} : { [key]: value }) as { readonly [P in K]?: string };
 }
 
 /**
@@ -193,7 +169,7 @@ export class TelegramDeliveryChannel implements DeliveryChannel {
     const replyMarkup = taskUrl ? { inline_keyboard: [[{ text: "Открыть задачу", url: taskUrl }]] } : undefined;
 
     // Сначала карточка-виджет. Нет данных или Telegram её не принял (400) — обычное сообщение.
-    let card: TaskWidgetData | undefined;
+    let card: TaskCardData | undefined;
     try {
       card = await this.options.cards?.load(command);
     } catch {

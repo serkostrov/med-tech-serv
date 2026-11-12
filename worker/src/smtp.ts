@@ -2,7 +2,9 @@ import { createHash } from "node:crypto";
 import { connect as connectTcp, type Socket } from "node:net";
 import { connect as connectTls, type TLSSocket } from "node:tls";
 import { isValidEmailAddress } from "./domain.js";
-import { ChannelDeliveryError, type ChannelDeliveryCommand, type ChannelDeliveryReceipt, type DeliveryChannel } from "./outbox.js";
+import { taskEmailHtml } from "./email-html.js";
+import { ChannelDeliveryError, type ChannelDeliveryCommand, type ChannelDeliveryReceipt, type DeliveryChannel, type OutboxSqlExecutor } from "./outbox.js";
+import { loadTaskCardFromPlan, type TaskCardData } from "./task-card.js";
 
 export type SmtpStartTlsMode = "disabled" | "optional" | "required";
 
@@ -31,7 +33,10 @@ export interface SmtpMessage {
   readonly fromName: string;
   readonly toAddress: string;
   readonly subject: string;
+  /** Текст письма; с html уходит текстовой версией в multipart/alternative. */
   readonly body: string;
+  /** HTML-версия письма. Нет — письмо только текстом, как раньше. */
+  readonly html?: string;
   /** Message-ID письма, на которое отвечаем, вместе с угловыми скобками. */
   readonly inReplyTo?: string;
   /** Автоматический ответ (RFC 3834): почтовые программы не отвечают на него автоответом. */
@@ -123,9 +128,39 @@ function assertMessageEnvelope(message: SmtpMessage): void {
   }
 }
 
+/** Короткий ASCII-заголовок идёт как есть; остальное — словами RFC 2047. */
+const PLAIN_HEADER_LIMIT = 200;
+/**
+ * 39 байт дают 52 символа base64: слово =?UTF-8?B?…?= из 64 символов, и строка заголовка
+ * с ним («Subject: » + слово) не длиннее 76 символов, как требует RFC 2047.
+ */
+const ENCODED_WORD_BYTES = 39;
+
+function isPlainHeader(value: string): boolean {
+  return /^[\x20-\x7E]*$/u.test(value) && value.length <= PLAIN_HEADER_LIMIT;
+}
+
+/**
+ * Заголовок с кириллицей или длинный: словами =?UTF-8?B?…?= по строкам. Символ не делится
+ * между словами, строки заголовка короткие — до лимита SMTP в 998 символов далеко.
+ */
 function encodedHeader(value: string): string {
-  if (/^[\x20-\x7E]*$/u.test(value)) return value;
-  return `=?UTF-8?B?${Buffer.from(value, "utf8").toString("base64")}?=`;
+  if (isPlainHeader(value)) return value;
+  const words: string[] = [];
+  let chunk = "";
+  let bytes = 0;
+  for (const char of value) {
+    const size = Buffer.byteLength(char, "utf8");
+    if (chunk && bytes + size > ENCODED_WORD_BYTES) {
+      words.push(chunk);
+      chunk = "";
+      bytes = 0;
+    }
+    chunk += char;
+    bytes += size;
+  }
+  words.push(chunk);
+  return words.map((word) => `=?UTF-8?B?${Buffer.from(word, "utf8").toString("base64")}?=`).join("\r\n ");
 }
 
 /**
@@ -139,13 +174,29 @@ function encodedBody(value: string): string {
 
 /** Имя в заголовке From: ASCII в кавычках с экранированием, иначе encoded-word. */
 function displayName(value: string): string {
-  if (/^[\x20-\x7E]*$/u.test(value)) return `"${value.replace(/["\\]/gu, "\\$&")}"`;
+  if (isPlainHeader(value)) return `"${value.replace(/["\\]/gu, "\\$&")}"`;
   return encodedHeader(value);
 }
 
+/**
+ * Граница частей multipart. Части в base64, в его алфавите нет «-», поэтому строка
+ * «--=_mts_…» внутри частей встретиться не может.
+ */
+function mimeBoundary(messageId: string): string {
+  return `=_mts_${createHash("sha256").update(messageId).digest("hex").slice(0, 32)}`;
+}
+
+function textPart(contentType: "text/plain" | "text/html", value: string): readonly string[] {
+  return [`Content-Type: ${contentType}; charset=UTF-8`, "Content-Transfer-Encoding: base64", "", encodedBody(value)];
+}
+
+/**
+ * Письмо целиком. С html — multipart/alternative: сначала текст из шаблона, затем HTML
+ * (почта показывает последнюю часть, которую умеет). Без html — только текст, как раньше.
+ */
 export function smtpMessageData(message: SmtpMessage): string {
   assertMessageEnvelope(message);
-  return [
+  const headers = [
     `Message-ID: <${message.messageId}>`,
     `Date: ${new Date().toUTCString()}`,
     `From: ${displayName(message.fromName)} <${message.fromAddress}>`,
@@ -153,12 +204,29 @@ export function smtpMessageData(message: SmtpMessage): string {
     `Subject: ${encodedHeader(message.subject)}`,
     ...(message.inReplyTo ? [`In-Reply-To: ${message.inReplyTo}`, `References: ${message.inReplyTo}`] : []),
     ...(message.autoSubmitted ? ["Auto-Submitted: auto-replied"] : []),
-    "MIME-Version: 1.0",
-    "Content-Type: text/plain; charset=UTF-8",
-    "Content-Transfer-Encoding: base64",
+    "MIME-Version: 1.0"
+  ];
+  if (!message.html) return [...headers, ...textPart("text/plain", message.body)].join("\r\n");
+  const boundary = mimeBoundary(message.messageId);
+  return [
+    ...headers,
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
     "",
-    encodedBody(message.body)
+    `--${boundary}`,
+    ...textPart("text/plain", message.body),
+    `--${boundary}`,
+    ...textPart("text/html", message.html),
+    `--${boundary}--`
   ].join("\r\n");
+}
+
+/**
+ * RFC 5321, 4.5.2: строке письма, которая начинается с точки, добавляется ещё одна точка.
+ * Сейчас таких строк нет (заголовки, границы и base64), но строка «.» не должна закончить DATA
+ * раньше времени, даже если формат частей когда-нибудь изменится.
+ */
+export function dotStuffed(data: string): string {
+  return data.replace(/(^|\r\n)\./gu, "$1..");
 }
 
 interface SmtpReply {
@@ -326,7 +394,7 @@ export class NodeSmtpTransport implements SmtpTransport {
       await this.command(socket, reader, `RCPT TO:<${message.toAddress}>`, [250, 251], "recipient");
       await this.command(socket, reader, "DATA", [354], "data");
       messageSubmitted = true;
-      socket.write(`${smtpMessageData(message)}\r\n.\r\n`);
+      socket.write(`${dotStuffed(smtpMessageData(message))}\r\n.\r\n`);
       classifyReply(await reader.next(), [250], "message");
       // После 250 на DATA сервер уже принял письмо. QUIT закрывает сессию,
       // но его ошибка не должна превращать успешную доставку в повторную.
@@ -371,13 +439,60 @@ function stableMessageId(idempotencyKey: string, fromAddress: string): string {
   return `${digest}@${domain}`;
 }
 
+/**
+ * Сколько ждать данных для HTML-письма: дольше — письмо уходит только текстом.
+ * Ожидание идёт до SMTP-сессии и входит в ту же аренду попытки.
+ */
+const TASK_CARD_TIMEOUT_MS = 5_000;
+/** Gmail обрезает письма больше ~100 КБ; наше письмо около 9 КБ, больший HTML не отправляем (страховка). */
+const TASK_HTML_LIMIT_BYTES = 64 * 1024;
+
+/** Данные письма о задаче; undefined, если их не удалось получить (тогда письмо уйдёт только текстом). */
+export interface EmailTaskCardSource {
+  load(delivery: ChannelDeliveryCommand): Promise<TaskCardData | undefined>;
+}
+
+/**
+ * Данные карточки берём из той же функции базы, что и план рассылки (как у Telegram): при отправке
+ * у доставки есть номер события, функция отдаёт переменные задачи для этого получателя.
+ */
+export class PostgresEmailTaskCardSource implements EmailTaskCardSource {
+  public constructor(private readonly database: OutboxSqlExecutor) {}
+
+  public load(delivery: ChannelDeliveryCommand): Promise<TaskCardData | undefined> {
+    return loadTaskCardFromPlan(this.database, "email", delivery);
+  }
+}
+
+export interface SmtpDeliveryOptions {
+  /** Адрес CRM: кнопка «Открыть задачу» в HTML-письме. */
+  readonly publicAppUrl?: string;
+  /** Данные для HTML-письма о задаче. Нет источника или данных — письмо только текстом. */
+  readonly cards?: EmailTaskCardSource;
+  readonly cardTimeoutMs?: number;
+}
+
+async function withinTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<undefined>((resolve) => { timer = setTimeout(resolve, timeoutMs, undefined); });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export class SmtpDeliveryChannel implements DeliveryChannel {
   public readonly code = "email" as const;
+  private readonly publicAppUrl: string | undefined;
 
   public constructor(
     private readonly configuration: Pick<SmtpConfiguration, "fromAddress" | "fromName">,
-    private readonly transport: SmtpTransport
-  ) {}
+    private readonly transport: SmtpTransport,
+    private readonly options: SmtpDeliveryOptions = {}
+  ) {
+    this.publicAppUrl = options.publicAppUrl?.replace(/\/$/u, "");
+  }
 
   public async deliver(command: ChannelDeliveryCommand): Promise<ChannelDeliveryReceipt> {
     if (command.channel !== this.code) throw new ChannelDeliveryError("smtp_channel_mismatch");
@@ -386,14 +501,35 @@ export class SmtpDeliveryChannel implements DeliveryChannel {
 
   private async send(command: ChannelDeliveryCommand): Promise<ChannelDeliveryReceipt> {
     const messageId = stableMessageId(command.idempotencyKey, this.configuration.fromAddress);
+    const html = await this.taskHtml(command);
     await this.transport.send({
       messageId,
       fromAddress: this.configuration.fromAddress,
       fromName: this.configuration.fromName,
       toAddress: command.recipientAddress,
       subject: command.subject,
-      body: command.body
+      body: command.body,
+      ...(html ? { html } : {})
     });
     return { providerMessageId: messageId };
+  }
+
+  /**
+   * HTML-версия письма о задаче. Данные ищутся по исходному адресу доставки: тестовый режим
+   * меняет адрес позже, в транспорте. Нет данных, сбой или долгий ответ базы — undefined,
+   * и письмо уходит только текстом: из-за HTML доставка не ломается.
+   */
+  private async taskHtml(command: ChannelDeliveryCommand): Promise<string | undefined> {
+    const cards = this.options.cards;
+    if (!cards) return undefined;
+    try {
+      const card = await withinTimeout(cards.load(command), this.options.cardTimeoutMs ?? TASK_CARD_TIMEOUT_MS);
+      if (!card) return undefined;
+      const taskUrl = command.taskId && this.publicAppUrl ? `${this.publicAppUrl}/tasks/${encodeURIComponent(command.taskId)}` : undefined;
+      const html = taskEmailHtml(card, { subject: command.subject, ...(taskUrl ? { taskUrl } : {}) });
+      return Buffer.byteLength(html, "utf8") <= TASK_HTML_LIMIT_BYTES ? html : undefined;
+    } catch {
+      return undefined;
+    }
   }
 }

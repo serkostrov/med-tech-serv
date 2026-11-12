@@ -5,7 +5,7 @@ import { PostgresEmailEventDeliveryPlanner } from "./email-planner.js";
 import { maintenanceActivationConfig } from "./maintenance-activation.js";
 import { PostgresEventOutboxRepository, type DeliveryChannel, type EventDeliveryPlanner, type OutboxSqlExecutor } from "./outbox.js";
 import { CompositeEventDeliveryPlanner, DryRunDeliveryChannel, runPollCycle } from "./runtime.js";
-import { NodeSmtpTransport, SmtpDeliveryChannel, smtpConfiguration } from "./smtp.js";
+import { NodeSmtpTransport, PostgresEmailTaskCardSource, SmtpDeliveryChannel, smtpConfiguration } from "./smtp.js";
 import { aiMailParserFromEnv } from "./ai-parser.js";
 import { sendMailAutoreplies, type AutoreplySender } from "./mail-autoreply.js";
 import { ImapMailIntake, imapSettings } from "./mail-intake.js";
@@ -80,7 +80,9 @@ if (enabled.email) {
     const smtp = smtpConfiguration(process.env);
     // По журналу сразу видно, куда уходят письма: на тестовый адрес или настоящим адресатам.
     console.log(smtp.testRedirectTo ? `Тестовый режим почты: все письма уходят на ${smtp.testRedirectTo}` : "Почта: письма уходят адресатам");
-    adapters.push(new SmtpDeliveryChannel(smtp, new NodeSmtpTransport(smtp)));
+    // Письма о задачах уходят с HTML-карточкой и кнопкой «Открыть задачу», текст из шаблона — внутри
+    // того же письма. Нет данных для карточки — письмо уходит только текстом, как раньше.
+    adapters.push(new SmtpDeliveryChannel(smtp, new NodeSmtpTransport(smtp), { publicAppUrl, cards: new PostgresEmailTaskCardSource(database) }));
   }
 }
 if (enabled.telegram) {

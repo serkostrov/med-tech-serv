@@ -1,4 +1,5 @@
 import { deflateSync } from "node:zlib";
+import { clipMultiline, clipText, escapeHtml, formatTaskPeriod, isReworkEvent, taskStageLook, type TaskCardData } from "./task-card.js";
 
 /**
  * Карточки для Telegram в виде HTML-виджетов (Bot API 10.4, метод sendWidget).
@@ -13,58 +14,10 @@ export const WIDGET_COMPRESSED_LIMIT_BYTES = 4_096;
 /** Подпись к виджету: её видно в уведомлении и в приложениях, которые виджеты не показывают. */
 export const WIDGET_CAPTION_LIMIT = 1_024;
 
-export interface TaskWidgetData {
-  readonly eventCode: string;
-  readonly taskNumber?: string;
-  readonly taskTitle?: string;
-  readonly siteName?: string;
-  readonly engineerName?: string;
-  readonly periodFrom?: string;
-  readonly periodTo?: string;
-  readonly reworkComment?: string;
-}
-
-interface StatusLook {
-  readonly label: string;
-  /** Что случилось, строкой под названием задачи. */
-  readonly event: string;
-  /** Цвет текста и полоски: в светлой и тёмной теме чата. */
-  readonly light: string;
-  readonly dark: string;
-}
-
-/** Этап задачи после события, цвета как в CRM: назначена жёлтая, в работе зелёная, на проверке синяя. */
-const EVENT_LOOK: Readonly<Record<string, StatusLook>> = {
-  task_application_accepted: { label: "Новая", event: "Заявка принята", light: "#52627a", dark: "#a3b1c6" },
-  task_engineer_assigned: { label: "Назначена", event: "Назначен инженер", light: "#946300", dark: "#f2b630" },
-  task_engineer_accepted: { label: "В работе", event: "Инженер принял задачу", light: "#1d7f47", dark: "#4fc47e" },
-  task_work_completed: { label: "На проверке", event: "Работы завершены", light: "#1c66b8", dark: "#5ea9f2" },
-  task_rework_requested: { label: "На доработке", event: "Возвращена на доработку", light: "#b9570c", dark: "#f59d4f" },
-  task_overdue: { label: "Просрочена", event: "Задача просрочена", light: "#bf3434", dark: "#f27373" }
-};
-const DEFAULT_LOOK: StatusLook = { label: "Задача", event: "Изменения по задаче", light: "#52627a", dark: "#a3b1c6" };
-
 /** Полупрозрачный цвет этапа для фона блока: #rrggbb → rgba(). */
 function tint(hex: string, alpha: number): string {
   const value = Number.parseInt(hex.slice(1), 16);
   return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
-}
-
-export function escapeHtml(value: string): string {
-  return value
-    .replace(/&/gu, "&amp;")
-    .replace(/</gu, "&lt;")
-    .replace(/>/gu, "&gt;")
-    .replace(/"/gu, "&quot;")
-    .replace(/'/gu, "&#39;");
-}
-
-/** Обрезает длинный текст по символам (не посреди суррогатной пары) и ставит многоточие. */
-export function clipText(value: string | undefined, limit: number): string | undefined {
-  const text = value?.replace(/\s+/gu, " ").trim();
-  if (!text) return undefined;
-  const chars = [...text];
-  return chars.length > limit ? `${chars.slice(0, limit - 1).join("").trimEnd()}…` : text;
 }
 
 /**
@@ -77,37 +30,6 @@ export function clipUtf16(value: string, limit: number): string {
   const code = value.charCodeAt(end - 1);
   if (code >= 0xd800 && code <= 0xdbff) end -= 1;
   return `${value.slice(0, end).trimEnd()}…`;
-}
-
-/** Многострочный текст (комментарий): переносы сохраняем, лишние пустые строки убираем. */
-function clipMultiline(value: string | undefined, limit: number): string | undefined {
-  const text = value?.replace(/\r\n?/gu, "\n").replace(/[ \t]+/gu, " ").replace(/\n{3,}/gu, "\n\n").trim();
-  if (!text) return undefined;
-  const chars = [...text];
-  return chars.length > limit ? `${chars.slice(0, limit - 1).join("").trimEnd()}…` : text;
-}
-
-function shortDate(value: string | undefined, timeZone: string): { readonly day: string; readonly month: string } | undefined {
-  if (!value) return undefined;
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return undefined;
-  const parts = new Intl.DateTimeFormat("ru-RU", { day: "numeric", month: "short", timeZone }).formatToParts(date);
-  const day = parts.find((part) => part.type === "day")?.value;
-  const month = parts.find((part) => part.type === "month")?.value.replace(/\.$/u, "");
-  return day && month ? { day, month } : undefined;
-}
-
-/** Срок задачи коротко: «12 нояб», «12–13 нояб», «28 нояб – 3 дек», «до 13 нояб». */
-export function formatTaskPeriod(from: string | undefined, to: string | undefined, timeZone = "Europe/Moscow"): string | undefined {
-  const start = shortDate(from, timeZone);
-  const end = shortDate(to, timeZone);
-  if (!start && !end) return undefined;
-  if (!start && end) return `до ${end.day} ${end.month}`;
-  if (start && !end) return `с ${start.day} ${start.month}`;
-  if (!start || !end) return undefined;
-  if (start.day === end.day && start.month === end.month) return `${end.day} ${end.month}`;
-  if (start.month === end.month) return `${start.day}–${end.day} ${end.month}`;
-  return `${start.day} ${start.month} – ${end.day} ${end.month}`;
 }
 
 /**
@@ -135,15 +57,15 @@ const TASK_STYLE = BASE_STYLE
  * HTML карточки задачи для sendWidget: название цветом этапа, под ним что случилось и номер,
  * затем площадка, инженер, срок и «Что доработать». Подписи над карточкой нет.
  */
-export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow"): string {
-  const look = EVENT_LOOK[data.eventCode] ?? DEFAULT_LOOK;
+export function taskWidgetHtml(data: TaskCardData, timeZone = "Europe/Moscow"): string {
+  const look = taskStageLook(data.eventCode);
   const number = clipText(data.taskNumber, 24);
   // Высота пузыря не больше 600 px, лишнее обрезается: поля держим короткими.
   const title = clipText(data.taskTitle, 120) ?? "Без названия";
   const site = clipText(data.siteName, 100);
   const engineer = clipText(data.engineerName, 60);
   const period = formatTaskPeriod(data.periodFrom, data.periodTo, timeZone);
-  const comment = data.eventCode === "task_rework_requested" ? clipMultiline(data.reworkComment, 240) : undefined;
+  const comment = isReworkEvent(data.eventCode) ? clipMultiline(data.reworkComment, 240) : undefined;
   const rows = [
     site ? `<dt>Площадка</dt><dd>${escapeHtml(site)}</dd>` : "",
     `<dt>Инженер</dt><dd${engineer && engineer !== "не назначен" ? "" : " class=\"x\""}>${escapeHtml(engineer ?? "не назначен")}</dd>`,

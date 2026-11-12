@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { deflateSync } from "node:zlib";
 import { describe, it } from "node:test";
-import { chatIdWidgetHtml, clipText, clipUtf16, formatTaskPeriod, taskWidgetHtml, widgetFitsLimits, WIDGET_COMPRESSED_LIMIT_BYTES, WIDGET_HTML_LIMIT_BYTES } from "./telegram-widget.js";
+import { clipText, formatTaskPeriod } from "./task-card.js";
+import { chatIdWidgetHtml, clipUtf16, taskWidgetHtml, widgetFitsLimits, WIDGET_COMPRESSED_LIMIT_BYTES, WIDGET_HTML_LIMIT_BYTES } from "./telegram-widget.js";
 
 describe("карточки Telegram", () => {
   it("экранирует данные задачи: текст из задачи не становится разметкой", () => {
