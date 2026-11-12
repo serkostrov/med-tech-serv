@@ -147,8 +147,9 @@ export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow")
   ].join("");
   // Цвет этапа: в светлой теме темнее, в тёмной светлее.
   const colors = `.c{--k:${look.light};--kb:${tint(look.light, 0.1)}}`
-    // В тёмной теме тонировка на синем фоне выходит грязной: там родной фон блока Telegram.
-    + `@media (prefers-color-scheme:dark){.c{--k:${look.dark};--kb:var(--tg-theme-secondary-bg-color)}}`;
+    // В тёмной теме тонировка на синем фоне выходит грязной: там родной фон блока Telegram,
+    // заданный прямо в свойстве (var() внутри переменной документация виджетов не упоминает).
+    + `@media (prefers-color-scheme:dark){.c{--k:${look.dark}}.m{background:var(--tg-theme-secondary-bg-color)}}`;
   return `<style>${TASK_STYLE}${colors}</style>`
     + `<div class="c" title="${escapeHtml(look.label)}">`
     + `<p class="t"><span class="d"></span>${escapeHtml(title)}</p>`
