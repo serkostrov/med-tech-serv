@@ -214,6 +214,7 @@ SET LOCAL ROLE anon;
 SELECT pg_temp.check((SELECT count(*) FROM tasks) = 0, 'без входа задачи не видны');
 SELECT pg_temp.check((SELECT count(*) FROM invoices) = 0, 'без входа счета не видны');
 SELECT pg_temp.expect_denied('TRUNCATE task_status_history', 'без входа нельзя очистить таблицу');
+SELECT pg_temp.expect_denied('SELECT count(*) FROM task_board_positions', 'без входа порядок карточек на доске не виден');
 SELECT pg_temp.expect_forbidden('SELECT count(*) FROM public.claim_business_events(1000, now(), now() + interval ''100 years'')', 'без входа нельзя забрать очередь уведомлений');
 SELECT pg_temp.expect_forbidden('SELECT count(*) FROM public.activate_due_maintenance_tasks(''2100-01-01'', now())', 'без входа нельзя запустить задачи ТО');
 SELECT pg_temp.expect_forbidden('SELECT setval(''task_number_seq'', 1)', 'без входа нельзя сбить нумерацию задач');

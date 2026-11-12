@@ -1748,7 +1748,11 @@ export class M2ApiClient {
     readonly offset?: number;
     /** Счётчики «новые» и «на проверке» (по умолчанию не запрашиваются: экраны их не показывают). */
     readonly withAttention?: boolean;
-  } = {}): Promise<ApiPage<TaskApiRecord> & { readonly attention: { readonly new: number; readonly overdue: number; readonly underReview: number } }> {
+  } = {}): Promise<ApiPage<TaskApiRecord> & {
+    readonly attention: { readonly new: number; readonly overdue: number; readonly underReview: number };
+    /** Колонка отсортирована по местам, заданным вручную (запросили доску и в базе есть порядок карточек). */
+    readonly boardOrdered: boolean;
+  }> {
     const limit = query.limit ?? 100;
     const offset = query.offset ?? 0;
     const ascending = query.sort === "deadline_asc" || query.sort === "updated_asc";
@@ -1806,7 +1810,9 @@ export class M2ApiClient {
     let rows = primary.data;
     let error = primary.error;
     let count = primary.count;
-    if (error && select === TASK_SELECT) {
+    // Без полей инициатора повторяем, только если их нет в базе: таймаут или сбой сети
+    // не должны отключать эти поля до перезагрузки страницы.
+    if (error && select === TASK_SELECT && this.isMissingInitiatorContactSchema(error)) {
       this.markInitiatorContactUnavailable();
       const fallback = await pageRequest(TASK_SELECT_WITHOUT_INITIATOR_CONTACT, board);
       rows = fallback.data as typeof rows;
@@ -1824,7 +1830,8 @@ export class M2ApiClient {
       total: count ?? 0,
       limit,
       offset,
-      attention: { new: newCount ?? 0, overdue: items.filter((item) => item.isOverdue).length, underReview: reviewCount ?? 0 }
+      attention: { new: newCount ?? 0, overdue: items.filter((item) => item.isOverdue).length, underReview: reviewCount ?? 0 },
+      boardOrdered: board
     };
   }
 
@@ -2779,7 +2786,8 @@ export class M2ApiClient {
       throw new M2ApiError(400, "Порядок карточек пока не сохраняется: на сервере не обновлена база");
     }
     if (error.code === "42501" || /row-level security/iu.test(blob)) {
-      throw new M2ApiError(403, "Нет прав менять порядок этих карточек");
+      // Права на доске проверены заранее, поэтому чаще всего карточка уже в другом этапе.
+      throw new M2ApiError(403, "Порядок не сохранился: доска устарела или нет прав на эти задачи. Обновите доску");
     }
     throwIfError(error, "Не получилось сохранить порядок карточек");
   }

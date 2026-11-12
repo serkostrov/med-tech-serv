@@ -1281,11 +1281,6 @@ function TaskCardLoading({ task, onBack, backLabel = "К задачам" }: { re
   </div>;
 }
 
-/**
- * Перенос задачи на доске. На проверку задача уходит, только если результат заполнен,
- * как и по кнопке «Передать на проверку» в карточке; иначе ошибка с тем, что заполнить.
- * Ошибки показывает сама доска (одним сообщением, если переносили несколько задач).
- */
 /** Ручной порядок карточек есть во всех колонках, кроме закрытых и отменённых: там по дате. */
 function boardOrderFor(status: string): boolean {
   return status !== "closed" && status !== "cancelled";
@@ -1295,6 +1290,11 @@ async function saveBoardPositions(status: string, positions: readonly BoardPosit
   await m2Api.setTaskBoardPositions(status, positions);
 }
 
+/**
+ * Перенос задачи на доске. На проверку задача уходит, только если результат заполнен,
+ * как и по кнопке «Передать на проверку» в карточке; иначе ошибка с тем, что заполнить.
+ * Ошибки показывает сама доска (одним сообщением, если переносили несколько задач).
+ */
 async function moveTaskOnBoard(id: string, status: string): Promise<void> {
   if (status === "under_review") {
     const readiness = await m2Api.taskReviewReadiness(id);
@@ -1343,6 +1343,9 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const [mailRefresh, setMailRefresh] = useState(0);
   const [canAssignEngineer, setCanAssignEngineer] = useState(false);
   useEffect(() => { void m2Api.hasPermission("tasks.assign").then(setCanAssignEngineer).catch(() => setCanAssignEngineer(false)); }, []);
+  // Порядок карточек общий для всех: расставляет тот, кто может менять задачи (координатор, руководитель).
+  const [canArrangeBoard, setCanArrangeBoard] = useState(false);
+  useEffect(() => { void m2Api.hasPermission("tasks.write").then(setCanArrangeBoard).catch(() => setCanArrangeBoard(false)); }, []);
   const reloadTasks = async (currentFilters = appliedFilters, targetPageIndex = pageIndex) => {
     setLoading(true);
     try {
@@ -1479,6 +1482,10 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
   useEffect(() => () => { openRequest.current += 1; }, []);
+  // С фильтром видна только часть колонки: место среди видимых карточек сбило бы общий порядок,
+  // поэтому расставлять карточки можно на доске без фильтров (сортировка и этап не мешают).
+  const boardFiltered = Boolean(appliedFilters.search || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode
+    || appliedFilters.priority || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
     const page = await m2Api.tasksPage({
       ...(appliedFilters.search ? { search: appliedFilters.search } : {}),
@@ -1496,7 +1503,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
       offset,
       withAttention: false
     });
-    return { items: page.items, total: page.total };
+    return { items: page.items, total: page.total, manualOrder: page.boardOrdered };
   };
   useEffect(() => {
     // Доске нужны только статусы; справочники для фильтров лёгкие. Задачи колонки грузят сами.
@@ -1572,7 +1579,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
-      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} onReorder={saveBoardPositions} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
+      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} {...(canArrangeBoard && !boardFiltered ? { onReorder: saveBoardPositions } : {})} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
         <section className="card card--table" aria-labelledby="tasks-table-title">
           <CardHeader headingId="tasks-table-title" meta={`${tasks.length} из ${total}`} title="Все задачи" />
           {(loading || !listLoaded) && tasks.length === 0
@@ -3031,11 +3038,12 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
       engineers={[]}
       equipment={[]}
       loadColumn={async (status, offset, limit) => {
+        // Инженер видит общий порядок, который расставил координатор, но сам его не меняет:
+        // на его доске только его задачи, и перестановка среди них сбила бы общую доску.
         const page = await m2Api.tasksPage({ engineerId: user.id, status, sort: status === "closed" ? "updated_desc" : "deadline_asc", boardOrder: boardOrderFor(status), limit, offset });
         return { items: page.items, total: page.total };
       }}
       onMove={moveTaskOnBoard}
-      onReorder={saveBoardPositions}
       onOpen={openFromList}
       engineerMode
       hideEngineer

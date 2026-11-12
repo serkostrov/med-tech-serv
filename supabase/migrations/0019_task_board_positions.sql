@@ -7,7 +7,10 @@
 --
 -- Место действует только в том этапе (колонке), где его задали. Если задача перешла
 -- в другой этап из карточки, а не перетаскиванием, в новой колонке она встаёт после
--- расставленных вручную, по обычной сортировке доски.
+-- расставленных вручную, по обычной сортировке доски. Если задача вернулась в этап,
+-- где её уже ставили вручную (например, с проверки на доработку), она встаёт на прежнее место.
+--
+-- Расставляет карточки координатор на общей доске без фильтров; инженер видит этот порядок.
 
 CREATE TABLE IF NOT EXISTS public.task_board_positions (
   task_id uuid PRIMARY KEY REFERENCES public.tasks(id) ON DELETE CASCADE,
@@ -25,11 +28,19 @@ DROP POLICY IF EXISTS role_update ON public.task_board_positions;
 DROP POLICY IF EXISTS role_delete ON public.task_board_positions;
 CREATE POLICY role_read ON public.task_board_positions FOR SELECT TO authenticated
   USING (public.app_can_read_task(task_id));
+-- Место записывается только для этапа, в котором задача сейчас: заранее занять место
+-- в чужой колонке (например, «На проверке») нельзя.
 CREATE POLICY role_insert ON public.task_board_positions FOR INSERT TO authenticated
-  WITH CHECK (public.app_can_write_task(task_id));
+  WITH CHECK (
+    public.app_can_write_task(task_id)
+    AND status_code = (SELECT t.status_code FROM public.tasks AS t WHERE t.id = task_id)
+  );
 CREATE POLICY role_update ON public.task_board_positions FOR UPDATE TO authenticated
   USING (public.app_can_write_task(task_id))
-  WITH CHECK (public.app_can_write_task(task_id));
+  WITH CHECK (
+    public.app_can_write_task(task_id)
+    AND status_code = (SELECT t.status_code FROM public.tasks AS t WHERE t.id = task_id)
+  );
 CREATE POLICY role_delete ON public.task_board_positions FOR DELETE TO authenticated
   USING (public.app_can_write_task(task_id));
 

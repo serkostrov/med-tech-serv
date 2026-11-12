@@ -32,6 +32,16 @@ describe("board card order", () => {
   it("uses the next card beyond the loaded part when dropping at the bottom of a long column", () => {
     assert.deepEqual(positions(planBoardPositions([at("a", 1), at("b", 2)], 2, ["x"], { boardPosition: 3 })), [["x", 2.5]]);
     assert.deepEqual(positions(planBoardPositions([at("a", 1), at("b", 2)], 2, ["x"], {})), [["x", 3]]);
+    // Все загруженные карточки перетаскивают, ниже есть ещё: ставим перед следующей.
+    assert.deepEqual(positions(planBoardPositions([], 0, ["x", "y"], { boardPosition: 10 })), [["x", 8], ["y", 9]]);
+  });
+
+  it("keeps the loaded cards above the rest when all their places are equal", () => {
+    // Все загруженные с одним местом, дальше по колонке места больше: нумеруем вниз от последнего.
+    const plan = planBoardPositions([at("a", 5), at("b", 5)], 1, ["x"]);
+    assert.deepEqual(plan.map((item) => item.taskId), ["a", "x", "b"]);
+    assert.ok(plan.every((item) => item.position <= 5));
+    assert.ok((plan[0]?.position ?? 0) < (plan[1]?.position ?? 0) && (plan[1]?.position ?? 0) < (plan[2]?.position ?? 0));
   });
 
   it("spreads placed cards again when there is no room left between neighbours", () => {
@@ -94,6 +104,14 @@ describe("board order requests", () => {
     ]);
     assert.equal(page.items[0]?.boardPosition, 1);
     assert.equal(page.items[1]?.boardPosition, undefined);
+    assert.equal(page.boardOrdered, true);
+  });
+
+  it("does not turn off the initiator fields after an unrelated error", async () => {
+    const { client, calls } = fakeClient([{ error: { message: "canceling statement due to statement timeout", code: "57014" } }]);
+    await assert.rejects(new M2ApiClient(client).tasksPage({ status: "new", boardOrder: true }));
+    // Повтора без полей инициатора нет: ошибка не про схему.
+    assert.equal(calls.length, 1);
   });
 
   it("keeps plain lists without the board order", async () => {
@@ -116,7 +134,7 @@ describe("board order requests", () => {
 
   it("explains a missing access instead of a raw database error", async () => {
     const { client } = fakeClient([{ error: { message: "new row violates row-level security policy for table \"task_board_positions\"", code: "42501" } }]);
-    await assert.rejects(new M2ApiClient(client).setTaskBoardPositions("assigned", [{ taskId: "a", position: 1 }]), /Нет прав менять порядок/u);
+    await assert.rejects(new M2ApiClient(client).setTaskBoardPositions("assigned", [{ taskId: "a", position: 1 }]), /Порядок не сохранился: доска устарела/u);
   });
 
   // Последним: после него в этом процессе доска считает, что порядка в базе нет.
@@ -130,6 +148,7 @@ describe("board order requests", () => {
     assert.equal(calls.length, 2);
     assert.doesNotMatch(calls[1]?.select ?? "", /board_position/u);
     assert.deepEqual(calls[1]?.orders, [["updated_at", { ascending: false }]]);
+    assert.equal(page.boardOrdered, false);
     await assert.rejects(new M2ApiClient(client).setTaskBoardPositions("new", [{ taskId: "a", position: 1 }]), /не обновлена база/u);
   });
 });
