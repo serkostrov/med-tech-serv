@@ -639,29 +639,67 @@ export async function allPages(
   };
   const first = await request(0, pageSize - 1, true);
   const rows = rowsOf(first);
-  if (rows.length < pageSize) return rows;
+  const total = typeof first.count === "number" ? first.count : undefined;
+  if (rows.length === 0 || (total !== undefined && rows.length >= total)) return rows;
+  // Если сервер отдаёт меньше строк за раз, чем мы просили, читаем его страницами.
+  const size = total !== undefined ? rows.length : pageSize;
+  if (total === undefined && rows.length < pageSize) return rows;
   const offsets: number[] = [];
-  if (typeof first.count === "number") for (let offset = pageSize; offset < first.count; offset += pageSize) offsets.push(offset);
+  if (total !== undefined) for (let offset = size; offset < total; offset += size) offsets.push(offset);
   const pages: unknown[][] = new Array<unknown[]>(offsets.length);
   let next = 0;
+  let failed = false;
   await Promise.all(Array.from({ length: Math.min(4, offsets.length) }, async () => {
-    while (next < offsets.length) {
+    while (next < offsets.length && !failed) {
       const index = next;
       next += 1;
       const offset = offsets[index] ?? 0;
-      pages[index] = rowsOf(await request(offset, offset + pageSize - 1, false));
+      try {
+        pages[index] = rowsOf(await request(offset, offset + size - 1, false));
+      } catch (error) {
+        // Одна страница не загрузилась: остальные не запрашиваем, ошибка уйдёт наверх.
+        failed = true;
+        throw error;
+      }
     }
   }));
-  for (const page of pages) rows.push(...page);
-  // Пока читали, могли добавиться строки: дочитываем, пока страница полная.
+  for (const page of pages) rows.push(...(page ?? []));
+  // Пока читали, могли добавиться строки (или общего числа нет): дочитываем, пока страница полная.
   let last = pages.length > 0 ? pages[pages.length - 1] ?? [] : rows;
-  let offset = pageSize * (offsets.length + 1);
-  while (last.length >= pageSize) {
-    last = rowsOf(await request(offset, offset + pageSize - 1, false));
+  let offset = size * (offsets.length + 1);
+  while (last.length >= size) {
+    last = rowsOf(await request(offset, offset + size - 1, false));
     rows.push(...last);
-    offset += pageSize;
+    offset += size;
   }
   return rows;
+}
+
+/** День по местному времени («2026-11-12») для момента ISO; строка без времени возвращается как есть. */
+export function localDay(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  if (/^\d{4}-\d{2}-\d{2}$/u.test(value)) return value;
+  const moment = new Date(value);
+  if (Number.isNaN(moment.getTime())) return value.slice(0, 10);
+  return `${moment.getFullYear()}-${String(moment.getMonth() + 1).padStart(2, "0")}-${String(moment.getDate()).padStart(2, "0")}`;
+}
+
+/** Закрыта вовремя: день закрытия (по местному времени) не позже конца срока. Без срока или даты: не считаем. */
+export function closedOnTime(completedAt: string | undefined, deadlineTo: string | undefined): boolean | undefined {
+  const completed = localDay(completedAt);
+  const deadline = deadlineTo?.slice(0, 10);
+  if (!completed || !deadline) return undefined;
+  return completed <= deadline;
+}
+
+/** Границы периода отчёта по местному времени: с начала первого дня до конца последнего. */
+export function reportPeriodBounds(from: string, to: string): { readonly start: string; readonly end: string } {
+  const start = new Date(`${from}T00:00:00`);
+  const end = new Date(`${to}T23:59:59.999`);
+  return {
+    start: Number.isNaN(start.getTime()) ? from : start.toISOString(),
+    end: Number.isNaN(end.getTime()) ? `${to}T23:59:59.999Z` : end.toISOString()
+  };
 }
 
 /**
@@ -882,6 +920,16 @@ export class M2ApiClient {
     return mapTask(asRow(primary.data));
   }
 
+  /** Задача для карточки: сразу с видом работ, причиной и прибором целиком. */
+  private async loadTaskCardRow(id: string): Promise<Row> {
+    const { data, error } = await this.db().from("tasks")
+      .select(`${this.taskSelect()}, work_type:work_types(code, name), reason:task_reasons(code, name), equipment_full:equipment!equipment_id(${EQUIPMENT_SELECT})`)
+      .eq("id", id).maybeSingle();
+    throwIfError(error);
+    if (!data) throw new M2ApiError(404, "Задача не найдена");
+    return asRow(data);
+  }
+
   private async loadEquipment(id: string): Promise<EquipmentApiRecord> {
     const { data, error } = await this.db().from("equipment").select(EQUIPMENT_SELECT).eq("id", id).maybeSingle();
     throwIfError(error);
@@ -891,19 +939,40 @@ export class M2ApiClient {
 
 
 
-  private async mapFiles(rows: readonly unknown[] | null, canSeeFinance: boolean): Promise<EquipmentFileResponse[]> {
-    // Ссылки на все файлы одним запросом, а не по одному на файл.
-    const visible = (rows ?? []).map(asRow).filter((row) => !(row.is_financial === true && !canSeeFinance));
-    const keys = visible.map((row) => text(row, "storage_key")).filter(Boolean);
-    const urlByKey = new Map<string, string>();
-    if (keys.length) {
-      const { data } = await this.db().storage.from("medtech-files").createSignedUrls(keys, 3600);
+  /** Подписанные ссылки на файлы живут час; держим их 50 минут, чтобы повторно не подписывать. */
+  private readonly signedUrlCache = new Map<string, { readonly url: string; readonly until: number }>();
+
+  /** Ссылки на файлы по ключам хранилища: из памяти, недостающие одним запросом. */
+  public async signedFileUrls(keys: readonly string[]): Promise<ReadonlyMap<string, string>> {
+    const now = Date.now();
+    const result = new Map<string, string>();
+    const missing: string[] = [];
+    for (const key of new Set(keys.filter(Boolean))) {
+      const cached = this.signedUrlCache.get(key);
+      if (cached && cached.until > now) result.set(key, cached.url);
+      else missing.push(key);
+    }
+    if (missing.length) {
+      const { data } = await this.db().storage.from("medtech-files").createSignedUrls(missing, 3600);
       for (const item of data ?? []) {
-        if (item.path && item.signedUrl) urlByKey.set(item.path, item.signedUrl);
+        if (!item.path || !item.signedUrl) continue;
+        result.set(item.path, item.signedUrl);
+        this.signedUrlCache.set(item.path, { url: item.signedUrl, until: now + 50 * 60_000 });
       }
     }
-    return visible.map((row) => {
+    return result;
+  }
+
+  private visibleFileRows(rows: readonly unknown[] | null, canSeeFinance: boolean): Row[] {
+    return (rows ?? []).map(asRow).filter((row) => !(row.is_financial === true && !canSeeFinance));
+  }
+
+  /** Файлы для экрана: ссылка, если она уже есть в памяти; ключ хранилища, чтобы галерея подписала остальные. */
+  private fileRecords(rows: readonly Row[]): EquipmentFileResponse[] {
+    const now = Date.now();
+    return rows.map((row) => {
       const key = text(row, "storage_key");
+      const cached = key ? this.signedUrlCache.get(key) : undefined;
       return {
         id: text(row, "id"),
         kind: text(row, "kind") || "document",
@@ -912,11 +981,23 @@ export class M2ApiClient {
         byteSize: numberValue(row.byte_size) ?? 0,
         createdAt: iso(row.created_at),
         equipmentId: optionalText(row, "equipment_id"),
-        url: key ? urlByKey.get(key) : undefined
+        url: cached && cached.until > now ? cached.url : undefined,
+        ...(key ? { storageKey: key } : {})
       };
     });
   }
 
+  /** Файлы со ссылками: недостающие подписываем сейчас, одним запросом. */
+  private async mapFiles(rows: readonly unknown[] | null, canSeeFinance: boolean): Promise<EquipmentFileResponse[]> {
+    const visible = this.visibleFileRows(rows, canSeeFinance);
+    await this.signedFileUrls(visible.map((row) => text(row, "storage_key")));
+    return this.fileRecords(visible);
+  }
+
+  /** Файлы без ожидания ссылок: экран показывается сразу, превью подгрузит галерея. */
+  private mapFilesLazy(rows: readonly unknown[] | null, canSeeFinance: boolean): EquipmentFileResponse[] {
+    return this.fileRecords(this.visibleFileRows(rows, canSeeFinance));
+  }
 
   private sessionCache: { readonly userId: string; readonly at: number; readonly value: Promise<ApiSessionUser> } | undefined;
   /** Справочники меняются редко: держим 5 минут, сбрасываем при правке справочника, входе и выходе. */
@@ -944,11 +1025,15 @@ export class M2ApiClient {
     // Вход проверяет сервер (getUser), а профиль читаем параллельно по id из сохранённого входа.
     const { data: localData } = await this.db().auth.getSession();
     const localUserId = localData.session?.user.id;
-    const profileQuery = (userId: string) => this.db()
-      .from("users")
-      .select("id, full_name, role, email, is_active, access_role_key, access_role:access_roles(key, name, base_role)")
-      .eq("id", userId)
-      .maybeSingle();
+    // Права роли приходят вместе с профилем, одним запросом, а не вторым шагом.
+    const profileFields = "id, full_name, role, email, is_active, access_role_key, access_role:access_roles(key, name, base_role";
+    const profileQuery = async (userId: string) => {
+      const withPermissions = await this.db().from("users")
+        .select(`${profileFields}, permissions:access_role_permissions(permission_code))`)
+        .eq("id", userId).maybeSingle();
+      if (!withPermissions.error) return withPermissions;
+      return this.db().from("users").select(`${profileFields})`).eq("id", userId).maybeSingle();
+    };
     const [auth, profileGuess] = await Promise.all([
       this.db().auth.getUser(),
       localUserId ? profileQuery(localUserId) : Promise.resolve(undefined)
@@ -962,11 +1047,14 @@ export class M2ApiClient {
     const row = asRow(profile.data);
     const accessRole = related(row, "access_role");
     const roleKey = optionalText(row, "access_role_key") ?? text(row, "role");
-    const { data: permissionRows, error: permissionError } = await this.db()
-      .from("access_role_permissions")
-      .select("permission_code")
-      .eq("role_key", roleKey);
-    throwIfError(permissionError);
+    // Без своей роли доступа (только базовая роль) или без вложенных прав: читаем права отдельно.
+    const embedded = optionalText(accessRole, "key") === roleKey && Array.isArray(accessRole.permissions) ? accessRole.permissions : undefined;
+    let permissionRows: readonly unknown[] | null = embedded ?? null;
+    if (!embedded) {
+      const separate = await this.db().from("access_role_permissions").select("permission_code").eq("role_key", roleKey);
+      throwIfError(separate.error);
+      permissionRows = separate.data;
+    }
     const result: ApiSessionUser = {
       id: text(row, "id"),
       fullName: text(row, "full_name"),
@@ -983,6 +1071,8 @@ export class M2ApiClient {
   public async login(email: string, password: string): Promise<ApiSessionUser> {
     this.sessionCache = undefined;
     this.catalogCache.clear();
+    // Ссылки на файлы прежнего входа другому пользователю не достаются.
+    this.signedUrlCache.clear();
     const { error } = await this.db().auth.signInWithPassword({ email, password });
     throwIfError(error, "Неверный e-mail или пароль");
     return this.session();
@@ -991,6 +1081,8 @@ export class M2ApiClient {
   public async logout(): Promise<void> {
     this.sessionCache = undefined;
     this.catalogCache.clear();
+    // Ссылки на файлы прежнего входа другому пользователю не достаются.
+    this.signedUrlCache.clear();
     const { error } = await this.db().auth.signOut();
     throwIfError(error);
   }
@@ -1384,7 +1476,8 @@ export class M2ApiClient {
       passport,
       history,
       meterReadings,
-      files: await this.mapFiles(filesResult.data, session.permissions?.includes("finance.read") === true)
+      // Паспорт показывается сразу, превью файлов подгрузит галерея.
+      files: this.mapFilesLazy(filesResult.data, session.permissions?.includes("finance.read") === true)
     };
   }
 
@@ -2336,14 +2429,29 @@ export class M2ApiClient {
       }
       return withSale;
     };
-    const [task, session, parts, files, journal, closure] = await Promise.all([
-      this.loadTask(id),
+    // Вид работ, причина, этап и прибор приходят вместе с задачей, имена авторов вместе
+    // с историей и закрытием: карточка открывается одной волной запросов. Ссылки на фото
+    // подгружает галерея после показа карточки.
+    const journalSelect = "id, from_status, to_status, comment, changed_at, changed_by";
+    const closureSelect = "task_id, act_file_id, submitted_by, submitted_at, verified_by, verified_at, verification_comment";
+    const [cardRow, session, parts, files, journalWithNames, closureWithName] = await Promise.all([
+      this.loadTaskCardRow(id).catch((error: unknown) => {
+        if (error instanceof M2ApiError && error.status === 404) throw error;
+        return undefined;
+      }),
       this.cachedSession(),
       loadParts(),
       this.db().from("files").select(FILE_SELECT).eq("task_id", id).order("created_at"),
-      this.db().from("task_status_history").select("id, from_status, to_status, comment, changed_at, changed_by").eq("task_id", id).order("changed_at", { ascending: false }),
-      this.db().from("task_closures").select("task_id, act_file_id, submitted_by, submitted_at, verified_by, verified_at, verification_comment").eq("task_id", id).maybeSingle()
+      this.db().from("task_status_history").select(`${journalSelect}, changer:users!changed_by(full_name)`).eq("task_id", id).order("changed_at", { ascending: false }),
+      this.db().from("task_closures").select(`${closureSelect}, submitter:users!submitted_by(full_name)`).eq("task_id", id).maybeSingle()
     ]);
+    // Если имена авторов не встроились (другая схема базы), читаем как раньше, без них.
+    const journal = journalWithNames.error
+      ? await this.db().from("task_status_history").select(journalSelect).eq("task_id", id).order("changed_at", { ascending: false })
+      : journalWithNames;
+    const closure = closureWithName.error
+      ? await this.db().from("task_closures").select(closureSelect).eq("task_id", id).maybeSingle()
+      : closureWithName;
     throwIfError(parts.error);
     throwIfError(files.error);
     throwIfError(journal.error);
@@ -2351,25 +2459,58 @@ export class M2ApiClient {
     const canSeeFinance = session.permissions?.includes("finance.read") === true;
     const closureRow = closure.data ? asRow(closure.data) : undefined;
     const submitterId = closureRow ? optionalText(closureRow, "submitted_by") : undefined;
-    const actorIds = [...new Set([
+    const task = cardRow ? mapTask(cardRow) : await this.loadTask(id);
+    const actorNameById = new Map<string, string>();
+    for (const item of journal.data ?? []) {
+      const row = asRow(item);
+      const actor = optionalText(row, "changed_by");
+      const name = optionalText(related(row, "changer"), "full_name");
+      if (actor && name) actorNameById.set(actor, name);
+    }
+    if (submitterId && closureRow && optionalText(related(closureRow, "submitter"), "full_name")) {
+      actorNameById.set(submitterId, optionalText(related(closureRow, "submitter"), "full_name") ?? "");
+    }
+    if (task.engineerId && task.engineerName) actorNameById.set(task.engineerId, task.engineerName);
+    const missingActors = [...new Set([
       ...(journal.data ?? []).map((item) => optionalText(asRow(item), "changed_by")),
       submitterId,
       task.engineerId
-    ].filter((value): value is string => Boolean(value)))];
-    // Шаг 2: справочные данные и ссылки на файлы, тоже одновременно.
-    const [people, workType, reason, statusRow, equipment, mappedFiles] = await Promise.all([
-      actorIds.length ? this.db().from("users").select("id, full_name").in("id", actorIds) : Promise.resolve({ data: [], error: null }),
-      task.workTypeCode ? this.db().from("work_types").select("code, name").eq("code", task.workTypeCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
-      task.reasonCode ? this.db().from("task_reasons").select("code, name").eq("code", task.reasonCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
-      this.db().from("task_statuses").select("code, name").eq("code", task.status).maybeSingle(),
-      task.equipmentId ? this.loadEquipment(task.equipmentId) : Promise.resolve(undefined),
-      this.mapFiles(files.data, canSeeFinance)
-    ]);
-    throwIfError(people.error);
-    throwIfError(workType.error);
-    throwIfError(reason.error);
-    throwIfError(statusRow.error);
-    const actorNameById = new Map((people.data ?? []).map((item) => [text(asRow(item), "id"), text(asRow(item), "full_name")]));
+    ].filter((value): value is string => Boolean(value) && !actorNameById.has(value as string)))];
+    const mappedFiles = this.mapFilesLazy(files.data, canSeeFinance);
+    let workType: { readonly data: unknown };
+    let reason: { readonly data: unknown };
+    let statusRow: { readonly data: unknown };
+    let equipment: EquipmentApiRecord | undefined;
+    if (cardRow) {
+      const workTypeRow = related(cardRow, "work_type");
+      const reasonRow = related(cardRow, "reason");
+      const equipmentRow = related(cardRow, "equipment_full");
+      workType = { data: optionalText(workTypeRow, "code") ? workTypeRow : null };
+      reason = { data: optionalText(reasonRow, "code") ? reasonRow : null };
+      statusRow = { data: optionalText(related(cardRow, "status"), "code") ? related(cardRow, "status") : null };
+      equipment = optionalText(equipmentRow, "id") ? mapEquipment(equipmentRow) : undefined;
+    } else {
+      // Запасной путь, как раньше: справочные данные вторым шагом.
+      const [workTypeResult, reasonResult, statusResult, equipmentResult] = await Promise.all([
+        task.workTypeCode ? this.db().from("work_types").select("code, name").eq("code", task.workTypeCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        task.reasonCode ? this.db().from("task_reasons").select("code, name").eq("code", task.reasonCode).maybeSingle() : Promise.resolve({ data: null, error: null }),
+        this.db().from("task_statuses").select("code, name").eq("code", task.status).maybeSingle(),
+        task.equipmentId ? this.loadEquipment(task.equipmentId) : Promise.resolve(undefined)
+      ]);
+      throwIfError(workTypeResult.error);
+      throwIfError(reasonResult.error);
+      throwIfError(statusResult.error);
+      workType = workTypeResult;
+      reason = reasonResult;
+      statusRow = statusResult;
+      equipment = equipmentResult;
+    }
+    // Имена, которые не пришли вместе с данными (запасной путь), одним запросом.
+    if (missingActors.length && (!cardRow || journalWithNames.error || closureWithName.error)) {
+      const people = await this.db().from("users").select("id, full_name").in("id", missingActors);
+      throwIfError(people.error);
+      for (const item of people.data ?? []) actorNameById.set(text(asRow(item), "id"), text(asRow(item), "full_name"));
+    }
     const engineer = { data: task.engineerId && actorNameById.has(task.engineerId) ? { id: task.engineerId, full_name: actorNameById.get(task.engineerId) } : null };
     const submitter = { data: submitterId && actorNameById.has(submitterId) ? { full_name: actorNameById.get(submitterId) } : null };
     const canWrite = session.permissions?.includes("tasks.write") === true || session.permissions?.includes("tasks.write_own") === true;
@@ -2487,11 +2628,18 @@ export class M2ApiClient {
   }
 
   public async engineers(): Promise<readonly EngineerOverview[]> {
-    const { data, error } = await this.db().from("users").select("id, full_name, is_active, engineer_competencies(model_line, manufacturer:manufacturers(name))").eq("role", "engineer").order("full_name");
+    // Инженеры и их открытые задачи одновременно. Загрузка: только незакрытые задачи,
+    // все, а не первые 1000 (столько сервер отдаёт за один запрос).
+    const [{ data, error }, tasks] = await Promise.all([
+      this.db().from("users").select("id, full_name, is_active, engineer_competencies(model_line, manufacturer:manufacturers(name))").eq("role", "engineer").order("full_name"),
+      allPages((start, end, withCount) => this.db().from("tasks")
+        .select("id, engineer_id, status_code, deadline_to", withCount ? { count: "exact" } : undefined)
+        .not("engineer_id", "is", null).not("status_code", "in", "(closed,cancelled)")
+        .order("id", { ascending: true })
+        .range(start, end), "Не получилось загрузить задачи инженеров")
+    ]);
     throwIfError(error);
     const engineers = data ?? [];
-    const { data: tasks, error: taskError } = await this.db().from("tasks").select("engineer_id, status_code, deadline_to").not("engineer_id", "is", null);
-    throwIfError(taskError);
     const today = new Date().toISOString().slice(0, 10);
     return engineers.map((item) => {
       const row = asRow(item);
@@ -2711,11 +2859,12 @@ export class M2ApiClient {
   }
 
   public async operationsReport(from: string, to: string): Promise<OperationsReportRecord> {
+    const bounds = reportPeriodBounds(from, to);
     // Все заявки периода, а не первые 1000: столько сервер отдаёт за один запрос.
     const [tasks, workTypesResult] = await Promise.all([
       allPages((start, end, withCount) => this.db().from("tasks")
         .select("id, status_code, work_type_code, deadline_to, completed_at, created_at", withCount ? { count: "exact" } : undefined)
-        .gte("created_at", from).lte("created_at", `${to}T23:59:59.999Z`)
+        .gte("created_at", bounds.start).lte("created_at", bounds.end)
         .order("created_at", { ascending: true }).order("id", { ascending: true })
         .range(start, end), "Не получилось построить отчёт"),
       this.db().from("work_types").select("code, name")
@@ -2733,16 +2882,15 @@ export class M2ApiClient {
       const row = asRow(item);
       const status = text(row, "status_code");
       const type = text(row, "work_type_code");
-      const created = (optionalText(row, "created_at") ?? iso(row.created_at)).slice(0, 7);
+      const created = (localDay(optionalText(row, "created_at") ?? iso(row.created_at)) ?? "").slice(0, 7);
       byStatus.set(status, (byStatus.get(status) ?? 0) + 1);
       byType.set(type, (byType.get(type) ?? 0) + 1);
       if (/^\d{4}-\d{2}$/u.test(created)) byMonth.set(created, (byMonth.get(created) ?? 0) + 1);
       if (status === "closed") {
-        const deadline = optionalText(row, "deadline_to")?.slice(0, 10);
-        const completed = (optionalText(row, "completed_at") ?? iso(row.completed_at)).slice(0, 10);
-        if (deadline) {
+        const onTime = closedOnTime(optionalText(row, "completed_at"), optionalText(row, "deadline_to"));
+        if (onTime !== undefined) {
           datedClosed += 1;
-          if (completed && completed <= deadline) onTimeClosed += 1;
+          if (onTime) onTimeClosed += 1;
         }
       }
     }
@@ -2789,7 +2937,7 @@ export class M2ApiClient {
       this.db().from("task_statuses").select("code, name"),
       allPages((start, end, withCount) => this.db().from("tasks")
         .select(select, withCount ? { count: "exact" } : undefined)
-        .gte("created_at", from).lte("created_at", `${to}T23:59:59.999Z`)
+        .gte("created_at", reportPeriodBounds(from, to).start).lte("created_at", reportPeriodBounds(from, to).end)
         .order("created_at", { ascending: true }).order("id", { ascending: true })
         .range(start, end), "Не получилось выгрузить заявки за период", pageSize)
     ]);

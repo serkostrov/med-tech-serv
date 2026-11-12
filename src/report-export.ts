@@ -1,5 +1,5 @@
 import type { OperationsReportRecord, ReportTaskRow } from "./m2-api.js";
-import { reportTaskOverdue } from "./m2-api.js";
+import { closedOnTime, reportTaskOverdue } from "./m2-api.js";
 import { buildXlsxCompressed, type XlsxCell, type XlsxSheet } from "./xlsx.js";
 
 /** «2026-11-12» → «12.11.2026». */
@@ -8,14 +8,11 @@ function dayLabel(value: string): string {
   return match ? `${match[3]}.${match[2]}.${match[1]}` : value;
 }
 
-/** Закрыта вовремя: дата закрытия не позже конца срока. Без срока или не закрыта: пусто. */
-function closedOnTime(task: ReportTaskRow): string {
-  if (task.status !== "closed" || !task.periodTo || !task.completedAt) return "";
-  const completed = new Date(task.completedAt);
-  const day = Number.isNaN(completed.getTime())
-    ? task.completedAt.slice(0, 10)
-    : `${completed.getFullYear()}-${String(completed.getMonth() + 1).padStart(2, "0")}-${String(completed.getDate()).padStart(2, "0")}`;
-  return day <= task.periodTo.slice(0, 10) ? "Да" : "Нет";
+/** Закрыта вовремя: то же правило, что в сводке. Не закрыта или без срока: пусто. */
+function closedOnTimeLabel(task: ReportTaskRow): string {
+  if (task.status !== "closed") return "";
+  const onTime = closedOnTime(task.completedAt, task.periodTo);
+  return onTime === undefined ? "" : onTime ? "Да" : "Нет";
 }
 
 /**
@@ -63,7 +60,7 @@ export function reportWorkbookSheets(report: OperationsReportRecord, tasks: read
     task.periodFrom ? { date: task.periodFrom.slice(0, 10) } : "",
     task.periodTo ? { date: task.periodTo.slice(0, 10) } : "",
     task.completedAt ? { date: task.completedAt, withTime: true } : "",
-    closedOnTime(task),
+    closedOnTimeLabel(task),
     reportTaskOverdue(task.periodTo, task.status, report.period.to, today) ? "Да" : ""
   ]);
   return [

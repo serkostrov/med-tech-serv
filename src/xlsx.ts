@@ -103,9 +103,16 @@ function cellXml(cell: XlsxCell, reference: string, header: boolean): string {
   return serial === undefined ? "" : `<c r="${reference}" s="${cell.withTime ? 3 : 2}"><v>${serial}</v></c>`;
 }
 
+/** Самая длинная строка листа. Циклом, а не Math.max(...): на сотнях тысяч строк спред переполняет стек. */
+function sheetWidth(sheet: XlsxSheet): number {
+  let width = 1;
+  for (const row of sheet.rows) if (row.length > width) width = row.length;
+  return width;
+}
+
 function sheetXml(sheet: XlsxSheet): string {
   const header = sheet.headerRow;
-  const width = Math.max(1, ...sheet.rows.map((row) => row.length));
+  const width = sheetWidth(sheet);
   const rows = sheet.rows.map((row, rowIndex) => {
     const number = rowIndex + 1;
     const cells = row.map((cell, columnIndex) => cellXml(cell, `${columnName(columnIndex)}${number}`, header === number)).join("");
@@ -138,7 +145,7 @@ function workbookFiles(sheets: readonly XlsxSheet[]): readonly (readonly [string
   const names = sheets.map((sheet, index) => safeSheetName(sheet.name, index, used));
   const definedNames = sheets
     .map((sheet, index) => {
-      const width = Math.max(1, ...sheet.rows.map((row) => row.length));
+      const width = sheetWidth(sheet);
       return sheet.headerRow && sheet.rows.length > sheet.headerRow
         ? `<definedName name="_xlnm._FilterDatabase" localSheetId="${index}" hidden="1">'${escapeXml((names[index] ?? "").replace(/'/gu, "''"))}'!$A$${sheet.headerRow}:$${columnName(width - 1)}$${sheet.rows.length}</definedName>`
         : "";

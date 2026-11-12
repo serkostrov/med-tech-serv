@@ -239,6 +239,8 @@ export interface EquipmentFileResponse {
   readonly byteSize: number;
   readonly createdAt: string;
   readonly url?: string;
+  /** Ключ в хранилище: по нему галерея получает ссылку, если её ещё нет. */
+  readonly storageKey?: string;
 }
 
 export interface EquipmentMeterReading {

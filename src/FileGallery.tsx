@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
+import { m2Api } from "./m2-api.js";
 import type { EquipmentFileResponse } from "./types.js";
 
 export const FILE_KIND_LABELS: Readonly<Record<string, string>> = {
@@ -34,14 +35,35 @@ function FilePreview({ file, type }: { readonly file: EquipmentFileResponse; rea
 }
 
 /**
+ * Ссылки для файлов, пришедших без ссылки: карточка показывается сразу, а превью
+ * подгружаются следом одним запросом (подписанные ссылки сервер хранит в памяти час).
+ */
+function useFileUrls(files: readonly EquipmentFileResponse[]): ReadonlyMap<string, string> {
+  const missing = files.filter((file) => !file.url && file.storageKey).map((file) => file.storageKey as string);
+  const signature = missing.join("\n");
+  const [urls, setUrls] = useState<ReadonlyMap<string, string>>(new Map());
+  useEffect(() => {
+    if (!signature) return undefined;
+    let current = true;
+    void m2Api.signedFileUrls(signature.split("\n")).then((loaded) => {
+      if (current) setUrls(loaded);
+    }).catch(() => undefined);
+    return () => { current = false; };
+  }, [signature]);
+  return urls;
+}
+
+/**
  * Файлы задачи плиткой: у фото превью, у видео кадр и значок, у остального — название.
  * Клик открывает файл целиком в новой вкладке.
  */
-export function FileGallery({ files, emptyText = "Файлов пока нет." }: {
+export function FileGallery({ files: incoming, emptyText = "Файлов пока нет." }: {
   readonly files: readonly EquipmentFileResponse[];
   readonly emptyText?: string;
 }) {
-  if (files.length === 0) return <p className="file-gallery__empty">{emptyText}</p>;
+  const urls = useFileUrls(incoming);
+  if (incoming.length === 0) return <p className="file-gallery__empty">{emptyText}</p>;
+  const files = incoming.map((file) => file.url || !file.storageKey ? file : { ...file, url: urls.get(file.storageKey) });
   return <ul className="file-gallery">
     {files.map((file) => {
       const type = fileType(file);

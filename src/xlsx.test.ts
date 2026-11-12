@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import { crc32 as nodeCrc32, inflateRawSync } from "node:zlib";
 import { buildXlsx, buildXlsxCompressed, columnName, crc32, escapeXml, excelDate } from "./xlsx.js";
 import { reportWorkbook, reportWorkbookSheets } from "./report-export.js";
-import { allPages, type OperationsReportRecord, type ReportTaskRow } from "./m2-api.js";
+import { allPages, closedOnTime, localDay, reportPeriodBounds, type OperationsReportRecord, type ReportTaskRow } from "./m2-api.js";
 
 /** Читает zip без сжатия, как его пишет генератор: имя файла → содержимое. */
 function unzip(data: Uint8Array): Map<string, string> {
@@ -174,5 +174,45 @@ describe("large reports", () => {
   it("compresses small files too and keeps them readable", async () => {
     const files = unzip(await buildXlsxCompressed([{ name: "Сводка", rows: [["Всего заявок", 3]] }]));
     assert.match(files.get("xl/worksheets/sheet1.xml") ?? "", /Всего заявок/u);
+  });
+});
+
+describe("large reports, edge cases", () => {
+  it("reads everything when the server returns fewer rows per request than asked", async () => {
+    const all = Array.from({ length: 10 }, (_, index) => index);
+    // Сервер отдаёт по 3 строки, сколько бы ни просили.
+    const rows = await allPages(async (from, _to, withCount) => ({ data: all.slice(from, from + 3), error: null, count: withCount ? all.length : null }), "ошибка", 1000);
+    assert.deepEqual(rows, all);
+  });
+
+  it("stops asking for pages after one fails", async () => {
+    let calls = 0;
+    await assert.rejects(allPages(async (from, to, withCount) => {
+      calls += 1;
+      if (from === 3) return { data: null, error: { message: "boom" }, count: null };
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      return { data: Array.from({ length: to - from + 1 }, (_, index) => from + index), error: null, count: withCount ? 300 : null };
+    }, "Не получилось", 3), /Не получилось/u);
+    assert.ok(calls < 20, `после ошибки остальные страницы не запрашиваются, запросов ${calls}`);
+  });
+
+  it("builds a sheet with 150 000 rows without running out of stack", () => {
+    const rows = Array.from({ length: 150_000 }, (_, index) => [`З-${index}`, index]);
+    const file = buildXlsx([{ name: "Заявки", rows, headerRow: 1 }]);
+    assert.ok(file.length > 1_000_000);
+  });
+
+  it("uses one rule for closed on time and local days", () => {
+    const lateNight = new Date(2026, 10, 13, 2, 30).toISOString();
+    assert.equal(localDay(lateNight), "2026-11-13");
+    assert.equal(localDay("2026-11-12"), "2026-11-12");
+    assert.equal(closedOnTime(lateNight, "2026-11-12"), false);
+    assert.equal(closedOnTime(new Date(2026, 10, 12, 23, 0).toISOString(), "2026-11-12"), true);
+    assert.equal(closedOnTime(undefined, "2026-11-12"), undefined);
+    const bounds = reportPeriodBounds("2026-11-01", "2026-11-30");
+    assert.equal(new Date(bounds.start).getDate(), 1);
+    assert.equal(new Date(bounds.start).getHours(), 0);
+    assert.equal(new Date(bounds.end).getDate(), 30);
+    assert.equal(new Date(bounds.end).getHours(), 23);
   });
 });
