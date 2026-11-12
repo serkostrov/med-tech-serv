@@ -939,7 +939,7 @@ export class M2ApiClient {
 
 
 
-  /** Подписанные ссылки на файлы живут час; держим их 50 минут, чтобы повторно не подписывать. */
+  /** Подписанные ссылки на файлы живут час; держим их 30 минут, чтобы у показанной ссылки оставалось не меньше получаса. */
   private readonly signedUrlCache = new Map<string, { readonly url: string; readonly until: number }>();
 
   /** Ссылки на файлы по ключам хранилища: из памяти, недостающие одним запросом. */
@@ -957,7 +957,7 @@ export class M2ApiClient {
       for (const item of data ?? []) {
         if (!item.path || !item.signedUrl) continue;
         result.set(item.path, item.signedUrl);
-        this.signedUrlCache.set(item.path, { url: item.signedUrl, until: now + 50 * 60_000 });
+        this.signedUrlCache.set(item.path, { url: item.signedUrl, until: now + 30 * 60_000 });
       }
     }
     return result;

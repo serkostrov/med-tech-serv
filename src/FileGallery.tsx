@@ -36,7 +36,7 @@ function FilePreview({ file, type }: { readonly file: EquipmentFileResponse; rea
 
 /**
  * Ссылки для файлов, пришедших без ссылки: карточка показывается сразу, а превью
- * подгружаются следом одним запросом (подписанные ссылки сервер хранит в памяти час).
+ * подгружаются следом (один запрос на галерею, галереи карточки подписываются одновременно).
  */
 function useFileUrls(files: readonly EquipmentFileResponse[]): ReadonlyMap<string, string> {
   const missing = files.filter((file) => !file.url && file.storageKey).map((file) => file.storageKey as string);
@@ -69,7 +69,8 @@ export function FileGallery({ files: incoming, emptyText = "Файлов пок�
       const type = fileType(file);
       const label = FILE_KIND_LABELS[file.kind] ?? "Файл";
       return <li className={`file-gallery__item file-gallery__item--${type}`} key={file.id}>
-        <a href={file.url ?? "#"} rel="noreferrer" target="_blank" title={file.originalName}>
+        {/* Пока ссылка на файл не пришла, плитка не ссылка: клик не открывает пустую вкладку. */}
+        <a {...(file.url ? { href: file.url, rel: "noreferrer", target: "_blank" } : { "aria-disabled": true })} title={file.originalName}>
           <span className="file-gallery__preview" aria-hidden="true">
             <FilePreview file={file} type={type} />
           </span>
