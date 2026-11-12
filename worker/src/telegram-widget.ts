@@ -59,6 +59,18 @@ export function clipText(value: string | undefined, limit: number): string | und
   return chars.length > limit ? `${chars.slice(0, limit - 1).join("").trimEnd()}…` : text;
 }
 
+/**
+ * Обрезка по длине, как её считает Telegram: в единицах UTF-16 (эмодзи занимает две),
+ * не разрывая суррогатную пару. Для подписи и текста сообщения.
+ */
+export function clipUtf16(value: string, limit: number): string {
+  if (value.length <= limit) return value;
+  let end = limit - 1;
+  const code = value.charCodeAt(end - 1);
+  if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+  return `${value.slice(0, end).trimEnd()}…`;
+}
+
 /** Многострочный текст (комментарий): переносы сохраняем, лишние пустые строки убираем. */
 function clipMultiline(value: string | undefined, limit: number): string | undefined {
   const text = value?.replace(/\r\n?/gu, "\n").replace(/[ \t]+/gu, " ").replace(/\n{3,}/gu, "\n\n").trim();
@@ -107,7 +119,7 @@ const TASK_STYLE = BASE_STYLE
   + ".t{margin:0 0 8px;font-size:17px;font-weight:700;line-height:1.3;word-break:break-word}"
   + ".r{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:14px}"
   + ".r dt{color:var(--tg-theme-hint-color)}.r dd{margin:0;word-break:break-word}"
-  + ".m{margin:9px 0 0;padding:7px 10px;border-radius:8px;border-left:3px solid var(--k);background:var(--tg-theme-secondary-bg-color);font-size:14px;white-space:pre-wrap;word-break:break-word}"
+  + ".m{display:block;box-sizing:border-box;width:100%;margin:9px 0 0;padding:7px 10px;border-radius:8px;border-left:3px solid var(--k);background:var(--tg-theme-secondary-bg-color);font-size:14px;white-space:pre-wrap;word-break:break-word}"
   + ".m b{display:block;margin:0 0 2px;font-size:12px;font-weight:600;color:var(--tg-theme-hint-color);white-space:normal}"
   + ".x{color:var(--tg-theme-hint-color)}";
 
@@ -115,11 +127,12 @@ const TASK_STYLE = BASE_STYLE
 export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow"): string {
   const look = EVENT_LOOK[data.eventCode] ?? DEFAULT_LOOK;
   const number = clipText(data.taskNumber, 24);
-  const title = clipText(data.taskTitle, 160) ?? "Без названия";
-  const site = clipText(data.siteName, 140);
-  const engineer = clipText(data.engineerName, 80);
+  // Высота пузыря не больше 600 px, лишнее обрезается: поля держим короткими.
+  const title = clipText(data.taskTitle, 120) ?? "Без названия";
+  const site = clipText(data.siteName, 100);
+  const engineer = clipText(data.engineerName, 60);
   const period = formatTaskPeriod(data.periodFrom, data.periodTo, timeZone);
-  const comment = data.eventCode === "task_rework_requested" ? clipMultiline(data.reworkComment, 400) : undefined;
+  const comment = data.eventCode === "task_rework_requested" ? clipMultiline(data.reworkComment, 240) : undefined;
   const rows = [
     site ? `<dt>Площадка</dt><dd>${escapeHtml(site)}</dd>` : "",
     `<dt>Инженер</dt><dd${engineer && engineer !== "не назначен" ? "" : " class=\"x\""}>${escapeHtml(engineer ?? "не назначен")}</dd>`,

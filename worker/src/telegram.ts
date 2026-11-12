@@ -1,5 +1,5 @@
 import { renderNotificationTemplate, type BusinessEvent } from "./domain.js";
-import { chatIdWidgetHtml, clipText, escapeHtml, taskWidgetHtml, WIDGET_CAPTION_LIMIT, widgetFitsLimits, type TaskWidgetData } from "./telegram-widget.js";
+import { chatIdWidgetHtml, clipUtf16, escapeHtml, taskWidgetHtml, WIDGET_CAPTION_LIMIT, widgetFitsLimits, type TaskWidgetData } from "./telegram-widget.js";
 import {
   ChannelDeliveryError,
   channelDeliveryIdempotencyKey,
@@ -147,10 +147,11 @@ export function telegramHtmlText(subject: string, body: string, taskUrl?: string
   const last = lines[lines.length - 1] ?? "";
   if (taskUrl && /:\s*$/u.test(last) && /карточк/iu.test(last)) lines.pop();
   trimEnd();
-  const title = clipText(subject, 256);
+  const subjectText = subject.replace(/\s+/gu, " ").trim();
+  const title = subjectText ? clipUtf16(subjectText, 256) : undefined;
   const text = lines.join("\n").trim();
-  // Лимит Telegram 4096 символов после разметки: заголовок и текст укладываем с запасом.
-  const clipped = [...text].length > 3_700 ? `${[...text].slice(0, 3_699).join("").trimEnd()}…` : text;
+  // Лимит Telegram 4096 символов (в единицах UTF-16) после разметки: укладываем с запасом.
+  const clipped = clipUtf16(text, 3_700);
   if (!title) return escapeHtml(clipped);
   return clipped ? `<b>${escapeHtml(title)}</b>\n\n${escapeHtml(clipped)}` : `<b>${escapeHtml(title)}</b>`;
 }
@@ -200,7 +201,8 @@ export class TelegramDeliveryChannel implements DeliveryChannel {
     }
     const html = card ? taskWidgetHtml(card) : undefined;
     if (html && widgetFitsLimits(html)) {
-      const caption = clipText(command.subject, WIDGET_CAPTION_LIMIT) ?? `${card?.taskNumber ?? "Задача"}`;
+      const subject = command.subject.replace(/\s+/gu, " ").trim();
+      const caption = subject ? clipUtf16(subject, WIDGET_CAPTION_LIMIT) : `${card?.taskNumber ?? "Задача"}`;
       const { status, body } = await this.client.call("sendWidget", {
         chat_id: chatId,
         html,
@@ -212,15 +214,20 @@ export class TelegramDeliveryChannel implements DeliveryChannel {
       if (status !== 400) failDelivery(status);
     }
 
-    const { status, body } = await this.client.call("sendMessage", {
+    const sendText = (withButton: boolean) => this.client.call("sendMessage", {
       chat_id: chatId,
-      text: telegramHtmlText(command.subject, command.body, taskUrl),
+      // Без кнопки ссылка на карточку остаётся в тексте.
+      text: telegramHtmlText(command.subject, command.body, withButton ? taskUrl : undefined),
       parse_mode: "HTML",
       disable_web_page_preview: true,
-      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+      ...(withButton && replyMarkup ? { reply_markup: replyMarkup } : {})
     });
-    if (isOk(status, body)) return deliveryReceipt(chatId, body);
-    return failDelivery(status);
+    let response = await sendText(true);
+    // Кнопку Telegram мог не принять (например, адрес карточки не публичный): тогда без неё,
+    // иначе из-за кнопки не дошло бы ни одно уведомление.
+    if (response.status === 400 && replyMarkup) response = await sendText(false);
+    if (isOk(response.status, response.body)) return deliveryReceipt(chatId, response.body);
+    return failDelivery(response.status);
   }
 }
 
@@ -317,13 +324,18 @@ export class TelegramChatIdResponder {
         html: chatIdWidgetHtml(String(chatId)),
         caption: `Номер вашего чата: ${chatId}`
       });
-      if (!isOk(widget.status, widget.body)) {
-        await this.client.call("sendMessage", {
-          chat_id: chatId,
-          text: `Номер вашего чата: ${chatId}\n\nПередайте его администратору МедТехСервиса, чтобы получать уведомления о задачах здесь.`
-        });
+      if (isOk(widget.status, widget.body)) {
+        replied += 1;
+        continue;
       }
-      replied += 1;
+      // Текстом отвечаем, только если не принят сам виджет (400). При перегрузке (429, 5xx)
+      // текст тоже не уйдёт: человек напишет /start ещё раз.
+      if (widget.status !== 400) continue;
+      const text = await this.client.call("sendMessage", {
+        chat_id: chatId,
+        text: `Номер вашего чата: ${chatId}\n\nПередайте его администратору МедТехСервиса, чтобы получать уведомления о задачах здесь.`
+      });
+      if (isOk(text.status, text.body)) replied += 1;
     }
     return replied;
   }

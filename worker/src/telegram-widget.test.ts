@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { deflateSync } from "node:zlib";
 import { describe, it } from "node:test";
-import { chatIdWidgetHtml, clipText, formatTaskPeriod, taskWidgetHtml, widgetFitsLimits, WIDGET_COMPRESSED_LIMIT_BYTES, WIDGET_HTML_LIMIT_BYTES } from "./telegram-widget.js";
+import { chatIdWidgetHtml, clipText, clipUtf16, formatTaskPeriod, taskWidgetHtml, widgetFitsLimits, WIDGET_COMPRESSED_LIMIT_BYTES, WIDGET_HTML_LIMIT_BYTES } from "./telegram-widget.js";
 
 describe("карточки Telegram", () => {
   it("экранирует данные задачи: текст из задачи не становится разметкой", () => {
@@ -40,6 +40,15 @@ describe("карточки Telegram", () => {
     assert.equal(formatTaskPeriod(undefined, "2026-11-13T00:00:00+03:00"), "до 13 нояб");
     assert.equal(formatTaskPeriod(undefined, undefined), undefined);
     assert.equal(formatTaskPeriod("не дата", undefined), undefined);
+  });
+
+  it("считает длину как Telegram (UTF-16) и не разрывает эмодзи", () => {
+    assert.equal(clipUtf16("абв", 5), "абв");
+    const emoji = "😀".repeat(10);
+    const clipped = clipUtf16(emoji, 7);
+    assert.ok(clipped.length <= 7);
+    assert.ok(!/[\ud800-\udbff]…$/u.test(clipped));
+    assert.equal(clipped, "😀😀😀…");
   });
 
   it("обрезает текст по символам с многоточием", () => {

@@ -147,6 +147,24 @@ describe("Telegram", () => {
     assert.equal(error.retryAllowed, false);
   });
 
+  it("если Telegram не принял кнопку, отправляет сообщение без неё со ссылкой в тексте", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const fetchImpl: FetchLike = async (url, init) => {
+      const body = JSON.parse(init.body) as { reply_markup?: unknown };
+      calls.push({ url, body });
+      return url.endsWith("/sendMessage") && !body.reply_markup
+        ? { status: 200, json: async () => ({ ok: true, result: { message_id: 81 } }) }
+        : { status: 400, json: async () => ({ ok: false, description: "Bad Request: BUTTON_URL_INVALID" }) };
+    };
+    const channel = new TelegramDeliveryChannel(new TelegramClient(config, fetchImpl), { publicAppUrl: "https://crm.example.test", cards: { load: async () => card } });
+    const receipt = await channel.deliver(withUrl);
+    assert.equal(receipt.providerMessageId, "telegram:123456789:81");
+    assert.deepEqual(calls.map((call) => call.url.split("/").pop()), ["sendWidget", "sendMessage", "sendMessage"]);
+    const last = calls[2]?.body as { text: string; reply_markup?: unknown };
+    assert.equal(last.reply_markup, undefined);
+    assert.match(last.text, /https:\/\/crm\.example\.test\/tasks\/t1/u);
+  });
+
   it("в запасном тексте убирает ссылку на карточку и экранирует разметку", () => {
     assert.equal(
       telegramHtmlText("Задача <1>", "Текст & ещё\nКарточка задачи: https://crm.example.test/tasks/t1", "https://crm.example.test/tasks/t1"),
@@ -293,6 +311,25 @@ describe("служба", () => {
     ]);
     const commands = await planner.plan(event);
     assert.deepEqual(commands.map((item) => item.channel), ["email", "telegram"]);
+  });
+});
+
+describe("ответ на /start при перегрузке Telegram", () => {
+  it("не пытается ответить текстом, если Telegram ответил 429", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    let first = true;
+    const fetchImpl: FetchLike = async (url, init) => {
+      calls.push({ url, body: JSON.parse(init.body) });
+      if (url.endsWith("/getUpdates") && first) {
+        first = false;
+        return { status: 200, json: async () => ({ ok: true, result: [{ update_id: 1, message: { text: "/start", chat: { id: 778, type: "private" } } }] }) };
+      }
+      if (url.endsWith("/sendWidget")) return { status: 429, json: async () => ({ ok: false }) };
+      return { status: 200, json: async () => ({ ok: true, result: [] }) };
+    };
+    const responder = new TelegramChatIdResponder(new TelegramClient(config, fetchImpl));
+    assert.equal(await responder.poll(), 0);
+    assert.equal(calls.filter((call) => call.url.endsWith("/sendMessage")).length, 0);
   });
 });
 
