@@ -1486,7 +1486,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
-  if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id); }} workTypes={workTypes} />;
+  if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
@@ -1632,6 +1632,8 @@ function EquipmentPassportForm({
   const [modelId, setModelId] = useState(record?.modelId ?? "");
   const [selectedFiles, setSelectedFiles] = useState<readonly File[]>([]);
   const [error, setError] = useState<string | null>(null);
+  // Пока паспорт сохраняется, окно не закрыть и не отправить второй раз.
+  const [busy, setBusy] = useState(false);
   const availableModels = references.models.filter((item) => item.manufacturerId === manufacturerId);
 
   useEffect(() => {
@@ -1685,6 +1687,7 @@ function EquipmentPassportForm({
       setError("Выберите значения из серверных справочников");
       return;
     }
+    setBusy(true);
     try {
       await onSave({
         id: record?.id ?? "",
@@ -1715,11 +1718,14 @@ function EquipmentPassportForm({
       }, selectedFiles);
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : "Не получилось сохранить паспорт");
+    } finally {
+      setBusy(false);
     }
   };
 
   return (
     <DialogForm
+      busy={busy}
       description="Поля со звёздочкой обязательны."
       error={error}
       onOpenChange={onOpenChange}
@@ -1756,6 +1762,7 @@ function EquipmentAssignmentForm({
   readonly onApply: (change: NewEquipmentAssignmentChange) => Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const currentId = kind === "site_change" ? record.siteId : record.payerId;
   const available = options.filter((option) => option.id !== currentId);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -1767,6 +1774,7 @@ function EquipmentAssignmentForm({
       setError(kind === "site_change" ? "Выберите площадку" : "Выберите плательщика");
       return;
     }
+    setBusy(true);
     try {
       await onApply({
         kind,
@@ -1777,10 +1785,13 @@ function EquipmentAssignmentForm({
       });
     } catch (changeError) {
       setError(changeError instanceof Error ? changeError.message : "Не получилось сохранить изменение");
+    } finally {
+      setBusy(false);
     }
   };
   return (
     <DialogForm
+      busy={busy}
       description={`Сейчас: ${kind === "site_change" ? record.place : record.payer}`}
       error={error}
       onOpenChange={onOpenChange}
@@ -1808,9 +1819,11 @@ function ManualEquipmentHistoryForm({
   readonly onAdd: (draft: ManualEquipmentHistoryDraft) => Promise<void>;
 }) {
   const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const data = new FormData(event.currentTarget);
+    setBusy(true);
     try {
       await onAdd({
         occurredAt: localDateTimeToIso(String(data.get("occurredAt") ?? "")),
@@ -1820,10 +1833,13 @@ function ManualEquipmentHistoryForm({
       });
     } catch (historyError) {
       setError(historyError instanceof Error ? historyError.message : "Не получилось добавить запись");
+    } finally {
+      setBusy(false);
     }
   };
   return (
     <DialogForm
+      busy={busy}
       description="Запись займёт своё место в общей хронологии."
       error={error}
       onOpenChange={onOpenChange}
@@ -2154,17 +2170,33 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
     setFormOpen(true);
   };
 
+  // Номер последнего открытия паспорта: ответ на прежний клик не переключает экран на другой прибор.
+  const openCardRequest = useRef(0);
   const openCard = async (id: string) => {
+    const request = ++openCardRequest.current;
     try {
       const card = await m2Api.equipmentCard(id);
+      if (request !== openCardRequest.current) return;
       const detailed = equipmentUiRecord(card.passport, card);
       setRecords((items) => items.some((item) => item.id === id)
         ? items.map((item) => item.id === id ? detailed : item)
         : [detailed, ...items]);
       setSelectedId(id);
+      // Шаг истории помнил другой паспорт: теперь он ведёт в открытый.
+      const state = currentRouteState();
+      if (state?.equipmentId && state.equipmentId !== id) window.history.replaceState({ view: "equipment", equipmentId: id }, "");
     } catch (error) {
+      if (request !== openCardRequest.current) return;
       toast.error(error instanceof Error ? error.message : "Не получилось открыть паспорт прибора");
     }
+  };
+
+  // «К приборам»: незавершённые загрузки паспорта больше не открывают его снова.
+  const closeCard = () => {
+    openCardRequest.current += 1;
+    setSelectedId(null);
+    // Шаг истории снова означает список приборов, а не этот паспорт.
+    if (currentRouteState()?.equipmentId) window.history.replaceState({ view: "equipment" }, "");
   };
 
   // Возврат из задачи «Назад»: открываем тот паспорт, из которого в неё перешли.
@@ -2183,7 +2215,8 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
       occurredAt: change.occurredAt,
       comment: change.comment
     });
-    if (selectedId === record.id) await openCard(record.id);
+    // Пока сохраняли, пользователь мог открыть другой прибор: тогда только обновляем список.
+    if (selectedIdRef.current === record.id) await openCard(record.id);
     else await refreshRegistry();
   };
 
@@ -2194,13 +2227,15 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
 
   const addManualHistoryRecord = async (draft: ManualEquipmentHistoryDraft) => {
     if (!selectedRecord) throw new Error("Прибор не выбран");
-    await m2Api.addEquipmentHistory(selectedRecord.id, {
+    const equipmentId = selectedRecord.id;
+    await m2Api.addEquipmentHistory(equipmentId, {
       occurredAt: draft.occurredAt,
       summary: draft.summary,
       client: draft.client,
       description: draft.description
     });
-    await openCard(selectedRecord.id);
+    // Перечитываем историю, только если этот паспорт всё ещё открыт.
+    if (selectedIdRef.current === equipmentId) await openCard(equipmentId);
   };
 
   const loadMoreHistory = async () => {
@@ -2234,7 +2269,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   if (selectedRecord) {
     return (
       <>
-        <EquipmentCard key={selectedRecord.id} onAddManual={addManualHistoryRecord} onApply={applyAssignment} onBack={() => { setSelectedId(null); if ((window.history.state as { readonly view?: string } | null)?.view === "equipment") window.history.replaceState(null, "", window.location.pathname); }} {...(engineer ? {} : { onEdit: () => openEdit(selectedRecord.id) })} onLoadMoreHistory={loadMoreHistory} onLoadMoreMeterReadings={loadMoreMeterReadings} payers={payers} readOnly={engineer} record={selectedRecord} sites={sites} />
+        <EquipmentCard key={selectedRecord.id} onAddManual={addManualHistoryRecord} onApply={applyAssignment} onBack={closeCard} {...(engineer ? {} : { onEdit: () => openEdit(selectedRecord.id) })} onLoadMoreHistory={loadMoreHistory} onLoadMoreMeterReadings={loadMoreMeterReadings} payers={payers} readOnly={engineer} record={selectedRecord} sites={sites} />
         {!engineer ? <EquipmentPassportForm key={editingId ?? "card-edit"} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
       </>
     );
@@ -2294,12 +2329,13 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
 }
 
 // Технические коды ошибок отправки простыми словами; незнакомый код показываем как есть.
+// Повторно отправляем только временные сбои; где повтора нет, так и пишем.
 const NOTIFICATION_ERROR_TEXT: Readonly<Record<string, string>> = {
   max_attempts_exceeded: "не удалось отправить после нескольких попыток",
   channel_delivery_failed: "канал отправки вернул ошибку",
   channel_not_registered: "этот канал отправки не подключён",
-  notification_delivery_lease_expired: "отправка прервалась, письмо будет отправлено повторно",
-  notification_delivery_result_recording_failed: "не удалось записать результат отправки",
+  notification_delivery_lease_expired: "отправка прервалась на середине, повторно не отправляем, чтобы не было дублей; сообщение могло не дойти",
+  notification_delivery_result_recording_failed: "сообщение, скорее всего, отправлено, но результат не записался; повторно не отправляем",
   smtp_connection_failed: "почтовый сервер недоступен",
   smtp_authentication_failed: "почтовый сервер не принял логин и пароль",
   smtp_authentication_unavailable: "почтовый сервер не поддерживает вход",
@@ -2310,15 +2346,18 @@ const NOTIFICATION_ERROR_TEXT: Readonly<Record<string, string>> = {
   smtp_invalid_message: "письмо составлено с ошибкой",
   smtp_temporary_failure: "временный сбой почтового сервера",
   smtp_protocol_error: "ошибка связи с почтовым сервером",
-  smtp_delivery_outcome_unknown: "неизвестно, дошло ли письмо",
+  smtp_delivery_outcome_unknown: "связь оборвалась после передачи, неизвестно, дошло ли письмо; повторно не отправляем",
   smtp_channel_mismatch: "письмо попало не в тот канал",
   telegram_chat_rejected: "Telegram не принял сообщение: бот заблокирован или чат не найден",
   telegram_invalid_chat_id: "неверный номер чата Telegram",
   telegram_bot_token_rejected: "Telegram не принял ключ бота",
   telegram_connection_failed: "Telegram недоступен",
   telegram_temporary_failure: "временный сбой Telegram",
-  telegram_delivery_outcome_unknown: "неизвестно, дошло ли сообщение",
-  telegram_channel_mismatch: "сообщение попало не в тот канал"
+  telegram_delivery_outcome_unknown: "связь оборвалась после передачи, неизвестно, дошло ли сообщение; повторно не отправляем",
+  telegram_channel_mismatch: "сообщение попало не в тот канал",
+  // Название канала после «channel_not_registered:».
+  email: "e-mail",
+  telegram: "Telegram"
 };
 
 function notificationErrorText(code: string): string {
@@ -2393,7 +2432,7 @@ function NotificationsPage() {
                 </tr>
                 {open ? <tr className="notification-table__detail" id={`notification-body-${notification.id}`}><td colSpan={5}>
                   <p className="notification-table__body">{notification.body}</p>
-                  {notification.status === "failed" && (notification.diagnosticError || notification.lastError) ? <div className="notification-item__error" role="alert"><strong>Почему не ушло:</strong> {notification.diagnosticError ?? notificationErrorText(notification.lastError ?? "")}</div> : null}
+                  {notification.status === "failed" && (notification.diagnosticError || notification.lastError) ? <div className="notification-item__error" role="alert"><strong>Что случилось:</strong> {notificationErrorText(notification.diagnosticError ?? notification.lastError ?? "")}</div> : null}
                 </td></tr> : null}
               </React.Fragment>;
             })}
@@ -2890,7 +2929,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
         setReload((value) => value + 1);
         await openTask(selectedTaskId, false);
       }}
-      onOpenRelated={async (id) => { await openTask(id); }}
+      onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }}
     />;
   }
   const openFromList = (id: string) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"));
@@ -3028,6 +3067,21 @@ function LoginPage({ onLogin }: { readonly onLogin: (user: ApiSessionUser) => vo
   );
 }
 
+/** Метки шага истории: раздел, паспорт прибора, задача, открытая из паспорта. */
+type RouteState = { readonly view?: NavigationId; readonly equipmentId?: string; readonly fromEquipmentId?: string };
+
+function currentRouteState(): RouteState | null {
+  return typeof window === "undefined" ? null : window.history.state as RouteState | null;
+}
+
+/** Обновление страницы открывает раздел по умолчанию: метки текущего шага истории сбрасываем. */
+function resetRouteOnReload(): void {
+  const navigationEntry = window.performance?.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
+  if (navigationEntry?.type !== "reload") return;
+  if (taskIdFromPathname(window.location.pathname)) window.history.replaceState(null, "", "/");
+  else if (window.history.state) window.history.replaceState(null, "");
+}
+
 function App() {
   const [sessionUser, setSessionUser] = useState<ApiSessionUser | null | undefined>(undefined);
   const [role, setRole] = useState<AppRole>("coordinator");
@@ -3035,11 +3089,7 @@ function App() {
   const [taskRouteId, setTaskRouteId] = useState<string | undefined>(() => {
     if (typeof window === "undefined") return undefined;
     // Обновление страницы возвращает на доску; карточку по ссылке (из письма) открываем как раньше.
-    const navigationEntry = window.performance?.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
-    if (navigationEntry?.type === "reload" && taskIdFromPathname(window.location.pathname)) {
-      window.history.replaceState(null, "", "/");
-      return undefined;
-    }
+    resetRouteOnReload();
     return taskIdFromPathname(window.location.pathname);
   });
   // Каждый клик по разделу в меню открывает его с начала (у задач это доска, а не список или карточка).
@@ -3047,19 +3097,20 @@ function App() {
   // Паспорт прибора, в который вернуться «Назад» из задачи, открытой из паспорта.
   const [equipmentRouteId, setEquipmentRouteId] = useState<string | undefined>(() => {
     if (typeof window === "undefined" || taskIdFromPathname(window.location.pathname)) return undefined;
-    const state = window.history.state as { readonly view?: string; readonly equipmentId?: string } | null;
-    if (state?.view !== "equipment") return undefined;
-    // Обновление страницы открывает раздел по умолчанию, как и у задач.
-    const navigationEntry = window.performance?.getEntriesByType?.("navigation")[0] as PerformanceNavigationTiming | undefined;
-    if (navigationEntry?.type === "reload") { window.history.replaceState(null, "", window.location.pathname); return undefined; }
-    return state.equipmentId;
+    // После обновления страницы меток уже нет: откроется раздел по умолчанию, как и у задач.
+    const state = currentRouteState();
+    return state?.view === "equipment" ? state.equipmentId : undefined;
   });
   // Текущая задача открыта из паспорта: кнопка «назад» ведёт в паспорт и подписана «К прибору».
-  const [fromEquipmentId, setFromEquipmentId] = useState<string | undefined>(() =>
-    typeof window === "undefined" ? undefined : (window.history.state as { readonly fromEquipmentId?: string } | null)?.fromEquipmentId);
+  const [fromEquipmentId, setFromEquipmentId] = useState<string | undefined>(() => currentRouteState()?.fromEquipmentId);
   const navigation = navigationForSession(role, sessionUser);
   const groups = groupNavigation(navigation);
   const activeItem = navigation.find((item) => item.id === activeView) ?? navigation[0];
+  // Для «Назад» и «Вперёд» браузера: обработчик подписан один раз и сам свежих значений не видит.
+  const routeContext = useRef<{ readonly activeView: NavigationId; readonly views: readonly NavigationId[]; readonly defaultView: NavigationId }>({ activeView, views: [], defaultView: getDefaultView(role) });
+  routeContext.current = { activeView, views: navigation.map((item) => item.id), defaultView: navigation[0]?.id ?? getDefaultView(role) };
+  // Адрес, с которого только что ушли на другую задачу: если она не откроется, вернёмся туда шагом назад.
+  const taskStepFrom = useRef<string | null>(null);
 
   useEffect(() => {
     m2Api.session().then((user) => {
@@ -3067,9 +3118,12 @@ function App() {
       const nextNavigation = navigationForSession(nextRole, user);
       setSessionUser(user);
       setRole(nextRole);
+      const stateView = currentRouteState()?.view;
       setActiveView(taskRouteId && nextNavigation.some((item) => item.id === "tasks") ? "tasks"
         : equipmentRouteId && nextNavigation.some((item) => item.id === "equipment") ? "equipment"
-          : nextNavigation[0]?.id ?? getDefaultView(nextRole));
+          // Вернулись в приложение кнопкой «Назад» с другого сайта: открываем раздел этого шага.
+          : stateView && nextNavigation.some((item) => item.id === stateView) ? stateView
+            : nextNavigation[0]?.id ?? getDefaultView(nextRole));
     }).catch((error: unknown) => {
       if (error instanceof M2ApiError && error.status === 401) setSessionUser(null);
       else setSessionUser(null);
@@ -3078,19 +3132,31 @@ function App() {
 
   useEffect(() => {
     const restoreRoute = () => {
+      taskStepFrom.current = null;
       const taskId = taskIdFromPathname(window.location.pathname);
-      const state = window.history.state as { readonly view?: string; readonly equipmentId?: string; readonly fromEquipmentId?: string } | null;
+      const state = currentRouteState();
       setFromEquipmentId(taskId ? state?.fromEquipmentId : undefined);
-      if (!taskId && state?.view === "equipment" && state.equipmentId) {
-        setTaskRouteId(undefined);
+      if (taskId) {
+        setEquipmentRouteId(undefined);
+        setTaskRouteId(taskId);
+        setActiveView("tasks");
+        return;
+      }
+      setTaskRouteId(undefined);
+      if (state?.view === "equipment" && state.equipmentId) {
         setEquipmentRouteId(state.equipmentId);
         setActiveView("equipment");
         setNavigationKey((value) => value + 1);
         return;
       }
       setEquipmentRouteId(undefined);
-      setTaskRouteId(taskId);
-      if (taskId) setActiveView("tasks");
+      // Раздел этого шага; у первого шага и после обновления страницы это раздел по умолчанию.
+      const { activeView: currentView, views, defaultView } = routeContext.current;
+      const view = state?.view && views.includes(state.view) ? state.view : defaultView;
+      // Из карточки задачи назад к задачам: доска остаётся как была, с фильтрами.
+      if (view === "tasks" && currentView === "tasks") return;
+      setActiveView(view);
+      setNavigationKey((value) => value + 1);
     };
     window.addEventListener("popstate", restoreRoute);
     return () => window.removeEventListener("popstate", restoreRoute);
@@ -3102,13 +3168,17 @@ function App() {
     setNavigationKey((value) => value + 1);
     setTaskRouteId(undefined);
     setFromEquipmentId(undefined);
-    if (window.location.pathname !== "/") window.history.pushState(null, "", "/");
-    else if (window.history.state) window.history.replaceState(null, "", "/");
+    taskStepFrom.current = null;
+    // Каждый раздел своим шагом истории, чтобы «Назад» и «Вперёд» вели по разделам. Повторный клик шаг не добавляет.
+    const state = currentRouteState();
+    if (window.location.pathname === "/" && state?.view === id && !state.equipmentId) return;
+    window.history.pushState({ view: id }, "", "/");
   };
 
   // «К прибору»: открываем паспорт новым шагом истории, не полагаясь на прошлые шаги браузера.
   const returnToEquipment = fromEquipmentId ? () => {
     window.history.pushState({ view: "equipment", equipmentId: fromEquipmentId }, "", "/");
+    taskStepFrom.current = null;
     setTaskRouteId(undefined);
     setEquipmentRouteId(fromEquipmentId);
     setFromEquipmentId(undefined);
@@ -3117,14 +3187,27 @@ function App() {
   } : undefined;
 
   const changeTaskRoute = (taskId?: string, replace = false) => {
-    setTaskRouteId(taskId);
-    // Новый шаг истории без метки паспорта: обычная задача, «назад» ведёт к задачам.
-    if (!replace) setFromEquipmentId(undefined);
     const pathname = taskId ? taskPathname(taskId) : "/";
+    setTaskRouteId(taskId);
+    if (replace) {
+      // Задача не открылась. Её шаг истории только что добавлен: уходим с него назад,
+      // прошлая задача вернётся вместе с меткой паспорта, лишнего шага не останется.
+      if (taskStepFrom.current === pathname) {
+        taskStepFrom.current = null;
+        window.history.back();
+        return;
+      }
+      if (window.location.pathname === pathname) return;
+      setFromEquipmentId(undefined);
+      window.history.replaceState(taskId ? null : { view: "tasks" }, "", pathname);
+      return;
+    }
+    taskStepFrom.current = null;
     if (window.location.pathname === pathname) return;
-    // Откат после неудачного открытия не оставляет лишний шаг в истории браузера.
-    if (replace) window.history.replaceState(null, "", pathname);
-    else window.history.pushState(null, "", pathname);
+    // Новый шаг истории без метки паспорта: обычная задача, «назад» ведёт к задачам.
+    setFromEquipmentId(undefined);
+    taskStepFrom.current = window.location.pathname;
+    window.history.pushState(taskId ? null : { view: "tasks" }, "", pathname);
   };
 
   const acceptLogin = (user: ApiSessionUser) => {

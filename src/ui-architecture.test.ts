@@ -127,6 +127,12 @@ describe("shared UI architecture", () => {
     assert.match(app, /aria-label="Паспорт прибора"/u);
     assert.match(app, /Открытые задачи/u);
     assert.match(workAct, /<EntityDetailToolbar[\s\S]{0,300}backLabel="К задаче"/u);
+    // Каждый раздел своим шагом истории: «Назад» и «Вперёд» браузера ведут по разделам.
+    assert.match(app, /window\.history\.pushState\(\{ view: id \}, "", "\/"\)/u);
+    // Задача не открылась: уходим с только что добавленного шага, а не подменяем его.
+    assert.match(app, /taskStepFrom\.current === pathname[\s\S]{0,120}window\.history\.back\(\)/u);
+    // Прерванная отправка не повторяется (одно письмо не больше одного раза), текст не обещает повтор.
+    assert.doesNotMatch(app, /notification_delivery_lease_expired: "[^"]*будет отправлено повторно/u);
     assert.doesNotMatch(`${app}\n${workAct}`, /←\s*(?:Назад|К карточке|К реестру)/u);
   });
 
