@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { TaskBoard, boardDropDecision } from "./TaskBoard.js";
+import { TaskBoard, boardDropDecision, tasksWord } from "./TaskBoard.js";
 
 it("builds kanban columns from the editable status catalog and keeps task cards openable", () => {
   const html = renderToStaticMarkup(<TaskBoard
@@ -27,13 +27,19 @@ it("builds kanban columns from the editable status catalog and keeps task cards 
   assert.match(html, /SN-1/u);
   assert.match(html, /draggable="true"/u);
   assert.doesNotMatch(html, /Перетащите задачу сюда/u);
+  // Галочка на карточке: несколько отмеченных задач переносятся вместе.
+  assert.match(html, /aria-label="Отметить задачу З-1"/u);
+  assert.match(html, /type="checkbox"/u);
 });
 
-it("moves on the board only to the next step and sends steps that need data to the card", () => {
+it("moves on the board only to the next step, checks review readiness and explains steps that need the card", () => {
   assert.equal(boardDropDecision({}, "assigned", "in_progress").kind, "move");
   assert.equal(boardDropDecision({ engineerId: "e-1" }, "new", "assigned").kind, "move");
   assert.equal(boardDropDecision({}, "new", "assigned").kind, "card");
-  assert.equal(boardDropDecision({}, "in_progress", "under_review").kind, "card");
+  // На проверку: перенос с проверкой результата на сервере, а не переход в карточку.
+  assert.equal(boardDropDecision({}, "in_progress", "under_review").kind, "check");
+  assert.equal(boardDropDecision({}, "in_progress", "under_review", true).kind, "check");
+  assert.equal(boardDropDecision({}, "under_review", "closed", true).kind, "no");
   assert.equal(boardDropDecision({}, "under_review", "closed").kind, "card");
   assert.equal(boardDropDecision({}, "new", "cancelled").kind, "card");
   assert.equal(boardDropDecision({}, "new", "closed").kind, "no");
@@ -69,4 +75,13 @@ it("hides completed board columns until they are explicitly shown", () => {
   />);
   assert.match(shown, /Закрыта/u);
   assert.match(shown, /Отменена/u);
+});
+
+it("declines the task count for the board messages", () => {
+  assert.equal(tasksWord(1), "задача");
+  assert.equal(tasksWord(2), "задачи");
+  assert.equal(tasksWord(5), "задач");
+  assert.equal(tasksWord(11), "задач");
+  assert.equal(tasksWord(21), "задача");
+  assert.equal(tasksWord(24), "задачи");
 });

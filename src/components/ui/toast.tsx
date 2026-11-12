@@ -4,16 +4,24 @@ import { createPortal } from "react-dom";
 
 export type ToastTone = "info" | "warning" | "error" | "success";
 
+/** Кнопка в уведомлении, например «Открыть задачу». */
+export interface ToastAction {
+  readonly label: string;
+  readonly onClick: () => void;
+}
+
 export interface ToastInput {
   readonly title?: string;
   readonly message: string;
   readonly tone?: ToastTone;
   readonly durationMs?: number;
+  readonly action?: ToastAction;
 }
 
 interface ToastItem extends Required<Pick<ToastInput, "message" | "tone" | "durationMs">> {
   readonly id: number;
   readonly title?: string;
+  readonly action?: ToastAction;
 }
 
 type Listener = (items: readonly ToastItem[]) => void;
@@ -40,7 +48,8 @@ export function toast(message: string, options: Omit<ToastInput, "message"> = {}
     message,
     tone,
     durationMs,
-    ...(options.title ? { title: options.title } : {})
+    ...(options.title ? { title: options.title } : {}),
+    ...(options.action ? { action: options.action } : {})
   };
   items = [...items, item].slice(-5);
   publish();
@@ -75,6 +84,7 @@ export function ToastHost() {
           <div className="toast__copy">
             {item.title ? <strong>{item.title}</strong> : null}
             <p>{item.message}</p>
+            {item.action ? <button className="toast__action" onClick={() => { dismiss(item.id); item.action?.onClick(); }} type="button">{item.action.label}</button> : null}
           </div>
           <button aria-label="Закрыть уведомление" className="toast__close" onClick={() => dismiss(item.id)} type="button">
             <X aria-hidden="true" size={14} />

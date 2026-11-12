@@ -48,7 +48,7 @@ import { buildWorkAct, type WorkActEquipmentRow, type WorkActWorkRow } from "./w
 import { ClosureReview } from "./ClosureReview.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { taskCalendarDate } from "./task-dates.js";
-import { RegistryPagination, registryPageOffset } from "./RegistryPagination.js";
+import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
 import {
@@ -1225,7 +1225,7 @@ function MailSourcePanel({ mail }: { readonly mail: MailInboxRecord }) {
 }
 
 function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (mail: MailInboxRecord) => void; readonly onOpenTask: (taskId: string) => void }) {
-  const pageSize = 25;
+  const { pageSize, pageSizeRef, setPageSize } = usePageSize("mail");
   const [items, setItems] = useState<readonly MailInboxRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -1235,7 +1235,7 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
   const reload = async (nextFilters = filters, nextPage = pageIndex) => {
     setLoading(true);
     try {
-      const page = await m2Api.mailInbox({ ...nextFilters, limit: pageSize, offset: registryPageOffset(nextPage, pageSize) });
+      const page = await m2Api.mailInbox({ ...nextFilters, limit: pageSizeRef.current, offset: registryPageOffset(nextPage, pageSizeRef.current) });
       setItems(page.items); setTotal(page.total);
     } catch (loadError) {
       toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить письма", { title: "Письма не загрузились" });
@@ -1246,7 +1246,7 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
   const statusTone = (status: MailInboxRecord["status"]): StatusTone => status === "converted" ? "success" : status === "failed" ? "danger" : status === "ignored" ? "neutral" : status === "parsed" ? "info" : "warning";
   return <>
     <FilterBar loading={loading} onReset={() => { const reset = { search: "", status: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={apply}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Отправитель или тема" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{Object.entries(mailStatusLabels).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label></FilterBar>
-    <DataTableShell meta={`${items.length} из ${total}`} title="Входящие письма">{loading && items.length === 0 ? <ResourceState description="Подождите, входящие сейчас появятся." status="loading" title="Загружаем письма" /> : items.length === 0 ? <ResourceState description={filters.search || filters.status ? "Измените поиск или сбросьте фильтры." : "Новые письма с заявками появятся здесь. Можно создать задачу вручную."} status={filters.search || filters.status ? "filtered-empty" : "empty"} title={filters.search || filters.status ? "Писем по этим условиям нет" : "Входящих писем нет"} /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Получено</th><th>Отправитель</th><th>Тема</th><th>Что распознано</th><th>Статус</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{items.map((mail) => <tr key={mail.id}><td>{formatTaskDate(mail.receivedAt, true)}</td><td>{mail.sender}</td><td><strong>{mail.subject || "Без темы"}</strong></td><td><div className="mail-recognized">{mailRecognized(mail) ? <strong>{mailRecognized(mail)}</strong> : null}{mail.equipmentSerial ? <span>S/N {mail.equipmentSerial} <StatusBadge tone={mail.equipmentFound ? "success" : "warning"}>{mail.equipmentFound ? "прибор найден" : "нет в базе"}</StatusBadge></span> : null}<span className="mail-recognized__summary">{mail.description ?? mail.summary ?? (mail.status === "pending" ? "Письмо ещё разбирается" : "—")}</span>{mail.confidence !== undefined && mail.status !== "pending" ? <small className="mail-confidence">уверенность {Math.round(mail.confidence * 100)}%</small> : null}</div></td><td><StatusBadge tone={statusTone(mail.status)}>{mailStatusLabels[mail.status]}</StatusBadge>{mail.status === "converted" ? <small className="mail-autoreply">{mail.autoreplyError ? `Автоответ не ушёл: ${mail.autoreplyError}` : mail.autoreplySent ? "Автоответ отправлен" : "Автоответ в очереди"}</small> : null}</td><td><div className="table-actions">{mail.taskId ? <IconButton icon="open" label="Открыть задачу" onClick={() => onOpenTask(mail.taskId!)} /> : mail.status !== "ignored" ? <><IconButton icon="plus" label="Создать задачу" onClick={() => onCreateTask(mail)} variant="secondary" /><IconButton icon="ignore" label="Не требует работы" onClick={() => setIgnoreTarget(mail)} /></> : <IconButton icon="restore" label="Вернуть в работу" onClick={() => void m2Api.updateMailInbox(mail.id, { status: mail.wasParsed ? "parsed" : "pending" }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div>}<RegistryPagination ariaLabel="Страницы входящих писем" onPageChange={(next) => { setPageIndex(next); void reload(filters, next); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></DataTableShell>
+    <DataTableShell meta={`${items.length} из ${total}`} title="Входящие письма">{loading && items.length === 0 ? <ResourceState description="Подождите, входящие сейчас появятся." status="loading" title="Загружаем письма" /> : items.length === 0 ? <ResourceState description={filters.search || filters.status ? "Измените поиск или сбросьте фильтры." : "Новые письма с заявками появятся здесь. Можно создать задачу вручную."} status={filters.search || filters.status ? "filtered-empty" : "empty"} title={filters.search || filters.status ? "Писем по этим условиям нет" : "Входящих писем нет"} /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Получено</th><th>Отправитель</th><th>Тема</th><th>Что распознано</th><th>Статус</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{items.map((mail) => <tr key={mail.id}><td>{formatTaskDate(mail.receivedAt, true)}</td><td>{mail.sender}</td><td><strong>{mail.subject || "Без темы"}</strong></td><td><div className="mail-recognized">{mailRecognized(mail) ? <strong>{mailRecognized(mail)}</strong> : null}{mail.equipmentSerial ? <span>S/N {mail.equipmentSerial} <StatusBadge tone={mail.equipmentFound ? "success" : "warning"}>{mail.equipmentFound ? "прибор найден" : "нет в базе"}</StatusBadge></span> : null}<span className="mail-recognized__summary">{mail.description ?? mail.summary ?? (mail.status === "pending" ? "Письмо ещё разбирается" : "—")}</span>{mail.confidence !== undefined && mail.status !== "pending" ? <small className="mail-confidence">уверенность {Math.round(mail.confidence * 100)}%</small> : null}</div></td><td><StatusBadge tone={statusTone(mail.status)}>{mailStatusLabels[mail.status]}</StatusBadge>{mail.status === "converted" ? <small className="mail-autoreply">{mail.autoreplyError ? `Автоответ не ушёл: ${mail.autoreplyError}` : mail.autoreplySent ? "Автоответ отправлен" : "Автоответ в очереди"}</small> : null}</td><td><div className="table-actions">{mail.taskId ? <IconButton icon="open" label="Открыть задачу" onClick={() => onOpenTask(mail.taskId!)} /> : mail.status !== "ignored" ? <><IconButton icon="plus" label="Создать задачу" onClick={() => onCreateTask(mail)} variant="secondary" /><IconButton icon="ignore" label="Не требует работы" onClick={() => setIgnoreTarget(mail)} /></> : <IconButton icon="restore" label="Вернуть в работу" onClick={() => void m2Api.updateMailInbox(mail.id, { status: mail.wasParsed ? "parsed" : "pending" }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div>}<RegistryPagination ariaLabel="Страницы входящих писем" onPageChange={(next) => { setPageIndex(next); void reload(filters, next); }} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></DataTableShell>
     <ConfirmationDialog confirmLabel="Не требует работы" description={ignoreTarget ? <>Письмо «{ignoreTarget.subject || "Без темы"}» останется в журнале. Его можно будет вернуть в работу.</> : null} onConfirm={async () => { if (!ignoreTarget) return; await m2Api.updateMailInbox(ignoreTarget.id, { status: "ignored" }); await reload(); }} onOpenChange={(open) => { if (!open) setIgnoreTarget(null); }} open={Boolean(ignoreTarget)} title="Письмо не требует работы?" />
   </>;
 }
@@ -1263,14 +1263,28 @@ function TaskCardLoading({ task, onBack, backLabel = "К задачам" }: { re
   </div>;
 }
 
+/**
+ * Перенос задачи на доске. На проверку задача уходит, только если результат заполнен,
+ * как и по кнопке «Передать на проверку» в карточке; иначе ошибка с тем, что заполнить.
+ * Ошибки показывает сама доска (одним сообщением, если переносили несколько задач).
+ */
+async function moveTaskOnBoard(id: string, status: string): Promise<void> {
+  if (status === "under_review") {
+    const card = await m2Api.taskCard(id);
+    if (!card.closure) throw new Error("Сначала заполните результат работ и загрузите фото акта в карточке задачи");
+    if (!card.task.callReason?.trim() || !card.task.workDescription?.trim()) throw new Error("Сначала заполните в карточке задачи причину вызова и описание работ");
+  }
+  await m2Api.transitionTask(id, status);
+}
+
 function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipment }: {
   /** Задачу открыли из паспорта прибора: «назад» возвращает в паспорт. */
   readonly onReturnToEquipment?: () => void;
   readonly initialTaskId: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
 }) {
-  // 25 задач на страницу списка: быстро грузится даже через медленную связь.
-  const pageSize = 25;
+  // Сколько задач на странице списка, выбирает пользователь (10, 50, 100, 200).
+  const { pageSize, pageSizeRef, setPageSize } = usePageSize("tasks");
   const [tasks, setTasks] = useState<readonly TaskApiRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -1312,7 +1326,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         ...(currentFilters.priority ? { priority: currentFilters.priority as "urgent" | "planned" } : {}),
         ...(currentFilters.periodFrom ? { periodFrom: currentFilters.periodFrom } : {}), ...(currentFilters.periodTo ? { periodTo: currentFilters.periodTo } : {}),
         ...(currentFilters.overdue ? { overdue: true } : {}), sort: currentFilters.sort,
-        limit: pageSize, offset: registryPageOffset(targetPageIndex, pageSize)
+        limit: pageSizeRef.current, offset: registryPageOffset(targetPageIndex, pageSizeRef.current)
       });
       setTasks(page.items); setTotal(page.total);
     } finally {
@@ -1524,13 +1538,13 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
-      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={async (id, status) => { try { await m2Api.transitionTask(id, status); } catch (moveError) { const message = moveError instanceof Error ? moveError.message : "Не получилось изменить статус"; toast.error(message); throw moveError; } }} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
+      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
         <section className="card card--table" aria-labelledby="tasks-table-title">
           <CardHeader headingId="tasks-table-title" meta={`${tasks.length} из ${total}`} title="Все задачи" />
           {(loading || !listLoaded) && tasks.length === 0
             ? <ResourceState description="Подождите, список сейчас появится." status="loading" title="Загружаем задачи" />
             : <TaskTable engineers={engineers} equipment={equipment} filtered={Boolean(appliedFilters.search || appliedFilters.status || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode || appliedFilters.priority || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue)} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} onToggle={toggleTask} onToggleAll={(selected) => setSelectedTaskIds((current) => { const next = new Set(current); for (const task of tasks) { if (selected) next.add(task.id); else next.delete(task.id); } return next; })} selectedTaskIds={selectedTaskIds} tasks={tasks} />}
-          <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={(next) => void changePage(next)} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+          <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={(next) => void changePage(next)} onPageSizeChange={(size) => { setPageSize(size); void changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
         </section>
 
       </div> : <MailInboxTab key={mailRefresh} onCreateTask={(mail) => void (async () => {
@@ -2044,7 +2058,7 @@ function EquipmentCard({
 }
 
 function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engineer?: boolean; readonly initialEquipmentId?: string | undefined }) {
-  const pageSize = 50;
+  const { pageSize, setPageSize } = usePageSize(engineer ? "my-equipment" : "equipment");
   const [records, setRecords] = useState<readonly EquipmentUiRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -2132,7 +2146,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
       }).finally(() => { if (active) setLoading(false); });
     }, filters.search ? 250 : 0);
     return () => { active = false; window.clearTimeout(timeout); };
-  }, [filters, pageIndex]);
+  }, [filters, pageIndex, pageSize]);
 
   const save = async (next: EquipmentUiRecord, files: readonly File[]) => {
     const input = {
@@ -2325,7 +2339,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
                 </tbody>
               </table>
             </div>
-            <RegistryPagination ariaLabel="Страницы списка приборов" onPageChange={setPageIndex} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+            <RegistryPagination ariaLabel="Страницы списка приборов" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
           </>}
       </section>
     </>
@@ -2369,7 +2383,7 @@ function notificationErrorText(code: string): string {
 }
 
 function NotificationsPage() {
-  const pageSize = 50;
+  const { pageSize, pageSizeRef, setPageSize } = usePageSize("notifications");
   const [items, setItems] = useState<readonly NotificationJournalRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -2382,8 +2396,8 @@ function NotificationsPage() {
     try {
       const page = await m2Api.notifications({
         ...current,
-        limit: pageSize,
-        offset: registryPageOffset(targetPageIndex, pageSize)
+        limit: pageSizeRef.current,
+        offset: registryPageOffset(targetPageIndex, pageSizeRef.current)
       });
       setItems(page.items);
       setTotal(page.total);
@@ -2441,7 +2455,7 @@ function NotificationsPage() {
               </React.Fragment>;
             })}
           </tbody></table></div>}
-      <RegistryPagination ariaLabel="Страницы журнала уведомлений" onPageChange={changePage} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+      <RegistryPagination ariaLabel="Страницы журнала уведомлений" onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
     </section></>;
 }
 
@@ -2848,6 +2862,9 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const [view, setView] = useState<"board" | "list">("board");
+  // Список задач постранично: раньше показывались только первые 20.
+  const [listPageIndex, setListPageIndex] = useState(0);
+  const { pageSize: listPageSize, setPageSize: setListPageSize } = usePageSize("engineer-tasks");
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
   const openRequest = useRef(0);
@@ -2896,7 +2913,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
     let active = true;
     setLoading(true);
     setError(null);
-    void m2Api.engineerTasks().then((loaded) => {
+    void m2Api.engineerTasks(listPageSize, listPageIndex * listPageSize).then((loaded) => {
       if (active) setPage(loaded);
     }).catch((loadError: unknown) => {
       if (active) setError(loadError instanceof Error ? loadError.message : "Не получилось загрузить задачи");
@@ -2904,7 +2921,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
       if (active) setLoading(false);
     });
     return () => { active = false; };
-  }, [reload]);
+  }, [reload, listPageIndex, listPageSize]);
   useEffect(() => {
     if (initialTaskId && initialTaskId === selectedTaskId) return;
     if (!initialTaskId) {
@@ -2948,10 +2965,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
         const page = await m2Api.tasksPage({ engineerId: user.id, status, sort: status === "closed" ? "updated_desc" : "deadline_asc", limit, offset });
         return { items: page.items, total: page.total };
       }}
-      onMove={async (id, status) => {
-        try { await m2Api.transitionTask(id, status); }
-        catch (moveError) { toast.error(moveError instanceof Error ? moveError.message : "Не получилось изменить этап"); throw moveError; }
-      }}
+      onMove={moveTaskOnBoard}
       onOpen={openFromList}
       engineerMode
       hideEngineer
@@ -2964,6 +2978,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
       {!loading && error ? <div className="mobile-task-error" role="alert"><strong>Список не загрузился</strong><span>{error}</span><Button onClick={() => setReload((value) => value + 1)} variant="secondary">Повторить</Button></div> : null}
       {!loading && !error && page?.items.length === 0 ? <ResourceState description="Когда координатор назначит задачу, она появится здесь." status="empty" title="Назначенных выездов пока нет" /> : null}
       {!loading && !error && page ? <div className="mobile-task-list">{page.items.map((task) => <EngineerTaskCard key={task.id} onOpen={openFromList} task={task} />)}</div> : null}
+      {!error && page ? <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={setListPageIndex} onPageSizeChange={(size) => { setListPageSize(size); setListPageIndex(0); }} pageIndex={listPageIndex} pageSize={listPageSize} total={page.total} /> : null}
     </section> : null}
   </>;
 }

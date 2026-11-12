@@ -43,19 +43,58 @@ function shortDate(value: string): string {
   return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString("ru-RU", { day: "numeric", month: "short" }).replace(".", "");
 }
 
+export type BoardDropDecision =
+  | { readonly kind: "move" }
+  /** Перенос с проверкой на сервере: на проверку уходит только задача с заполненным результатом. */
+  | { readonly kind: "check" }
+  /** Нужны данные или решение в карточке задачи: задача остаётся на месте, показываем, что сделать. */
+  | { readonly kind: "card"; readonly reason: string }
+  | { readonly kind: "no" };
+
 /**
- * Что будет, если бросить задачу в колонку: просто сменить этап, открыть карточку
- * (там нужны данные: инженер, причина, проверка акта) или ничего (этап не следующий).
+ * Что будет, если бросить задачу в колонку: сменить этап, сменить с проверкой (на проверку),
+ * подсказать, что сделать в карточке (инженер, причина, проверка акта), или ничего (этап не следующий).
+ * Карточку сами не открываем: человек остаётся на доске и решает, открыть ли её.
  */
-export function boardDropDecision(task: Pick<TaskApiRecord, "engineerId">, from: string, to: string, engineerMode = false): { readonly kind: "move" } | { readonly kind: "card"; readonly reason: string } | { readonly kind: "no" } {
+export function boardDropDecision(task: Pick<TaskApiRecord, "engineerId">, from: string, to: string, engineerMode = false): BoardDropDecision {
   if (from === to || !(TASK_STATUS_TRANSITIONS[from] ?? []).includes(to)) return { kind: "no" };
   // Инженер не закрывает и не возвращает задачу с проверки: это решает координатор.
   if (engineerMode && from === "under_review") return { kind: "no" };
-  if (to === "assigned" && !task.engineerId) return { kind: "card", reason: "Выберите инженера в карточке задачи" };
-  if (to === "cancelled") return { kind: "card", reason: "Отменить задачу можно в карточке, указав причину" };
-  if (from === "under_review") return { kind: "card", reason: "Проверьте акт и фото в карточке, там же кнопки «Закрыть» и «На доработку»" };
-  if (to === "under_review") return { kind: "card", reason: "Заполните результат и фото акта в карточке, затем нажмите «Передать на проверку»" };
+  if (to === "assigned" && !task.engineerId) return { kind: "card", reason: "Сначала выберите инженера: откройте задачу и нажмите «Назначить инженера»" };
+  if (to === "cancelled") return { kind: "card", reason: "Отменить задачу можно в её карточке, указав причину" };
+  if (from === "under_review") return { kind: "card", reason: "Сначала проверьте акт и фото в карточке задачи, там кнопки «Проверено — закрыть» и «На доработку»" };
+  if (to === "under_review") return { kind: "check" };
   return { kind: "move" };
+}
+
+/** Почему задачу нельзя перенести в колонку (для «card» и «no»). */
+function dropProblemText(decision: BoardDropDecision, from: string, to: string, engineerMode: boolean): string {
+  if (decision.kind === "card") return decision.reason;
+  if (engineerMode && from === "under_review") return "Задача на проверке у координатора. Если нужно что-то исправить, он вернёт её вам";
+  return `Из «${TASK_STATUS_LABELS[from] ?? from}» сразу в «${TASK_STATUS_LABELS[to] ?? to}» нельзя, только в следующий этап`;
+}
+
+/** 1 задача, 2 задачи, 5 задач. */
+export function tasksWord(count: number): string {
+  const tens = count % 100;
+  const ones = count % 10;
+  if (tens >= 11 && tens <= 14) return "задач";
+  if (ones === 1) return "задача";
+  if (ones >= 2 && ones <= 4) return "задачи";
+  return "задач";
+}
+
+interface BoardEntry {
+  readonly task: TaskApiRecord;
+  readonly source: string;
+}
+
+interface DropProblem {
+  readonly task: TaskApiRecord;
+  readonly reason: string;
+  readonly tone: "error" | "warning" | "info";
+  /** Есть смысл предложить открыть карточку (там можно заполнить данные). */
+  readonly openable: boolean;
 }
 
 export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, onMove, loadColumn, queryKey = "initial", visibleStatus = "", showCompleted = false, hideEngineer = false, engineerMode = false }: {
@@ -87,10 +126,23 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     return true;
   }), [activeStatuses, missing, showCompleted, visibleStatus]);
   const [pages, setPages] = useState<Readonly<Record<string, ColumnPage>>>({});
-  const [draggedId, setDraggedId] = useState<string | null>(null);
+  // Задачи, которые сейчас перетаскивают (одну или все отмеченные).
+  const [draggedIds, setDraggedIds] = useState<readonly string[]>([]);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   const [moving, setMoving] = useState<ReadonlySet<string>>(new Set());
+  // Отмеченные задачи: их можно перетащить в колонку все вместе.
+  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const columnSignature = columns.map((status) => status.code ?? status.id).join("|");
+
+  // Другие фильтры или обновление доски: прежний выбор больше не относится к тому, что на экране.
+  useEffect(() => { setSelected(new Set()); }, [queryKey, columnSignature]);
+  // Esc снимает выбор.
+  useEffect(() => {
+    if (selected.size === 0) return undefined;
+    const onKey = (event: KeyboardEvent) => { if (event.key === "Escape") setSelected(new Set()); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [selected.size]);
 
   useEffect(() => {
     if (!loadColumn || columns.length === 0) return undefined;
@@ -144,56 +196,151 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     if (viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight < 96) void loadMore(code);
   };
 
-  const move = async (taskId: string, targetStatus: string) => {
-    const sourceStatus = columns.map((status) => status.code ?? status.id).find((code) => itemsFor(code).some((task) => task.id === taskId));
-    if (!sourceStatus || sourceStatus === targetStatus || moving.has(taskId)) return;
-    const task = itemsFor(sourceStatus).find((item) => item.id === taskId);
-    if (!task) return;
-    const decision = boardDropDecision(task, sourceStatus, targetStatus, engineerMode);
-    if (decision.kind !== "move") {
-      setDraggedId(null);
-      setDropTarget(null);
-      if (decision.kind === "card") { toast.info(decision.reason); onOpen(taskId); }
-      else if (engineerMode && sourceStatus === "under_review") toast.info("Задача на проверке у координатора. Если нужно что-то исправить, он вернёт её вам");
-      else toast.warning(`Из «${TASK_STATUS_LABELS[sourceStatus] ?? sourceStatus}» сразу в «${TASK_STATUS_LABELS[targetStatus] ?? targetStatus}» нельзя, только в следующий этап`);
+  const columnCodes = columns.map((status) => status.code ?? status.id);
+  const findEntry = (taskId: string): BoardEntry | undefined => {
+    for (const code of columnCodes) {
+      const task = itemsFor(code).find((item) => item.id === taskId);
+      if (task) return { task, source: code };
+    }
+    return undefined;
+  };
+
+  // Сразу показываем задачу в новой колонке; при отказе сервера возвращаем обратно.
+  const shiftLocal = (task: TaskApiRecord, from: string, to: string) => {
+    if (!loadColumn) return;
+    const empty: ColumnPage = { items: [], total: 0, loading: false, loadingMore: false };
+    setPages((state) => {
+      const source = state[from] ?? empty;
+      const target = state[to] ?? empty;
+      return {
+        ...state,
+        [from]: { ...source, items: source.items.filter((item) => item.id !== task.id), total: Math.max(0, source.total - 1) },
+        [to]: { ...target, items: [{ ...task, status: to }, ...target.items.filter((item) => item.id !== task.id)], total: target.total + 1 }
+      };
+    });
+  };
+
+  const toggleSelected = (taskId: string) => setSelected((current) => {
+    const next = new Set(current);
+    if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
+    return next;
+  });
+
+  const report = (problems: readonly DropProblem[], moved: number, attempted: number, targetStatus: string) => {
+    if (attempted === 1) {
+      const problem = problems[0];
+      if (!problem) return;
+      const options = problem.openable ? { action: { label: "Открыть задачу", onClick: () => onOpen(problem.task.id) } } : {};
+      if (problem.tone === "info") toast.info(problem.reason, options);
+      else if (problem.tone === "warning") toast.warning(problem.reason, options);
+      else toast.error(problem.reason, options);
       return;
     }
-    const before = pages;
-    setMoving((state) => new Set(state).add(taskId));
-    if (loadColumn) {
-      setPages((state) => ({
-        ...state,
-        [sourceStatus]: { ...(state[sourceStatus] ?? { items: [], total: 0, loading: false, loadingMore: false }), items: (state[sourceStatus]?.items ?? []).filter((item) => item.id !== taskId), total: Math.max(0, (state[sourceStatus]?.total ?? 0) - 1) },
-        [targetStatus]: { ...(state[targetStatus] ?? { items: [], total: 0, loading: false, loadingMore: false }), items: [{ ...task, status: targetStatus }, ...(state[targetStatus]?.items ?? [])], total: (state[targetStatus]?.total ?? 0) + 1 }
-      }));
+    const target = TASK_STATUS_LABELS[targetStatus] ?? targetStatus;
+    if (problems.length === 0) {
+      toast.success(`Перенесено в «${target}»: ${moved} ${tasksWord(moved)}`);
+      return;
     }
-    try {
-      await onMove(taskId, targetStatus);
-    } catch {
-      if (loadColumn) setPages(before);
-    } finally {
-      setMoving((state) => { const next = new Set(state); next.delete(taskId); return next; });
-      setDraggedId(null);
-      setDropTarget(null);
+    // Одинаковые причины одной строкой: «З-1, З-2: Сначала выберите инженера».
+    const byReason = new Map<string, string[]>();
+    for (const problem of problems) byReason.set(problem.reason, [...(byReason.get(problem.reason) ?? []), problem.task.number]);
+    const lines = [...byReason].map(([reason, numbers]) => `${numbers.length > 4 ? `${numbers.slice(0, 4).join(", ")} и ещё ${numbers.length - 4}` : numbers.join(", ")}: ${reason}`);
+    const details = lines.slice(0, 3).join(". ");
+    const more = lines.length > 3 ? `. И другие причины: ${lines.length - 3}` : "";
+    toast.error(`${details}${more}.`, { title: `Перенесено ${moved} из ${attempted}`, durationMs: 12000 });
+  };
+
+  /** Переносит одну или несколько задач в колонку. Каждая задача проверяется отдельно. */
+  const moveTasks = async (taskIds: readonly string[], targetStatus: string) => {
+    setDraggedIds([]);
+    setDropTarget(null);
+    const entries = taskIds.map(findEntry).filter((entry): entry is BoardEntry => Boolean(entry))
+      .filter((entry) => entry.source !== targetStatus && !moving.has(entry.task.id));
+    if (entries.length === 0) return;
+    const problems: DropProblem[] = [];
+    const direct: BoardEntry[] = [];
+    const checked: BoardEntry[] = [];
+    for (const entry of entries) {
+      const decision = boardDropDecision(entry.task, entry.source, targetStatus, engineerMode);
+      if (decision.kind === "move") direct.push(entry);
+      else if (decision.kind === "check") checked.push(entry);
+      else problems.push({
+        task: entry.task,
+        reason: dropProblemText(decision, entry.source, targetStatus, engineerMode),
+        tone: decision.kind === "card" ? "error" : engineerMode && entry.source === "under_review" ? "info" : "warning",
+        openable: decision.kind === "card"
+      });
     }
+    const working = [...direct, ...checked];
+    if (working.length > 0) {
+      for (const entry of direct) shiftLocal(entry.task, entry.source, targetStatus);
+      setMoving((state) => new Set([...state, ...working.map((entry) => entry.task.id)]));
+      const results = await Promise.allSettled(working.map((entry) => onMove(entry.task.id, targetStatus)));
+      results.forEach((result, index) => {
+        const entry = working[index];
+        if (!entry) return;
+        const isDirect = index < direct.length;
+        if (result.status === "fulfilled") {
+          // Проверенный перенос показываем, только когда сервер согласился.
+          if (!isDirect) shiftLocal(entry.task, entry.source, targetStatus);
+          return;
+        }
+        if (isDirect) shiftLocal({ ...entry.task, status: targetStatus }, targetStatus, entry.source);
+        problems.push({
+          task: entry.task,
+          reason: result.reason instanceof Error ? result.reason.message : "Не получилось изменить этап",
+          tone: "error",
+          openable: true
+        });
+      });
+      setMoving((state) => {
+        const next = new Set(state);
+        for (const entry of working) next.delete(entry.task.id);
+        return next;
+      });
+    }
+    // Перенесённые задачи из выбора убираем; не перенесённые и другие отмеченные остаются.
+    const failed = new Set(problems.map((problem) => problem.task.id));
+    const moved = new Set(working.map((entry) => entry.task.id).filter((id) => !failed.has(id)));
+    setSelected((current) => new Set([...current].filter((id) => !moved.has(id))));
+    report(problems, moved.size, entries.length, targetStatus);
   };
 
   const startDrag = (event: DragEvent<HTMLElement>, taskId: string) => {
-    setDraggedId(taskId);
+    // Тянем отмеченную задачу: переносим все отмеченные. Иначе только эту.
+    const ids = selected.has(taskId) ? [...selected].filter((id) => findEntry(id)) : [taskId];
+    setDraggedIds(ids);
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", taskId);
+    event.dataTransfer.setData("text/plain", ids.join(","));
+    if (ids.length > 1 && typeof document !== "undefined") {
+      // Под курсором видно, сколько задач переносим.
+      const ghost = document.createElement("div");
+      ghost.className = "task-board-drag-ghost";
+      ghost.textContent = `${ids.length} ${tasksWord(ids.length)}`;
+      document.body.appendChild(ghost);
+      event.dataTransfer.setDragImage(ghost, 18, 18);
+      window.setTimeout(() => ghost.remove(), 0);
+    }
   };
 
-  return <div className="task-board" aria-label="Доска задач">{columns.map((status) => {
+  const draggedEntries = draggedIds.map(findEntry).filter((entry): entry is BoardEntry => Boolean(entry));
+
+  return <>
+    {selected.size > 0 ? <div className="task-board-selection" role="status">
+      <strong>Выбрано: {selected.size} {tasksWord(selected.size)}</strong>
+      <span>Перетащите любую из них в нужную колонку, перенесутся все</span>
+      <button className="text-button" onClick={() => setSelected(new Set())} type="button">Снять выбор</button>
+    </div> : null}
+    <div className="task-board" aria-label="Доска задач">{columns.map((status) => {
     const code = status.code ?? status.id;
     const items = itemsFor(code);
     const total = totalFor(code);
     const page = pages[code];
     const terminal = (status.attributes as Readonly<Record<string, string | number | boolean | null>>)["isTerminal"] === true;
-    const draggedTask = draggedId ? columns.flatMap((column) => itemsFor(column.code ?? column.id)).find((item) => item.id === draggedId) : undefined;
-    const draggedFrom = draggedTask?.status;
-    const blocked = Boolean(draggedTask && draggedFrom && draggedFrom !== code && boardDropDecision(draggedTask, draggedFrom, code, engineerMode).kind === "no");
-    return <section className={`task-board__column task-board__column--${code}${dropTarget === code && !blocked ? " task-board__column--drop" : ""}${blocked ? " task-board__column--blocked" : ""}`} key={status.id} onDragEnter={() => setDropTarget(code)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }} onDrop={(event) => { event.preventDefault(); const taskId = event.dataTransfer.getData("text/plain") || draggedId; if (taskId) void move(taskId, code); }}>
+    // Колонка недоступна, если ни одну из перетаскиваемых задач сюда перенести нельзя.
+    const incoming = draggedEntries.filter((entry) => entry.source !== code);
+    const blocked = incoming.length > 0 && incoming.every((entry) => boardDropDecision(entry.task, entry.source, code, engineerMode).kind === "no");
+    return <section className={`task-board__column task-board__column--${code}${dropTarget === code && incoming.length > 0 && !blocked ? " task-board__column--drop" : ""}${blocked ? " task-board__column--blocked" : ""}`} key={status.id} onDragEnter={() => setDropTarget(code)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }} onDragLeave={(event) => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setDropTarget(null); }} onDrop={(event) => { event.preventDefault(); const ids = draggedIds.length > 0 ? draggedIds : (event.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean); if (ids.length > 0) void moveTasks(ids, code); }}>
       <header><div><span className="task-board__title"><span aria-hidden="true" className={`task-board__dot task-board__dot--${tone(code, terminal)}`} />{status.name}</span><strong>{total}</strong></div></header>
       <div className="task-board__cards" onScroll={(event) => handleScroll(code, event)}>
         {page?.loading ? <p className="task-board__empty">Загружаем задачи…</p> : null}
@@ -201,8 +348,16 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
           const device = equipment.find((item) => item.id === task.equipmentId);
           const engineer = engineers.find((item) => item.id === task.engineerId);
           const isMoving = moving.has(task.id);
-          return <article aria-busy={isMoving} className={`task-board-card${task.isOverdue ? " task-board-card--overdue" : ""}${draggedId === task.id ? " task-board-card--dragging" : ""}`} draggable={!isMoving} key={task.id} onDragEnd={() => { setDraggedId(null); setDropTarget(null); }} onDragStart={(event) => startDrag(event, task.id)}>
-            <button className="task-board-card__open" onClick={() => onOpen(task.id)} type="button">
+          const isSelected = selected.has(task.id);
+          return <article aria-busy={isMoving} className={`task-board-card${task.isOverdue ? " task-board-card--overdue" : ""}${draggedIds.includes(task.id) ? " task-board-card--dragging" : ""}${isSelected ? " task-board-card--selected" : ""}${selected.size > 0 ? " task-board-card--selecting" : ""}`} draggable={!isMoving} key={task.id} onDragEnd={() => { setDraggedIds([]); setDropTarget(null); }} onDragStart={(event) => startDrag(event, task.id)}>
+            <label className="task-board-card__select" title="Отметьте несколько задач и перетащите их вместе">
+              <input aria-label={`Отметить задачу ${task.number}`} checked={isSelected} onChange={() => toggleSelected(task.id)} type="checkbox" />
+            </label>
+            <button className="task-board-card__open" onClick={(event) => {
+              // Cmd, Ctrl или Shift + клик отмечает задачу, не открывая её.
+              if (event.metaKey || event.ctrlKey || event.shiftKey) { event.preventDefault(); toggleSelected(task.id); return; }
+              onOpen(task.id);
+            }} type="button">
               <span className="task-board-card__top">{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>
               <strong>{task.title}</strong>
               <small>{[task.customer?.siteName ?? "Площадка не выбрана", task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : null].filter(Boolean).join(" · ")}</small>
@@ -222,5 +377,6 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
         {!page?.loading && items.length < total ? <button className="task-board__more" onClick={() => void loadMore(code)} type="button">Показать ещё {Math.min(COLUMN_PAGE_SIZE, total - items.length)}</button> : null}
       </div>
     </section>;
-  })}</div>;
+  })}</div>
+  </>;
 }

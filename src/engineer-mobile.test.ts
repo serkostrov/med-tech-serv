@@ -13,7 +13,9 @@ describe("мобильный список инженера", () => {
       app.indexOf("function EngineerWorkspace")
     );
 
-    assert.match(engineerSection, /m2Api\.engineerTasks\(\)/u);
+    // Список задач инженера постраничный: размер страницы выбирает пользователь.
+    assert.match(engineerSection, /m2Api\.engineerTasks\(listPageSize, listPageIndex \* listPageSize\)/u);
+    assert.match(engineerSection, /<RegistryPagination ariaLabel="Страницы списка задач"/u);
     assert.match(engineerSection, /m2Api\.taskCard\(/u);
     assert.match(engineerSection, /onClick=\{\(\) => onOpen\(task\.id\)\}/u);
     assert.match(engineerSection, /mobile-task-card--new/u);

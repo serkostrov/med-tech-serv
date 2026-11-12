@@ -84,6 +84,8 @@ describe("shared UI architecture", () => {
     assert.match(board, /onScroll/u);
     assert.match(css, /\.task-board\s*\{[^}]*height:\s*clamp\([^}]*overflow-y:\s*hidden/su);
     assert.match(css, /\.task-board__cards\s*\{[^}]*overflow-y:\s*auto/su);
+    // Много карточек: колонка прокручивается, карточки не сплющиваются под её высоту.
+    assert.match(css, /\.task-board__cards\s*\{[^}]*grid-auto-rows:\s*max-content/su);
     assert.match(css, /\.task-bulk-actions\s*\{[^}]*margin-bottom:\s*16px/su);
     assert.doesNotMatch(css, /input:focus-visible,\s*select:focus-visible/su);
   });
