@@ -77,7 +77,8 @@ if (enabled.email) {
     adapters.push(new DryRunDeliveryChannel("email"));
   } else {
     const smtp = smtpConfiguration(process.env);
-    if (smtp.testRedirectTo) console.log(`Тестовый режим почты: все письма уходят на ${smtp.testRedirectTo}`);
+    // По журналу сразу видно, куда уходят письма: на тестовый адрес или настоящим адресатам.
+    console.log(smtp.testRedirectTo ? `Тестовый режим почты: все письма уходят на ${smtp.testRedirectTo}` : "Почта: письма уходят адресатам");
     adapters.push(new SmtpDeliveryChannel(smtp, new NodeSmtpTransport(smtp)));
   }
 }

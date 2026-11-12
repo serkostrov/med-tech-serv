@@ -126,10 +126,14 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     return true;
   }), [activeStatuses, missing, showCompleted, visibleStatus]);
   const [pages, setPages] = useState<Readonly<Record<string, ColumnPage>>>({});
-  // Свежие колонки для обновления после переноса; номер версии отбрасывает устаревшие ответы.
+  // Для обновления колонок после переноса: свежие данные, номер изменения каждой колонки,
+  // сколько переносов в ней ещё идёт и номер загрузки доски (меняется вместе с фильтрами).
   const pagesRef = useRef(pages);
   pagesRef.current = pages;
-  const boardVersion = useRef(0);
+  const columnVersions = useRef<Record<string, number>>({});
+  const pendingMoves = useRef<Record<string, number>>({});
+  const loadGeneration = useRef(0);
+  const touchColumn = (code: string) => { columnVersions.current[code] = (columnVersions.current[code] ?? 0) + 1; };
   // Задачи, которые сейчас перетаскивают (одну или все отмеченные).
   const [draggedIds, setDraggedIds] = useState<readonly string[]>([]);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
@@ -157,7 +161,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   useEffect(() => {
     if (!loadColumn || columns.length === 0) return undefined;
     let current = true;
-    boardVersion.current += 1;
+    loadGeneration.current += 1;
     const codes = columns.map((status) => status.code ?? status.id);
     setPages(Object.fromEntries(codes.map((code) => [code, { items: [], total: 0, loading: true, loadingMore: false }] satisfies readonly [string, ColumnPage])));
     void Promise.all(codes.map(async (code) => {
@@ -181,6 +185,8 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     setPages((state) => ({ ...state, [code]: { ...current, loadingMore: true } }));
     try {
       const next = await loadColumn(code, current.items.length, COLUMN_PAGE_SIZE);
+      // Колонка изменилась: начатое до этого обновление перечитает её заново, а не откатит догрузку.
+      touchColumn(code);
       setPages((state) => {
         const latest = state[code] ?? current;
         const ids = new Set(latest.items.map((task) => task.id));
@@ -219,7 +225,8 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   // Сразу показываем задачу в новой колонке; при отказе сервера возвращаем обратно.
   const shiftLocal = (task: TaskApiRecord, from: string, to: string) => {
     if (!loadColumn) return;
-    boardVersion.current += 1;
+    touchColumn(from);
+    touchColumn(to);
     const empty: ColumnPage = { items: [], total: 0, loading: false, loadingMore: false };
     setPages((state) => {
       const source = state[from] ?? empty;
@@ -240,22 +247,31 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
 
   /**
    * После переноса перечитываем уже загруженную часть колонок: сервер сортирует задачи по-своему,
-   * и без этого догрузка со смещением пропустила бы карточки. Если за это время доску
-   * снова поменяли, ответ устарел и не применяется (следующее обновление придёт само).
+   * и без этого догрузка со смещением пропустила бы карточки. Пока в колонке идёт другой перенос,
+   * не трогаем её: обновит тот перенос, что закончится последним. Если колонку поменяли, пока
+   * шёл запрос (перенос, догрузка), перечитываем ещё раз. Смена фильтров отменяет обновление.
    */
+  const refreshColumn = async (code: string, generation: number, attempt = 0): Promise<void> => {
+    if (!loadColumn || (pendingMoves.current[code] ?? 0) > 0) return;
+    const version = columnVersions.current[code] ?? 0;
+    const limit = Math.max(COLUMN_PAGE_SIZE, pagesRef.current[code]?.items.length ?? 0);
+    let page: TaskBoardPage;
+    try {
+      page = await loadColumn(code, 0, limit);
+    } catch {
+      // Не обновилось: на доске остаётся то, что показали сразу после переноса.
+      return;
+    }
+    if (generation !== loadGeneration.current || (pendingMoves.current[code] ?? 0) > 0) return;
+    if (version !== (columnVersions.current[code] ?? 0)) {
+      if (attempt < 3) await refreshColumn(code, generation, attempt + 1);
+      return;
+    }
+    setPages((state) => ({ ...state, [code]: { items: page.items, total: page.total, loading: false, loadingMore: false } }));
+  };
   const refreshColumns = async (codes: readonly string[]) => {
-    if (!loadColumn) return;
-    const version = boardVersion.current;
-    await Promise.all([...new Set(codes)].map(async (code) => {
-      const limit = Math.max(COLUMN_PAGE_SIZE, pagesRef.current[code]?.items.length ?? 0);
-      try {
-        const page = await loadColumn(code, 0, limit);
-        if (version !== boardVersion.current) return;
-        setPages((state) => ({ ...state, [code]: { items: page.items, total: page.total, loading: false, loadingMore: false } }));
-      } catch {
-        // Не обновилось: на доске остаётся то, что показали сразу после переноса.
-      }
-    }));
+    const generation = loadGeneration.current;
+    await Promise.all([...new Set(codes)].map((code) => refreshColumn(code, generation)));
   };
 
   const report = (problems: readonly DropProblem[], moved: number, attempted: number, targetStatus: string) => {
@@ -316,6 +332,10 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
       for (const entry of direct) shiftLocal(entry.task, entry.source, targetStatus);
       setMoving((state) => new Set([...state, ...working.map((entry) => entry.task.id)]));
       const directIds = new Set(direct.map((entry) => entry.task.id));
+      const pendingDelta = (entry: BoardEntry, delta: number) => {
+        for (const code of [entry.source, targetStatus]) pendingMoves.current[code] = Math.max(0, (pendingMoves.current[code] ?? 0) + delta);
+      };
+      for (const entry of working) pendingDelta(entry, 1);
       // Каждый ответ применяем сразу: отказ возвращает задачу, не дожидаясь остальных.
       await Promise.all(working.map(async (entry) => {
         try {
@@ -332,6 +352,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
             openable: true
           });
         } finally {
+          pendingDelta(entry, -1);
           setMoving((state) => { const next = new Set(state); next.delete(entry.task.id); return next; });
         }
       }));
