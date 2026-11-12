@@ -73,7 +73,7 @@ export function AppShell({
           <small>{userMeta}</small>
         </span>
       </div>
-      <Button className="sidebar-user__logout button--compact" icon="logout" onClick={onLogout} variant="ghost" children={null} />
+      <Button aria-label="Выйти" className="sidebar-user__logout button--compact" icon="logout" onClick={onLogout} title="Выйти" variant="ghost" children={null} />
     </div>
   );
 

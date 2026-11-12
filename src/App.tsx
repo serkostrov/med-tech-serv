@@ -1483,6 +1483,8 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         setSelectedTaskId(null);
         setTaskCard(null);
         toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
+        // Не остаёмся на адресе задачи, которая не открылась: из паспорта назад в паспорт, иначе к задачам.
+        onTaskRouteChange(undefined, true);
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
@@ -1537,7 +1539,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         setMailEquipment(device);
         setMailDraft(mail);
         await openCreationForm();
-      })()} onOpenTask={(taskId) => void openTask(taskId)} />}
+      })()} onOpenTask={(taskId) => void openTask(taskId).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} />}
     </>
   );
 }
@@ -2198,6 +2200,8 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
     // Шаг истории снова означает список приборов, а не этот паспорт.
     if (currentRouteState()?.equipmentId) window.history.replaceState({ view: "equipment" }, "");
   };
+  // Ушли из раздела приборов: поздний ответ не трогает чужой шаг истории.
+  useEffect(() => () => { openCardRequest.current += 1; }, []);
 
   // Возврат из задачи «Назад»: открываем тот паспорт, из которого в неё перешли.
   // Ждём первую загрузку списка, иначе она затрёт подробные данные паспорта.
@@ -2915,6 +2919,8 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
         setSelectedTaskId(null);
         setTaskCard(null);
         toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
+        // Не остаёмся на адресе задачи, которая не открылась: из паспорта назад в паспорт, иначе к задачам.
+        onTaskRouteChange(undefined, true);
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) {
@@ -3171,7 +3177,9 @@ function App() {
     taskStepFrom.current = null;
     // Каждый раздел своим шагом истории, чтобы «Назад» и «Вперёд» вели по разделам. Повторный клик шаг не добавляет.
     const state = currentRouteState();
-    if (window.location.pathname === "/" && state?.view === id && !state.equipmentId) return;
+    // У первого шага и после обновления страницы меток нет: на нём раздел по умолчанию.
+    const shownView = state?.view ?? routeContext.current.defaultView;
+    if (window.location.pathname === "/" && shownView === id && !state?.equipmentId) return;
     window.history.pushState({ view: id }, "", "/");
   };
 
@@ -3197,6 +3205,11 @@ function App() {
         window.history.back();
         return;
       }
+      // Задача из паспорта не открылась: паспорт — предыдущий шаг истории, возвращаемся в него.
+      if (!taskId && currentRouteState()?.fromEquipmentId) {
+        window.history.back();
+        return;
+      }
       if (window.location.pathname === pathname) return;
       setFromEquipmentId(undefined);
       window.history.replaceState(taskId ? null : { view: "tasks" }, "", pathname);
@@ -3208,6 +3221,15 @@ function App() {
     setFromEquipmentId(undefined);
     taskStepFrom.current = window.location.pathname;
     window.history.pushState(taskId ? null : { view: "tasks" }, "", pathname);
+  };
+
+  // Выход: следующий пользователь начинает с раздела по умолчанию, а не с последнего экрана прошлого.
+  const resetRoute = () => {
+    taskStepFrom.current = null;
+    setTaskRouteId(undefined);
+    setEquipmentRouteId(undefined);
+    setFromEquipmentId(undefined);
+    window.history.replaceState(null, "", "/");
   };
 
   const acceptLogin = (user: ApiSessionUser) => {
@@ -3228,7 +3250,7 @@ function App() {
       activeId={activeItem?.id}
       currentPageLabel={activeItem?.label}
       groups={groups}
-      onLogout={() => { void m2Api.logout().finally(() => setSessionUser(null)); }}
+      onLogout={() => { void m2Api.logout().finally(() => { resetRoute(); setSessionUser(null); }); }}
       onNavigate={navigate}
       userMeta={sessionUser.accessRoleName ?? roleLabels[role]}
       userName={sessionUser.fullName}
