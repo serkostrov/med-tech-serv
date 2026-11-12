@@ -2063,6 +2063,25 @@ function EquipmentCard({
   );
 }
 
+/** Паспорт открывается: сразу каркас с названием прибора, данные подгружаются следом. */
+function EquipmentCardLoading({ record, onBack }: { readonly record?: Pick<EquipmentUiRecord, "manufacturer" | "model" | "serial">; readonly onBack: () => void }) {
+  return <div aria-busy="true" className="equipment-card-loading" role="status">
+    <EntityDetailToolbar backLabel="К приборам" onBack={onBack} />
+    <header className="task-head">
+      {record ? <div className="task-head__meta"><span className="task-head__number">S/N {record.serial}</span></div> : null}
+      <h1>{record ? `${record.manufacturer} ${record.model}` : "Открываем паспорт…"}</h1>
+    </header>
+    <span className="sr-only">Открываем паспорт прибора</span>
+    <div className="task-layout">
+      <div className="task-layout__main">
+        <Skeleton className="equipment-card-loading__block" />
+        <Skeleton className="equipment-card-loading__block equipment-card-loading__block--tall" />
+      </div>
+      <aside className="task-layout__aside"><Skeleton className="equipment-card-loading__aside" /></aside>
+    </div>
+  </div>;
+}
+
 function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engineer?: boolean; readonly initialEquipmentId?: string | undefined }) {
   const { pageSize, setPageSize } = usePageSize(engineer ? "my-equipment" : "equipment");
   const [records, setRecords] = useState<readonly EquipmentUiRecord[]>([]);
@@ -2076,6 +2095,8 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   const [editingId, setEditingId] = useState<string | "new" | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  // Паспорт, который сейчас открывается из списка: показываем его каркас.
+  const [openingId, setOpeningId] = useState<string | null>(null);
   const [siteChangeId, setSiteChangeId] = useState<string | null>(null);
   const editingRecord = records.find((record) => record.id === editingId);
   const selectedRecord = records.find((record) => record.id === selectedId);
@@ -2114,7 +2135,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   useEffect(() => {
     const shell = document.querySelector(".main-shell");
     if (shell instanceof HTMLElement) shell.scrollTop = 0;
-  }, [selectedId]);
+  }, [selectedId, openingId]);
 
   useEffect(() => {
     let active = true;
@@ -2196,6 +2217,8 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   const openCardRequest = useRef(0);
   const openCard = async (id: string) => {
     const request = ++openCardRequest.current;
+    // Открываем из списка (а не обновляем уже открытый): сразу каркас паспорта, а не тишина.
+    if (selectedIdRef.current !== id) setOpeningId(id);
     try {
       const card = await m2Api.equipmentCard(id);
       if (request !== openCardRequest.current) return;
@@ -2210,12 +2233,15 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
     } catch (error) {
       if (request !== openCardRequest.current) return;
       toast.error(error instanceof Error ? error.message : "Не получилось открыть паспорт прибора");
+    } finally {
+      if (request === openCardRequest.current) setOpeningId(null);
     }
   };
 
   // «К приборам»: незавершённые загрузки паспорта больше не открывают его снова.
   const closeCard = () => {
     openCardRequest.current += 1;
+    setOpeningId(null);
     setSelectedId(null);
     // Шаг истории снова означает список приборов, а не этот паспорт.
     if (currentRouteState()?.equipmentId) window.history.replaceState({ view: "equipment" }, "");
@@ -2298,6 +2324,8 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
       </>
     );
   }
+
+  if (openingId) return <EquipmentCardLoading onBack={closeCard} {...(records.find((record) => record.id === openingId) ? { record: records.find((record) => record.id === openingId)! } : {})} />;
 
   const filteredEmpty = Boolean(filters.search || filters.manufacturer || filters.status || filters.site || filters.payer);
   const initialLoading = loading && records.length === 0;

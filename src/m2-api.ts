@@ -1286,14 +1286,15 @@ export class M2ApiClient {
   }
 
   public async equipmentCard(id: string): Promise<EquipmentCardResponse> {
-    const [passport, history, meterReadings, filesResult] = await Promise.all([
+    // Всё одним шагом: права берём из памяти (как у карточки задачи), а не новыми тремя запросами.
+    const [passport, history, meterReadings, filesResult, session] = await Promise.all([
       this.loadEquipment(id),
       this.equipmentHistoryPage(id, 0, 25),
       this.equipmentMeterReadingsPage(id, 0, 25),
-      this.db().from("files").select(FILE_SELECT).eq("equipment_id", id).order("created_at", { ascending: false })
+      this.db().from("files").select(FILE_SELECT).eq("equipment_id", id).order("created_at", { ascending: false }),
+      this.cachedSession()
     ]);
     throwIfError(filesResult.error);
-    const session = await this.session();
     return {
       passport,
       history,

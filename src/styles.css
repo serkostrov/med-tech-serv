@@ -8524,3 +8524,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .task-board-card__select { display: none; }
   .task-board-card__open > .task-board-card__top { padding-right: 0; }
 }
+
+/* ===== Паспорт прибора открывается: каркас вместо пустого ожидания ===== */
+.equipment-card-loading__block { height: 120px; margin-bottom: 16px; border-radius: 12px; }
+.equipment-card-loading__block--tall { height: 320px; }
+.equipment-card-loading__aside { height: 420px; border-radius: 12px; }
