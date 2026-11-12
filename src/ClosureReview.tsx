@@ -24,6 +24,14 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
   const [reworkOpen, setReworkOpen] = useState(false);
   const [reworkComment, setReworkComment] = useState("");
   const { task, closure } = card;
+  // Кто и когда передал работу на проверку: последняя смена этапа на «На проверке» из истории.
+  // Запись акта обновляется только при сохранении результата, поэтому после доработки
+  // её время осталось бы от первой сдачи.
+  const handIn = card.journal
+    .filter((entry) => entry.toStatus === "under_review")
+    .reduce<(typeof card.journal)[number] | undefined>((latest, entry) => !latest || Date.parse(entry.occurredAt) > Date.parse(latest.occurredAt) ? entry : latest, undefined);
+  const submitter = handIn?.actorName ?? closure?.submittedByName ?? card.engineer?.fullName ?? "Инженер";
+  const submittedAt = handIn?.occurredAt ?? closure?.submittedAt;
   const hasAct = card.files.some((file) => file.id === closure?.actFileId || file.kind === "act");
   const media = card.files.filter((file) => file.kind === "photo" || file.kind === "video").length;
   const summary: readonly { readonly label: string; readonly section: ClosureReviewSection; readonly missing?: boolean }[] = [
@@ -37,8 +45,8 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
       <div>
         <h2 id="closure-review-title">Проверка закрытия <StatusBadge tone="info">На проверке</StatusBadge></h2>
         <p>
-          {closure?.submittedByName ?? card.engineer?.fullName ?? "Инженер"} передал работу на проверку
-          {closure?.submittedAt ? ` ${formatDisplayDate(closure.submittedAt, true)}` : ""}. Сверьте результат, фото акта и запчасти ниже и примите решение.
+          {submitter} передал работу на проверку
+          {submittedAt ? ` ${formatDisplayDate(submittedAt, true)}` : ""}. Сверьте результат, фото акта и запчасти ниже и примите решение.
         </p>
         <ul aria-label="Что приложено к работе" className="closure-review__summary">
           {summary.map((item) => <li className={item.missing ? "closure-review__summary-item--missing" : undefined} key={item.label}>

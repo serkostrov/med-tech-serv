@@ -77,6 +77,25 @@ describe("coordinator closure review", () => {
     }
   });
 
+  it("shows the latest hand-in from the task history, not the first saved act", () => {
+    // Сдали, вернули на доработку, сдали снова: показываем вторую сдачу.
+    const markup = render({ card: { ...card, journal: [
+      { id: "j3", action: "in_progress → under_review", occurredAt: "2026-08-19T09:30:00.000Z", actorName: "Координатор Учебный", fromStatus: "in_progress", toStatus: "under_review" },
+      { id: "j2", action: "under_review → in_progress", occurredAt: "2026-08-18T12:00:00.000Z", actorName: "Координатор Учебный", fromStatus: "under_review", toStatus: "in_progress", comment: "Нет фото шильдика" },
+      { id: "j1", action: "in_progress → under_review", occurredAt: "2026-08-18T09:55:00.000Z", actorName: "Инженер Учебный", fromStatus: "in_progress", toStatus: "under_review" }
+    ] } });
+    assert.match(markup, /Координатор Учебный передал работу на проверку[^.]*19\.08\.2026/u);
+    assert.doesNotMatch(markup, /18\.08\.2026/u);
+    // Без истории: как раньше, из записи акта.
+    assert.match(render(), /Инженер Учебный передал работу на проверку[^.]*18\.08\.2026/u);
+    // Как в базе сейчас: у смены этапа нет автора. Имя из записи акта, время из последней сдачи.
+    const anonymous = render({ card: { ...card, journal: [
+      { id: "j3", action: "in_progress → under_review", occurredAt: "2026-08-19T09:30:00.000Z", fromStatus: "in_progress", toStatus: "under_review" },
+      { id: "j1", action: "in_progress → under_review", occurredAt: "2026-08-18T09:55:00.000Z", fromStatus: "in_progress", toStatus: "under_review" }
+    ] } });
+    assert.match(anonymous, /Инженер Учебный передал работу на проверку[^.]*19\.08\.2026/u);
+  });
+
   it("warns when the act photo is missing", () => {
     const markup = render({ card: { ...card, closure: undefined, files: card.files.filter((file) => file.kind !== "act") } });
     assert.match(markup, /closure-review__summary-item--missing[^>]*>Фото акта не загружено/u);
