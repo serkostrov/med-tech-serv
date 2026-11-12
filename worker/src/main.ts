@@ -15,6 +15,7 @@ import {
   TelegramChatIdResponder,
   TelegramClient,
   TelegramDeliveryChannel,
+  PostgresTelegramTaskCardSource,
   telegramConfiguration
 } from "./telegram.js";
 
@@ -88,7 +89,8 @@ if (enabled.telegram) {
     adapters.push(new DryRunDeliveryChannel("telegram"));
   } else {
     const client = new TelegramClient(telegramConfiguration(process.env));
-    adapters.push(new TelegramDeliveryChannel(client));
+    // Сообщения о задачах приходят карточкой-виджетом с кнопкой «Открыть задачу».
+    adapters.push(new TelegramDeliveryChannel(client, { publicAppUrl, cards: new PostgresTelegramTaskCardSource(database) }));
     if (flag("TELEGRAM_CHAT_ID_REPLIES", true)) telegramResponder = new TelegramChatIdResponder(client);
   }
 }

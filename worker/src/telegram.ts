@@ -1,4 +1,5 @@
 import { renderNotificationTemplate, type BusinessEvent } from "./domain.js";
+import { chatIdWidgetHtml, clipText, escapeHtml, taskWidgetHtml, WIDGET_CAPTION_LIMIT, widgetFitsLimits, type TaskWidgetData } from "./telegram-widget.js";
 import {
   ChannelDeliveryError,
   channelDeliveryIdempotencyKey,
@@ -84,7 +85,7 @@ export class TelegramClient {
         throw new ChannelDeliveryError("telegram_connection_failed");
       }
       // Таймаут или обрыв после отправки: сообщение могло дойти, повтор дал бы дубль.
-      if (method === "sendMessage") throw new ChannelDeliveryError("telegram_delivery_outcome_unknown", false);
+      if (method === "sendMessage" || method === "sendWidget") throw new ChannelDeliveryError("telegram_delivery_outcome_unknown", false);
       throw new ChannelDeliveryError("telegram_connection_failed");
     } finally {
       clearTimeout(timer);
@@ -92,30 +93,134 @@ export class TelegramClient {
   }
 }
 
+/** Данные для карточки задачи; undefined, если их не удалось получить (тогда уйдёт обычное сообщение). */
+export interface TelegramTaskCardSource {
+  load(delivery: ChannelDeliveryCommand): Promise<TaskWidgetData | undefined>;
+}
+
+/**
+ * Данные карточки берём из той же функции базы, что и план рассылки: при отправке у доставки
+ * есть номер события, функция отдаёт переменные задачи для этого получателя.
+ */
+export class PostgresTelegramTaskCardSource implements TelegramTaskCardSource {
+  public constructor(private readonly database: OutboxSqlExecutor) {}
+
+  public async load(delivery: ChannelDeliveryCommand): Promise<TaskWidgetData | undefined> {
+    if (!delivery.outboxEventId) return undefined;
+    const result = await this.database.executeSql(
+      "SELECT recipient_address, variables FROM public.load_telegram_event_plan($1::uuid)",
+      [delivery.outboxEventId]
+    );
+    const row = result.rows.find((item) => typeof item.recipient_address === "string" && item.recipient_address.trim() === delivery.recipientAddress.trim());
+    const variables = row?.variables;
+    if (!variables || typeof variables !== "object" || Array.isArray(variables)) return undefined;
+    const text = (key: string): string | undefined => {
+      const value = (variables as Record<string, unknown>)[key];
+      return typeof value === "string" && value.trim() ? value : undefined;
+    };
+    return {
+      eventCode: delivery.eventCode,
+      ...optional("taskNumber", text("taskNumber")),
+      ...optional("taskTitle", text("taskTitle")),
+      ...optional("siteName", text("siteName")),
+      ...optional("engineerName", text("engineerName")),
+      ...optional("periodFrom", text("periodFrom")),
+      ...optional("periodTo", text("periodTo")),
+      ...optional("reworkComment", text("reworkComment"))
+    };
+  }
+}
+
+function optional<K extends string>(key: K, value: string | undefined): { readonly [P in K]?: string } {
+  return (value === undefined ? {} : { [key]: value }) as { readonly [P in K]?: string };
+}
+
+/**
+ * Обычное сообщение, если виджет не получился: заголовок жирным, текст без ссылки
+ * на карточку (она в кнопке). Разметка HTML, текст из шаблона экранирован.
+ */
+export function telegramHtmlText(subject: string, body: string, taskUrl?: string): string {
+  const lines = body.replace(/\r\n?/gu, "\n").split("\n").filter((line) => !taskUrl || !line.includes(taskUrl));
+  const trimEnd = (): void => { while (lines.length && !lines[lines.length - 1]?.trim()) lines.pop(); };
+  trimEnd();
+  // Подпись к ссылке («Карточка задачи:») без самой ссылки не нужна.
+  const last = lines[lines.length - 1] ?? "";
+  if (taskUrl && /:\s*$/u.test(last) && /карточк/iu.test(last)) lines.pop();
+  trimEnd();
+  const title = clipText(subject, 256);
+  const text = lines.join("\n").trim();
+  // Лимит Telegram 4096 символов после разметки: заголовок и текст укладываем с запасом.
+  const clipped = [...text].length > 3_700 ? `${[...text].slice(0, 3_699).join("").trimEnd()}…` : text;
+  if (!title) return escapeHtml(clipped);
+  return clipped ? `<b>${escapeHtml(title)}</b>\n\n${escapeHtml(clipped)}` : `<b>${escapeHtml(title)}</b>`;
+}
+
+function failDelivery(status: number): never {
+  if (status === 429 || status >= 500) throw new ChannelDeliveryError("telegram_temporary_failure");
+  if (status === 401 || status === 404) throw new ChannelDeliveryError("telegram_bot_token_rejected");
+  // 400/403: чат не найден, бот заблокирован или не запущен. Повтор не поможет.
+  throw new ChannelDeliveryError("telegram_chat_rejected", false);
+}
+
+function deliveryReceipt(chatId: string, body: unknown): ChannelDeliveryReceipt {
+  const result = body as { readonly result?: { readonly message_id?: number } } | undefined;
+  const messageId = result?.result?.message_id;
+  return typeof messageId === "number" ? { providerMessageId: `telegram:${chatId}:${messageId}` } : {};
+}
+
+function isOk(status: number, body: unknown): boolean {
+  return status === 200 && (body as { readonly ok?: boolean } | undefined)?.ok === true;
+}
+
 export class TelegramDeliveryChannel implements DeliveryChannel {
   public readonly code = "telegram" as const;
+  private readonly publicAppUrl: string | undefined;
 
-  public constructor(private readonly client: TelegramClient) {}
+  public constructor(
+    private readonly client: TelegramClient,
+    private readonly options: { readonly publicAppUrl?: string; readonly cards?: TelegramTaskCardSource } = {}
+  ) {
+    this.publicAppUrl = options.publicAppUrl?.replace(/\/$/u, "");
+  }
 
   public async deliver(command: ChannelDeliveryCommand): Promise<ChannelDeliveryReceipt> {
     if (command.channel !== this.code) throw new ChannelDeliveryError("telegram_channel_mismatch");
     if (!isValidTelegramChatId(command.recipientAddress)) throw new ChannelDeliveryError("telegram_invalid_chat_id", false);
-    const { status, body } = await this.client.call("sendMessage", {
-      chat_id: command.recipientAddress.trim(),
-      text: telegramText(command.subject, command.body),
-      disable_web_page_preview: true
-    });
-    const result = body as { readonly ok?: boolean; readonly result?: { readonly message_id?: number } } | undefined;
-    if (status === 200 && result?.ok === true) {
-      const messageId = result.result?.message_id;
-      return typeof messageId === "number"
-        ? { providerMessageId: `telegram:${command.recipientAddress.trim()}:${messageId}` }
-        : {};
+    const chatId = command.recipientAddress.trim();
+    const taskUrl = command.taskId && this.publicAppUrl ? `${this.publicAppUrl}/tasks/${encodeURIComponent(command.taskId)}` : undefined;
+    // Ссылка на карточку — кнопкой под сообщением, а не длинной строкой в тексте.
+    const replyMarkup = taskUrl ? { inline_keyboard: [[{ text: "Открыть задачу", url: taskUrl }]] } : undefined;
+
+    // Сначала карточка-виджет. Нет данных или Telegram её не принял (400) — обычное сообщение.
+    let card: TaskWidgetData | undefined;
+    try {
+      card = await this.options.cards?.load(command);
+    } catch {
+      card = undefined;
     }
-    if (status === 429 || status >= 500) throw new ChannelDeliveryError("telegram_temporary_failure");
-    if (status === 401 || status === 404) throw new ChannelDeliveryError("telegram_bot_token_rejected");
-    // 400/403: чат не найден, бот заблокирован или не запущен. Повтор не поможет.
-    throw new ChannelDeliveryError("telegram_chat_rejected", false);
+    const html = card ? taskWidgetHtml(card) : undefined;
+    if (html && widgetFitsLimits(html)) {
+      const caption = clipText(command.subject, WIDGET_CAPTION_LIMIT) ?? `${card?.taskNumber ?? "Задача"}`;
+      const { status, body } = await this.client.call("sendWidget", {
+        chat_id: chatId,
+        html,
+        caption,
+        show_caption_above_media: true,
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+      });
+      if (isOk(status, body)) return deliveryReceipt(chatId, body);
+      if (status !== 400) failDelivery(status);
+    }
+
+    const { status, body } = await this.client.call("sendMessage", {
+      chat_id: chatId,
+      text: telegramHtmlText(command.subject, command.body, taskUrl),
+      parse_mode: "HTML",
+      disable_web_page_preview: true,
+      ...(replyMarkup ? { reply_markup: replyMarkup } : {})
+    });
+    if (isOk(status, body)) return deliveryReceipt(chatId, body);
+    return failDelivery(status);
   }
 }
 
@@ -206,10 +311,18 @@ export class TelegramChatIdResponder {
       const chatId = message?.chat?.id;
       if (typeof chatId !== "number" || message?.chat?.type !== "private") continue;
       if (typeof message.text !== "string" || !/^\/(start|id)\b/u.test(message.text.trim())) continue;
-      await this.client.call("sendMessage", {
+      // Карточка с номером и кнопкой «Скопировать номер»; если виджет не принят — обычный текст.
+      const widget = await this.client.call("sendWidget", {
         chat_id: chatId,
-        text: `Номер вашего чата: ${chatId}\n\nПередайте его администратору МедТехСервиса, чтобы получать уведомления о задачах здесь.`
+        html: chatIdWidgetHtml(String(chatId)),
+        caption: `Номер вашего чата: ${chatId}`
       });
+      if (!isOk(widget.status, widget.body)) {
+        await this.client.call("sendMessage", {
+          chat_id: chatId,
+          text: `Номер вашего чата: ${chatId}\n\nПередайте его администратору МедТехСервиса, чтобы получать уведомления о задачах здесь.`
+        });
+      }
       replied += 1;
     }
     return replied;

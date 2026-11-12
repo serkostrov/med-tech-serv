@@ -23,6 +23,8 @@ export interface ChannelDeliveryCommand {
   readonly taskId?: string;
   readonly equipmentId?: string;
   readonly reservationId?: string;
+  /** Событие, из которого создана доставка (есть у сохранённых доставок). */
+  readonly outboxEventId?: string;
 }
 
 export interface ChannelDeliveryReceipt {
