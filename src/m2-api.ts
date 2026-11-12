@@ -1462,7 +1462,22 @@ export class M2ApiClient {
     }), count ?? 0, limit, offset);
   }
 
+  /** Открытые задачи по прибору, запрошенные вместе с паспортом: паспорт берёт их без второй волны запросов. */
+  private readonly equipmentTasksPrefetch = new Map<string, { readonly at: number; readonly value: Promise<readonly TaskApiRecord[]> }>();
+
+  /** Открытые задачи прибора для паспорта: уже запрошенные вместе с паспортом или новым запросом. */
+  public equipmentOpenTasks(id: string): Promise<readonly TaskApiRecord[]> {
+    const prefetched = this.equipmentTasksPrefetch.get(id);
+    this.equipmentTasksPrefetch.delete(id);
+    if (prefetched && Date.now() - prefetched.at < 15_000) return prefetched.value;
+    return this.tasksPage({ equipmentId: id, openOnly: true, limit: 20, sort: "deadline_asc" }).then((page) => page.items);
+  }
+
   public async equipmentCard(id: string): Promise<EquipmentCardResponse> {
+    // Открытые задачи прибора запрашиваем сразу, вместе с паспортом, а не после его показа.
+    const openTasks = this.tasksPage({ equipmentId: id, openOnly: true, limit: 20, sort: "deadline_asc" }).then((page) => page.items);
+    openTasks.catch(() => undefined);
+    this.equipmentTasksPrefetch.set(id, { at: Date.now(), value: openTasks });
     // Всё одним шагом: права берём из памяти (как у карточки задачи), а не новыми тремя запросами.
     const [passport, history, meterReadings, filesResult, session] = await Promise.all([
       this.loadEquipment(id),

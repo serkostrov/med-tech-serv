@@ -1982,8 +1982,8 @@ function EquipmentCard({
     // Открытые задачи по прибору: главное, что нужно знать о нём сейчас.
     let active = true;
     setOpenTasks(null);
-    void m2Api.tasksPage({ equipmentId: record.id, openOnly: true, limit: 20, sort: "deadline_asc" })
-      .then((page) => { if (active) setOpenTasks(page.items); })
+    void m2Api.equipmentOpenTasks(record.id)
+      .then((items) => { if (active) setOpenTasks(items); })
       .catch(() => { if (active) setOpenTasks([]); });
     return () => { active = false; };
   }, [record.id]);
