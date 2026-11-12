@@ -4400,109 +4400,40 @@ td .resource-state {
   gap: 8px;
 }
 
-.closure-review__grid {
-  display: grid;
-  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 1fr);
-  align-items: start;
-  gap: 16px;
-}
-
-.closure-review .card {
-  margin: 0;
-}
-
-.closure-review .card-header {
+/* Что приложено к работе: коротко, подробности во вкладках карточки ниже. */
+.closure-review__summary {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.closure-review .card-header h3 {
-  font-size: 14px;
-}
-
-.closure-review__fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 14px 16px 4px;
-}
-
-.closure-review__fields > div {
-  display: grid;
-  align-content: start;
-  gap: 4px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border-soft);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-}
-
-.closure-review__fields dt {
-  color: var(--color-muted);
-  font-size: 12px;
-}
-
-.closure-review__fields dd {
-  color: var(--color-ink);
-  font-size: 14px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-  white-space: pre-wrap;
-}
-
-.closure-review__flags {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-  margin: 0;
-  padding: 10px 16px 16px;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  margin: 10px 0 0;
+  padding: 0;
   list-style: none;
 }
 
-.closure-review__flags li {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-  padding: 10px 12px;
-  border: 1px solid var(--color-border-soft);
-  border-radius: var(--radius-sm);
+.closure-review__summary li {
+  padding: 3px 10px;
+  border: 1px solid #cfe3ec;
+  border-radius: 999px;
   background: var(--color-surface);
-  font-size: 13px;
+  color: var(--color-ink-soft);
+  font-size: 12.5px;
 }
 
-.closure-review__evidence {
-  display: grid;
-  align-content: start;
-  gap: 16px;
+.closure-review__summary .text-button {
+  padding: 0;
+  font-size: inherit;
 }
 
-.closure-review__files {
-  padding: 12px 16px 16px;
-}
-
-.closure-review__missing {
-  padding: 10px;
-  border: 1px solid #efc2c6;
-  border-radius: var(--radius-sm);
+.closure-review__summary li.closure-review__summary-item--missing {
+  border-color: #efc2c6;
   color: var(--color-danger);
   background: var(--color-danger-soft);
-  font-size: 13px;
 }
 
-@media (max-width: 1100px) {
-  .closure-review__grid { grid-template-columns: 1fr; }
-}
+.closure-review__summary-item--missing .text-button { color: inherit; }
 
 @media (max-width: 640px) {
   .closure-review { padding: 12px; }
-  .closure-review__fields,
-  .closure-review__flags { grid-template-columns: 1fr; }
   .closure-review__buttons,
   .closure-review__buttons > * { width: 100%; }
 }

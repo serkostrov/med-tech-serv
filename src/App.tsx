@@ -913,7 +913,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const canEditResult = card.canSubmitResult === true || card.canSetWorkModifier === true;
   const canUploadFiles = card.canUploadFiles === true || canEditResult;
 
-  const workTypeLabel = card.workType?.name ? `${card.workType.name}${task.workModifier ? ` · ${task.workModifier}` : ""}` : "—";
+  // Модификатор русской буквой, как в акте: Г (гарантия) или Н (неправильная эксплуатация).
+  const workTypeLabel = card.workType?.name ? `${card.workType.name}${task.workModifier ? ` · ${task.workModifier === "G" ? "Г" : "Н"}` : ""}` : "—";
   const meterLabel = task.meterReading ?? card.closure?.meterReading;
   const contactDetails = [task.customer?.contactPhone, task.customer?.contactEmail].filter(Boolean).join(" · ");
   const canCancel = card.availableActions.some((action) => action.code === "cancel");
@@ -933,6 +934,25 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const isTaskEngineer = card.canSubmitResult === true;
   const needsResult = task.status === "in_progress" && canEditResult;
   const resultFilled = Boolean(task.callReason?.trim() && task.workDescription?.trim());
+  // Проверяющий видит все поля акта, в том числе пустые: так видно, чего не хватает.
+  // Остальным показываем только заполненное. Значения берём из задачи, иначе из закрытия.
+  const reviewing = task.status === "under_review" && (canCloseReview || canReturnReview);
+  const closureRecord = card.closure;
+  const workModifierValue = task.workModifier ?? closureRecord?.workModifier;
+  const hoursValue = task.hours ?? closureRecord?.hours;
+  const modifierText = workModifierValue === "G" ? "Г, гарантийная работа" : workModifierValue === "N" ? "Н, неправильная эксплуатация" : undefined;
+  const resultRowsAll: readonly (readonly [label: string, value: string | number | undefined, always: boolean])[] = [
+    ["Что сделано", task.workDescription ?? closureRecord?.workDescription, true],
+    ["Рекомендации", task.recommendations ?? closureRecord?.recommendations, reviewing],
+    ["Замечания пользователя", task.userRemarks ?? closureRecord?.userRemarks, reviewing],
+    ["Причина неисправности", card.reason?.name, reviewing],
+    reviewing
+      ? ["Вид работ", [card.workType?.name, modifierText].filter(Boolean).join(" · ") || undefined, true]
+      : ["Гарантия", modifierText, false],
+    ["Часы работы", hoursValue ?? (reviewing ? "Не применимо" : undefined), false],
+    ["Показание счётчика", meterLabel, reviewing]
+  ];
+  const resultRows = resultRowsAll.filter(([, value, always]) => always || value !== undefined);
   const reworkNote = task.status === "in_progress" && task.reworkComment ? task.reworkComment : undefined;
   const nextStep: { readonly title: string; readonly hint: string; readonly tone?: "warning" } | null =
     canAssign ? { title: "Назначьте инженера", hint: "Задача ждёт исполнителя. После назначения инженер получит уведомление." }
@@ -995,8 +1015,12 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       canReturn={canReturnReview}
       card={card}
       onClose={async () => { await perform(card.availableActions.some((action) => action.code === "verify_closure") ? "verify_closure" : "close"); }}
-      onOpenAct={() => setActOpen(true)}
       onReturn={async (comment) => { await perform("return_for_rework", comment); }}
+      onShow={(section) => {
+        setDetailTab(section);
+        // Вкладки ниже блока проверки: показываем их, чтобы не искать прокруткой.
+        window.requestAnimationFrame(() => document.querySelector<HTMLElement>("[role='tablist'][aria-label='Разделы карточки задачи']")?.scrollIntoView({ behavior: "smooth", block: "start" }));
+      }}
     /> : null}
     <div className="task-layout">
       <div className="task-layout__main">
@@ -1010,13 +1034,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             </header>
             {resultFilled ? <>
               <dl className="task-doc">
-                <div><dt>Что сделано</dt><dd>{task.workDescription}</dd></div>
-                {task.recommendations ? <div><dt>Рекомендации</dt><dd>{task.recommendations}</dd></div> : null}
-                {task.userRemarks ? <div><dt>Замечания пользователя</dt><dd>{task.userRemarks}</dd></div> : null}
-                {card.reason ? <div><dt>Причина неисправности</dt><dd>{card.reason.name}</dd></div> : null}
-                {task.workModifier ? <div><dt>Гарантия</dt><dd>{task.workModifier === "G" ? "Г, гарантийная работа" : "Н, неправильная эксплуатация"}</dd></div> : null}
-                {task.hours !== undefined ? <div><dt>Часы работы</dt><dd>{task.hours}</dd></div> : null}
-                {meterLabel !== undefined ? <div><dt>Показание счётчика</dt><dd>{meterLabel}</dd></div> : null}
+                {resultRows.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value ?? <span className="is-empty">Не заполнено</span>}</dd></div>)}
               </dl>
               <ul className="task-checks" aria-label="Отметки акта">
                 {([["Работы выполнены полностью", task.workCompleted ?? card.closure?.workCompleted], ["Аппарат исправен и допущен", task.apparatusApproved ?? card.closure?.apparatusApproved], ["Заказчик претензий не имеет", task.customerHasNoClaims ?? card.closure?.customerHasNoClaims], ["Продолжение первичной заявки", task.continuedInPrimary]] as const).map(([label, value]) => <li className={value ? "task-checks__on" : undefined} key={label}><span aria-hidden="true">{value ? "✓" : ""}</span>{label}{value ? null : <small>не отмечено</small>}</li>)}

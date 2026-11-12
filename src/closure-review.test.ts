@@ -55,47 +55,44 @@ const card: TaskCardResponse = {
 };
 
 describe("coordinator closure review", () => {
-  it("shows the act, attachments, parts, reason and every closure field", () => {
-    const markup = renderToStaticMarkup(createElement(ClosureReview, {
-      card,
-      busy: false,
-      canClose: true,
-      canReturn: true,
-      onOpenAct: () => undefined,
-      onClose: async () => undefined,
-      onReturn: async () => undefined
-    }));
+  const render = (overrides: Partial<Parameters<typeof ClosureReview>[0]> = {}) => renderToStaticMarkup(createElement(ClosureReview, {
+    card,
+    busy: false,
+    canClose: true,
+    canReturn: true,
+    onClose: async () => undefined,
+    onReturn: async () => undefined,
+    ...overrides
+  }));
 
+  it("shows who handed the work in, a short summary and the decision, without repeating the materials", () => {
+    const markup = render();
     for (const expected of [
-      "Проверка закрытия", "Открыть акт", "акт-тест-35.jpg", "Фото, видео и документы", "фото-работы-35.jpg",
-      "Использованные запчасти", "TEST-PART-35", "Н, новая", "Износ / естественная эксплуатация",
-      "Прибор не запускается", "Выполнена диагностика и замена узла", "Проверить через месяц", "Замечаний нет",
-      "Показание счётчика", "1350", "Работы выполнены полностью", "Аппарат исправен и допущен",
-      "Заказчик претензий не имеет", "Продолжение первичной заявки", "Проверено — закрыть", "На доработку"
+      "Проверка закрытия", "Инженер Учебный передал работу на проверку", "Фото акта загружено",
+      "Фото и видео с выезда: 1", "Запчасти: 1", "Проверено — закрыть", "На доработку"
     ]) assert.ok(markup.includes(expected), expected);
+    // Результат, файлы и запчасти показаны один раз ниже, во вкладках карточки, а не здесь.
+    for (const repeated of ["акт-тест-35.jpg", "фото-работы-35.jpg", "TEST-PART-35", "Выполнена диагностика и замена узла", "Открыть акт"]) {
+      assert.ok(!markup.includes(repeated), repeated);
+    }
+  });
+
+  it("warns when the act photo is missing", () => {
+    const markup = render({ card: { ...card, closure: undefined, files: card.files.filter((file) => file.kind !== "act") } });
+    assert.match(markup, /closure-review__summary-item--missing[^>]*>Фото акта не загружено/u);
+  });
+
+  it("lets the summary open the right card tab", () => {
+    const markup = render({ onShow: () => undefined });
+    assert.match(markup, /<button[^>]*>Фото акта загружено<\/button>/u);
+    assert.match(markup, /<button[^>]*>Запчасти: 1<\/button>/u);
   });
 
   it("puts the decision buttons at the top and asks for a comment only on return", () => {
-    const markup = renderToStaticMarkup(createElement(ClosureReview, {
-      card,
-      busy: false,
-      canClose: true,
-      canReturn: true,
-      onOpenAct: () => undefined,
-      onClose: async () => undefined,
-      onReturn: async () => undefined
-    }));
-    // Кнопки решения стоят в шапке, раньше полей акта.
-    assert.ok(markup.indexOf("Проверено — закрыть") < markup.indexOf("Причина вызова"));
+    const markup = render();
+    assert.ok(markup.indexOf("Проверено — закрыть") > 0);
     // Поле комментария появляется только после нажатия «На доработку».
     assert.doesNotMatch(markup, /<textarea/u);
     assert.doesNotMatch(markup, /Проверить акт/u);
-    // Фото показываются превью, если есть ссылка.
-    const withUrl = renderToStaticMarkup(createElement(ClosureReview, {
-      card: { ...card, files: card.files.map((file) => ({ ...file, url: `https://files.test/${file.id}` })) },
-      busy: false, canClose: true, canReturn: true,
-      onOpenAct: () => undefined, onClose: async () => undefined, onReturn: async () => undefined
-    }));
-    assert.match(withUrl, /<img[^>]*src="https:\/\/files\.test\/photo-test-35"/u);
   });
 });
