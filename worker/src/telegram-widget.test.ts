@@ -10,7 +10,9 @@ describe("карточки Telegram", () => {
     assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/u);
     assert.match(html, /&quot;ГКБ&quot; &amp; &#39;КДЛ&#39;/u);
     assert.doesNotMatch(html, /<script/u);
-    assert.match(html, /На проверке/u);
+    // Цвет этапа «на проверке» — точкой перед названием, без повторения номера и этапа текстом.
+    assert.match(html, /--k:#1c66b8/u);
+    assert.doesNotMatch(html, />З-1</u);
   });
 
   it("укладывается в лимиты Telegram даже с очень длинными полями", () => {

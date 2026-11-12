@@ -79,11 +79,6 @@ function clipMultiline(value: string | undefined, limit: number): string | undef
   return chars.length > limit ? `${chars.slice(0, limit - 1).join("").trimEnd()}…` : text;
 }
 
-function hexToRgba(hex: string, alpha: number): string {
-  const value = Number.parseInt(hex.slice(1), 16);
-  return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
-}
-
 function shortDate(value: string | undefined, timeZone: string): { readonly day: string; readonly month: string } | undefined {
   if (!value) return undefined;
   const date = new Date(value);
@@ -113,9 +108,8 @@ const BASE_STYLE = "body{margin:0;padding:0}"
   + "font:15px/1.35 system-ui,sans-serif;color:var(--tg-theme-text-color)}";
 
 const TASK_STYLE = BASE_STYLE
-  + ".h{display:flex;align-items:center;gap:8px;margin:0 0 6px}"
-  + ".p{padding:2px 9px;border-radius:999px;font-size:12px;font-weight:600;color:var(--k);background:var(--kb)}"
-  + ".n{font-size:13px;font-weight:600;color:var(--tg-theme-hint-color);font-variant-numeric:tabular-nums}"
+  // Цветная точка этапа перед названием, как у колонок на доске CRM.
+  + ".d{display:inline-block;width:9px;height:9px;margin:0 8px 2px 0;border-radius:50%;background:var(--k);vertical-align:middle}"
   + ".t{margin:0 0 8px;font-size:17px;font-weight:700;line-height:1.3;word-break:break-word}"
   + ".r{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:14px}"
   + ".r dt{color:var(--tg-theme-hint-color)}.r dd{margin:0;word-break:break-word}"
@@ -123,10 +117,12 @@ const TASK_STYLE = BASE_STYLE
   + ".m b{display:block;margin:0 0 2px;font-size:12px;font-weight:600;color:var(--tg-theme-hint-color);white-space:normal}"
   + ".x{color:var(--tg-theme-hint-color)}";
 
-/** HTML карточки задачи для sendWidget. */
+/**
+ * HTML карточки задачи для sendWidget. Что случилось и номер задачи пишет подпись над карточкой
+ * (её же видно в уведомлении), поэтому в карточке их нет: название, площадка, инженер, срок, комментарий.
+ */
 export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow"): string {
   const look = EVENT_LOOK[data.eventCode] ?? DEFAULT_LOOK;
-  const number = clipText(data.taskNumber, 24);
   // Высота пузыря не больше 600 px, лишнее обрезается: поля держим короткими.
   const title = clipText(data.taskTitle, 120) ?? "Без названия";
   const site = clipText(data.siteName, 100);
@@ -138,13 +134,11 @@ export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow")
     `<dt>Инженер</dt><dd${engineer && engineer !== "не назначен" ? "" : " class=\"x\""}>${escapeHtml(engineer ?? "не назначен")}</dd>`,
     period ? `<dt>Срок</dt><dd>${escapeHtml(period)}</dd>` : ""
   ].join("");
-  // Цвет этапа: в светлой теме темнее, в тёмной светлее, фон значка полупрозрачный.
-  const colors = `.c{--k:${look.light};--kb:${hexToRgba(look.light, 0.12)}}`
-    + `@media (prefers-color-scheme:dark){.c{--k:${look.dark};--kb:${hexToRgba(look.dark, 0.18)}}}`;
+  // Цвет этапа: в светлой теме темнее, в тёмной светлее.
+  const colors = `.c{--k:${look.light}}@media (prefers-color-scheme:dark){.c{--k:${look.dark}}}`;
   return `<style>${TASK_STYLE}${colors}</style>`
-    + "<div class=\"c\">"
-    + `<div class="h"><span class="p">${escapeHtml(look.label)}</span>${number ? `<span class="n">${escapeHtml(number)}</span>` : ""}</div>`
-    + `<p class="t">${escapeHtml(title)}</p>`
+    + `<div class="c" title="${escapeHtml(look.label)}">`
+    + `<p class="t"><span class="d"></span>${escapeHtml(title)}</p>`
     + `<dl class="r">${rows}</dl>`
     + (comment ? `<div class="m"><b>Что доработать</b>${escapeHtml(comment)}</div>` : "")
     + "</div>";

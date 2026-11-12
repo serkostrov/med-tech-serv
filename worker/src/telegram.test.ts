@@ -99,8 +99,9 @@ describe("Telegram", () => {
     assert.equal(body.caption, "По задаче MTS-1 назначен инженер");
     assert.equal(body.show_caption_above_media, true);
     assert.deepEqual(body.reply_markup, { inline_keyboard: [[{ text: "Открыть задачу", url: "https://crm.example.test/tasks/t1" }]] });
-    assert.match(body.html, /Назначена/u);
-    assert.match(body.html, /З-000007/u);
+    // Номер и что случилось — в подписи над карточкой, в самой карточке их не повторяем.
+    assert.doesNotMatch(body.html, /З-000007/u);
+    assert.match(body.html, /class="d"/u);
     assert.match(body.html, /Замена &lt;насоса&gt; &amp; калибровка/u);
     assert.doesNotMatch(body.html, /<насоса>/u);
     assert.match(body.html, /12–13 нояб/u);
