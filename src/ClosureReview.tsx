@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import type { TaskCardResponse } from "./m2-api.js";
-import { Button, StatusBadge } from "./ui.js";
+import { AutoTextarea, Button, StatusBadge } from "./ui.js";
 import { formatDisplayDate } from "./date-format.js";
 
 /** Вкладка карточки задачи, куда ведёт пункт сводки. */
@@ -62,7 +62,7 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
 
     {reworkOpen ? <div className="closure-review__rework">
       <label htmlFor={`rework-comment-${task.id}`}>Что исправить инженеру</label>
-      <textarea autoFocus id={`rework-comment-${task.id}`} maxLength={2000} onChange={(event) => setReworkComment(event.target.value)} placeholder="Например: нет фото шильдика, уточните показание счётчика" rows={3} value={reworkComment} />
+      <AutoTextarea autoFocus id={`rework-comment-${task.id}`} maxLength={2000} onChange={(event) => setReworkComment(event.target.value)} placeholder="Например: нет фото шильдика, уточните показание счётчика" rows={3} value={reworkComment} />
       <p>Комментарий попадёт в историю задачи и в уведомление инженеру.</p>
       <div className="closure-review__rework-actions">
         <Button onClick={() => { setReworkOpen(false); setReworkComment(""); }} variant="ghost">Отмена</Button>

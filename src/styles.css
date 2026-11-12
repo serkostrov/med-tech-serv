@@ -261,7 +261,7 @@
 .task-board-card__open dl { display: grid; gap: 6px; padding-top: 8px; border-top: 1px solid var(--color-border-soft); }
 .task-board-card__open dl div { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 7px; font-size: 13px; }
 .task-board-card__open dt { color: var(--color-muted); }
-.task-board-card__open dd { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.task-board-card__open dd { overflow-wrap: break-word; white-space: normal; }
 
 .task-board-card > label {
   display: grid;
@@ -302,7 +302,7 @@
 .report-bars { display: grid; gap: 10px; padding: 12px 14px 16px; }
 .report-bars__empty { margin: 0; padding: 28px 16px; color: var(--color-muted); font-size: 13px; line-height: 1.45; text-align: center; }
 .report-bar { display: grid; grid-template-columns: minmax(96px, 150px) minmax(80px, 1fr) auto; align-items: center; gap: 10px; font-size: 13px; }
-.report-bar > span { overflow: hidden; color: var(--color-ink-soft); text-overflow: ellipsis; white-space: nowrap; }
+.report-bar > span { color: var(--color-ink-soft); overflow-wrap: break-word; white-space: normal; }
 .report-bar > div { height: 8px; overflow: hidden; border-radius: 999px; background: var(--color-border-soft); }
 .report-bar i { display: block; min-width: 2px; height: 100%; border-radius: inherit; background: var(--color-accent); }
 .report-bar strong { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
@@ -701,22 +701,18 @@ h3 {
 
 .sidebar-user__identity .profile-button__copy strong {
   display: block;
-  overflow: hidden;
   color: #f3f7f9;
   font-size: 13px;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .sidebar-user__identity .profile-button__copy small {
   display: block;
-  overflow: hidden;
   color: #c2d0d7;
   font-size: 12px;
   font-weight: 500;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .sidebar-user__logout {
@@ -1060,13 +1056,11 @@ h3 {
 
 .metric-card p,
 .metric-card__label {
-  overflow: hidden;
   color: var(--color-ink);
   font-size: 12px;
   font-weight: 650;
   line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .metric-card strong {
@@ -1079,12 +1073,10 @@ h3 {
 }
 
 .metric-card small {
-  overflow: hidden;
   color: var(--color-muted);
   font-size: 12px;
   line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .metric-card--blue .metric-card__icon { color: var(--color-accent-dark); background: var(--color-accent-soft); }
@@ -1299,11 +1291,11 @@ h3 {
   transition: border-color 140ms ease, box-shadow 140ms ease, background 140ms ease;
 }
 
+/* Выбранное значение видно целиком: длинная подпись переносится, а не обрезается многоточием. */
 .ui-select__trigger > span:first-child {
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word;
+  white-space: normal;
 }
 
 .ui-select__trigger[data-placeholder] > span:first-child {
@@ -1343,8 +1335,10 @@ h3 {
   z-index: 100;
   pointer-events: auto;
   overflow: hidden;
-  min-width: var(--radix-select-trigger-width);
-  max-width: min(100vw - 24px, 28rem);
+  /* Список ровно по ширине поля: края совпадают и не вылезают за окно, длинные строки переносятся. */
+  width: var(--radix-select-trigger-width);
+  min-width: 8rem;
+  max-width: calc(100vw - 24px);
   border: 1px solid var(--color-border);
   border-radius: 10px;
   background: #fff;
@@ -1535,13 +1529,11 @@ td .resource-state {
 }
 .dialog-form .task-priority-check__text small {
   flex: 1 1 auto;
-  overflow: hidden;
   color: var(--color-muted);
   font-size: 12px;
   font-weight: 500;
-  line-height: 1;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.25;
+  overflow-wrap: break-word; white-space: normal;
 }
 .dialog-form small {
   color: var(--color-ink-soft);
@@ -2683,11 +2675,9 @@ td .resource-state {
 }
 
 .parts-multi-picker__chip-main strong {
-  overflow: hidden;
   font-size: 13px;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .parts-multi-picker__chip-main small {
@@ -2841,11 +2831,9 @@ td .resource-state {
 }
 
 .parts-multi-picker__option-text strong {
-  overflow: hidden;
   font-size: 13px;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .parts-multi-picker__option-text small {
@@ -3293,22 +3281,18 @@ td .resource-state {
 .equipment-combobox__list button.equipment-folder__row .equipment-folder__text strong,
 .equipment-folder__text strong {
   margin: 0;
-  overflow: hidden;
   color: var(--color-ink);
   font-size: 13px;
   font-weight: 600;
   line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .equipment-folder__text small {
-  overflow: hidden;
   color: var(--color-muted);
   font-size: 12px;
   line-height: 1.25;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .equipment-folder__count {
@@ -4219,9 +4203,7 @@ td .resource-state {
   color: var(--color-ink);
   font-size: 13px;
   font-weight: 650;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .history-feed__status {
@@ -4508,10 +4490,8 @@ td .resource-state {
 }
 
 .file-gallery__caption strong {
-  overflow: hidden;
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere; white-space: normal;
 }
 
 .file-gallery__caption small {
@@ -4973,10 +4953,8 @@ td .resource-state {
 
 .directory-row strong,
 .contact-row strong {
-  overflow: hidden;
   font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .directory-row small,
@@ -6557,9 +6535,7 @@ td .resource-state {
 
 .maintenance-row__identity strong,
 .maintenance-row__identity span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: break-word; white-space: normal;
 }
 
 .maintenance-row__identity strong {
@@ -7694,7 +7670,7 @@ td .resource-state {
 /* Письма с заявками: что распознано и текст письма в форме задачи */
 .mail-recognized { display: grid; gap: 0.2rem; min-width: 14rem; max-width: 26rem; }
 .mail-recognized span { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
-.mail-recognized__summary { color: var(--muted-foreground); font-size: 0.85rem; display: -webkit-box !important; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.mail-recognized__summary { color: var(--muted-foreground); font-size: 0.85rem; overflow-wrap: anywhere; }
 .mail-confidence { color: var(--muted-foreground); font-size: 0.78rem; }
 .mail-source { display: grid; gap: 0.6rem; padding: 0.75rem 0.9rem; border: 1px solid var(--border); border-radius: var(--radius); background: var(--muted); }
 .mail-source__warning { margin: 0; padding: 0.5rem 0.7rem; border-radius: calc(var(--radius) - 2px); background: #fff4e0; color: #7a4b00; font-size: 0.88rem; }
@@ -8268,10 +8244,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .task-board-card__open > .task-board-card__top i { margin-left: auto; padding: 1px 7px; border-radius: 5px; color: var(--color-danger); background: var(--color-danger-soft); font-size: 11px; font-style: normal; font-weight: 700; }
 .task-board-card__open > strong { color: var(--color-ink); font-size: 14px; font-weight: 650; line-height: 1.35; }
 .task-board-card__open > small { color: var(--color-muted); font-size: 12.5px; line-height: 1.4; }
-.task-board-card__foot { display: flex; align-items: center; gap: 7px; margin-top: 4px; padding-top: 8px; border-top: 1px solid #f0f3f5; min-width: 0; }
+.task-board-card__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; margin-top: 4px; padding-top: 8px; border-top: 1px solid #f0f3f5; min-width: 0; }
 .task-board-card__ava { display: inline-grid; flex: 0 0 22px; width: 22px; height: 22px; place-items: center; border-radius: 50%; color: var(--color-accent-dark); background: var(--color-accent-soft); font-size: 10px; font-weight: 700; }
 .task-board-card__ava--none { color: var(--color-muted); background: #eef1f3; }
-.task-board-card__eng { overflow: hidden; color: var(--color-ink-soft); font-size: 12.5px; text-overflow: ellipsis; white-space: nowrap; }
+.task-board-card__eng { flex: 1 1 auto; min-width: 0; color: var(--color-ink-soft); font-size: 12.5px; overflow-wrap: break-word; white-space: normal; }
 .task-board-card__eng--none { color: var(--color-muted); }
 .task-board-card__due { margin-left: auto; padding: 2px 7px; border-radius: 6px; color: var(--color-muted); background: #f1f4f6; font-size: 12px; white-space: nowrap; }
 .task-board-card__due--late { color: var(--color-danger); background: var(--color-danger-soft); font-weight: 600; }
@@ -8318,7 +8294,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 }
 .equipment-tasks__item:hover { border-color: #c5d3db; background: #f3f8fb; }
 .equipment-tasks__number { color: var(--color-accent-dark); font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
-.equipment-tasks__item strong { overflow: hidden; color: var(--color-ink); font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
+.equipment-tasks__item strong { color: var(--color-ink); font-size: 14px; overflow-wrap: break-word; white-space: normal; }
 .equipment-tasks__item small { grid-column: 2 / -1; color: var(--color-muted); font-size: 12.5px; }
 
 .equipment-meters-table { min-width: 520px; }

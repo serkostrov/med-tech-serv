@@ -8,6 +8,7 @@ import {
   type SitePerson
 } from "./site-people.js";
 import {
+  AutoTextarea,
   Button,
   IconButton,
   ConfirmationDialog,
@@ -350,7 +351,7 @@ export function CustomerReferencesPage() {
         <label>Наименование<input defaultValue={editedSite?.name} name="name" required /></label>
         <label>Адрес<input defaultValue={editedSite?.address} name="address" required /></label>
         <label>Тип<Select defaultValue={editedSite?.type ?? "medical_facility"} name="type"><option value="medical_facility">Медучреждение</option><option value="group_company">Компания группы</option></Select></label>
-        <label className="dialog-form-grid__wide">Примечание<textarea defaultValue={editedSite?.notes ?? ""} name="notes" rows={3} /></label>
+        <label className="dialog-form-grid__wide">Примечание<AutoTextarea defaultValue={editedSite?.notes ?? ""} name="notes" rows={3} /></label>
       </div>
     </DialogForm>
 

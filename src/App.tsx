@@ -65,6 +65,7 @@ import { AccessAdminPage } from "./AccessAdminPage.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import { sitePeople } from "./site-people.js";
 import {
+  AutoTextarea,
   Button,
   IconButton,
   CardHeader,
@@ -549,7 +550,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
         )}
       </div>
       <h3 className="task-form-step field-wide"><span>2</span>Клиент</h3>
-      <label>Клиент (контакт на площадке)
+      <label className="field-wide">Клиент (контакт на площадке)
         <Select
           disabled={!selectedEquipment || contactChoices.length === 0}
           onChange={(event) => void selectClient(event.target.value)}
@@ -563,7 +564,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
           ))}
         </Select>
       </label>
-      <label>Кто обратился (инициатор)
+      <label className="field-wide">Кто обратился (инициатор)
         <Select
           disabled={!selectedEquipment || contactChoices.length === 0}
           onChange={(event) => void selectInitiator(event.target.value)}
@@ -591,7 +592,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
           <small>Выезд в течение 24 часов</small>
         </span>
       </label>
-      <label className="field-wide">Причина вызова (со слов клиента)<textarea defaultValue={initialComment} maxLength={2000} name="comment" placeholder="Что случилось с прибором. Инженер увидит это в акте и сможет уточнить" rows={3} /></label>
+      <label className="field-wide">Причина вызова (со слов клиента)<AutoTextarea defaultValue={initialComment} maxLength={2000} name="comment" placeholder="Что случилось с прибором. Инженер увидит это в акте и сможет уточнить" rows={3} /></label>
       <h3 className="task-form-step field-wide"><span>4</span>Сроки и исполнитель</h3>
       <div className="dialog-form-row-3">
         <label>Дата вызова<DatePicker onChange={setCallDate} value={callDate} /></label>
@@ -1126,10 +1127,10 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       submitLabel="Сохранить результат"
       title="Результат работ"
     >
-      <label className="field-wide">Причина вызова<textarea defaultValue={task.callReason ?? ""} maxLength={2000} name="callReason" required rows={3} /></label>
-      <label className="field-wide">Описание работ<textarea defaultValue={task.workDescription ?? ""} maxLength={4000} name="workDescription" required rows={4} /></label>
-      <label className="field-wide">Рекомендации<textarea defaultValue={task.recommendations ?? ""} maxLength={2000} name="recommendations" rows={3} /></label>
-      <label className="field-wide">Замечания пользователя<textarea defaultValue={task.userRemarks ?? ""} maxLength={2000} name="userRemarks" rows={3} /></label>
+      <label className="field-wide">Причина вызова<AutoTextarea defaultValue={task.callReason ?? ""} maxLength={2000} name="callReason" required rows={3} /></label>
+      <label className="field-wide">Описание работ<AutoTextarea defaultValue={task.workDescription ?? ""} maxLength={4000} name="workDescription" required rows={4} /></label>
+      <label className="field-wide">Рекомендации<AutoTextarea defaultValue={task.recommendations ?? ""} maxLength={2000} name="recommendations" rows={3} /></label>
+      <label className="field-wide">Замечания пользователя<AutoTextarea defaultValue={task.userRemarks ?? ""} maxLength={2000} name="userRemarks" rows={3} /></label>
       <label>Причина неисправности<Select defaultValue={task.reasonCode ?? card.reason?.code ?? ""} name="reasonCode"><option value="">Не выбрана</option>{card.reason && !resultCatalogs.reasons.some((item) => (item.code ?? item.id) === card.reason?.code) ? <option value={card.reason.code}>{card.reason.name}</option> : null}{resultCatalogs.reasons.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
       {card.canSetWorkModifier ? <label>Гарантия или неправильная эксплуатация<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Обычная работа</option><option value="G">Г, гарантийная</option><option value="N">Н, неправильная эксплуатация</option></Select></label> : null}
       {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
@@ -1145,7 +1146,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     </DialogForm>
     {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
     <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
-    <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<textarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
+    <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}
       description="Выберите инженера для назначения на задачу."
@@ -1797,7 +1798,7 @@ function EquipmentPassportForm({
       <label>Модель *<Select name="modelId" onChange={(event) => setModelId(event.target.value)} required value={modelId}>{availableModels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
       <label>Категория гарантии *<Select defaultValue={record?.guaranteeCategoryId || references.guaranteeCategories[0]?.id} name="guaranteeCategoryId" required>{references.guaranteeCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
       <label>Статус *<Select defaultValue={record?.statusCode || references.statuses[0]?.code} name="status" required>{references.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</Select></label>
-      <label className="field-wide">Примечания<textarea defaultValue={record?.notes} maxLength={5000} name="notes" placeholder="Служебные сведения о приборе" rows={3} /></label>
+      <label className="field-wide">Примечания<AutoTextarea defaultValue={record?.notes} maxLength={5000} name="notes" placeholder="Служебные сведения о приборе" rows={3} /></label>
       <label className="field-wide field-file">Файлы<span className="field-file__control"><input accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt" multiple name="files" onChange={chooseFiles} type="file" /></span><small>{selectedFiles.length ? `Выбрано: ${selectedFiles.map((file) => file.name).join(", ")}` : record?.files.length ? `Уже прикреплено: ${record.files.join(", ")}` : "Документы, фото или видео прибора"}</small></label>
     </DialogForm>
   );
@@ -1859,7 +1860,7 @@ function EquipmentAssignmentForm({
     >
       <label>{kind === "site_change" ? "Новая площадка" : "Новый плательщик"} *<Select defaultValue={available[0]?.id} name="targetId" required>{available.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</Select></label>
       <label>Когда произошло *<DateTimePicker defaultValue={localDateTimeInputValue()} name="occurredAt" required /></label>
-      <label className="field-wide">Комментарий *<textarea maxLength={2000} name="comment" placeholder="Причина перемещения или смены плательщика" required rows={3} /></label>
+      <label className="field-wide">Комментарий *<AutoTextarea maxLength={2000} name="comment" placeholder="Причина перемещения или смены плательщика" required rows={3} /></label>
     </DialogForm>
   );
 }
@@ -1909,7 +1910,7 @@ function ManualEquipmentHistoryForm({
       <label>Дата и время события *<DateTimePicker name="occurredAt" required /></label>
       <label>Вид / название события *<input maxLength={200} name="summary" placeholder="Например, диагностика" required /></label>
       <label className="field-wide">Клиент на дату события *<input defaultValue={record.place} maxLength={500} name="client" required /></label>
-      <label className="field-wide">Исходное описание<textarea maxLength={50000} name="description" placeholder="Можно оставить пустым, если описания в источнике не было" rows={7} /></label>
+      <label className="field-wide">Исходное описание<AutoTextarea maxLength={50000} name="description" placeholder="Можно оставить пустым, если описания в источнике не было" rows={7} /></label>
     </DialogForm>
   );
 }
@@ -2253,9 +2254,10 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   const openCard = async (id: string) => {
     const request = ++openCardRequest.current;
     // Открываем из списка (а не обновляем уже открытый): сразу каркас паспорта, а не тишина.
-    if (selectedIdRef.current !== id) setOpeningId(id);
+    const opening = selectedIdRef.current !== id;
+    if (opening) setOpeningId(id);
     try {
-      const card = await m2Api.equipmentCard(id);
+      const card = await m2Api.equipmentCard(id, { prefetchOpenTasks: opening });
       if (request !== openCardRequest.current) return;
       const detailed = equipmentUiRecord(card.passport, card);
       setRecords((items) => items.some((item) => item.id === id)
@@ -2564,7 +2566,7 @@ function NotificationTemplatesPage() {
     const updated = await m2Api.updateNotificationTemplate(template.code, { subjectTemplate: template.subjectTemplate, bodyTemplate: template.bodyTemplate, isActive });
     setTemplates((current) => current.map((item) => item.code === updated.code ? updated : item));
   };
-  return <><DataTableShell meta={`${templates.length} шаблонов`} title="Письма по событиям">{loading ? <ResourceState description="Подождите, шаблоны сейчас появятся." status="loading" title="Загружаем шаблоны" /> : templates.length === 0 ? <ResourceState description="Шаблоны появятся, когда администратор настроит письма по событиям." status="empty" title="Шаблонов писем пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Событие</th><th>Тема</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{templates.map((template) => <tr key={template.code}><td><strong>{template.name}</strong></td><td>{template.subjectTemplate || "—"}</td><td><StatusBadge tone={template.isActive ? "success" : "neutral"}>{template.isActive ? "Активен" : "Неактивен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить шаблон" onClick={() => { setFormError(null); setEditing(template); }} />{template.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(template)} /> : <IconButton icon="enable" label="Включить" onClick={() => void setActive(template, true)} />}</div></td></tr>)}</tbody></table></div>}</DataTableShell><DialogForm busy={saving} description="Тема и текст уйдут получателю при этом событии. Можно вставить поля из списка ниже." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} size="lg" submitLabel="Сохранить шаблон" title={editing?.name ?? "Шаблон письма"}><label className="field-wide">Тема<input autoFocus defaultValue={editing?.subjectTemplate} maxLength={300} name="subjectTemplate" /></label><label className="field-wide">Текст<textarea defaultValue={editing?.bodyTemplate} maxLength={10000} name="bodyTemplate" required rows={8} /></label>{editing ? <p className="field-wide notification-template__variables">Можно вставить в письмо: {editing.allowedVariables.map((variable) => `{{${variable}}}`).join(", ")}</p> : null}</DialogForm><ConfirmationDialog confirmLabel="Отключить" description={deactivating ? <>Шаблон «{deactivating.name}» перестанет создавать новые письма для этого события.</> : null} onConfirm={async () => { if (deactivating) await setActive(deactivating, false); }} onOpenChange={(open) => { if (!open) setDeactivating(null); }} open={Boolean(deactivating)} title="Отключить шаблон?" /></>;
+  return <><DataTableShell meta={`${templates.length} шаблонов`} title="Письма по событиям">{loading ? <ResourceState description="Подождите, шаблоны сейчас появятся." status="loading" title="Загружаем шаблоны" /> : templates.length === 0 ? <ResourceState description="Шаблоны появятся, когда администратор настроит письма по событиям." status="empty" title="Шаблонов писем пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Событие</th><th>Тема</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{templates.map((template) => <tr key={template.code}><td><strong>{template.name}</strong></td><td>{template.subjectTemplate || "—"}</td><td><StatusBadge tone={template.isActive ? "success" : "neutral"}>{template.isActive ? "Активен" : "Неактивен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить шаблон" onClick={() => { setFormError(null); setEditing(template); }} />{template.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(template)} /> : <IconButton icon="enable" label="Включить" onClick={() => void setActive(template, true)} />}</div></td></tr>)}</tbody></table></div>}</DataTableShell><DialogForm busy={saving} description="Тема и текст уйдут получателю при этом событии. Можно вставить поля из списка ниже." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} size="lg" submitLabel="Сохранить шаблон" title={editing?.name ?? "Шаблон письма"}><label className="field-wide">Тема<input autoFocus defaultValue={editing?.subjectTemplate} maxLength={300} name="subjectTemplate" /></label><label className="field-wide">Текст<AutoTextarea defaultValue={editing?.bodyTemplate} maxLength={10000} name="bodyTemplate" required rows={8} /></label>{editing ? <p className="field-wide notification-template__variables">Можно вставить в письмо: {editing.allowedVariables.map((variable) => `{{${variable}}}`).join(", ")}</p> : null}</DialogForm><ConfirmationDialog confirmLabel="Отключить" description={deactivating ? <>Шаблон «{deactivating.name}» перестанет создавать новые письма для этого события.</> : null} onConfirm={async () => { if (deactivating) await setActive(deactivating, false); }} onOpenChange={(open) => { if (!open) setDeactivating(null); }} open={Boolean(deactivating)} title="Отключить шаблон?" /></>;
 }
 
 function AdminReferencesPage() {
@@ -2814,7 +2816,7 @@ function FinancePage() {
           </Select>
           {selectedTaskIds.length === 0 ? <span className="form-hint">Подставится из прибора выбранной задачи.</span> : inheritedPayerIds.length > 1 ? <span className="form-hint">У выбранных задач разные плательщики — создайте отдельные счета.</span> : payerOverridden ? null : inheritedPayerId ? <span className="form-hint">Подставлен из прибора.</span> : null}
         </label>
-        {payerOverridden ? <label>Почему другой плательщик *<textarea name="payerOverrideReason" required rows={2} /></label> : null}
+        {payerOverridden ? <label>Почему другой плательщик *<AutoTextarea name="payerOverrideReason" required rows={2} /></label> : null}
       </div>
     </DialogForm>
     <div className="metric-grid metric-grid--three">

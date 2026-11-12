@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { SiteOption } from "./customer-selection.js";
 import { m2Api, type EquipmentPassportReferences } from "./m2-api.js";
-import { Button, DialogForm, Select, toast } from "./ui.js";
+import { AutoTextarea, Button, DialogForm, Select, toast } from "./ui.js";
 
 type DraftKind = "manufacturer" | "model" | null;
 
@@ -261,7 +261,7 @@ export function AddEquipmentDialog({
       </label>
       <label className="field-wide">
         Примечания
-        <textarea maxLength={5000} name="notes" placeholder="Служебные сведения о приборе" rows={3} />
+        <AutoTextarea maxLength={5000} name="notes" placeholder="Служебные сведения о приборе" rows={3} />
       </label>
     </DialogForm>
   );

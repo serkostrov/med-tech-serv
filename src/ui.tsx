@@ -69,6 +69,7 @@ import { Input } from "./components/ui/input.js";
 import { Sheet as UiSheet, SheetBody, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "./components/ui/sheet.js";
 import { Skeleton } from "./components/ui/skeleton.js";
 import { Textarea } from "./components/ui/textarea.js";
+import { AutoTextarea } from "./components/ui/auto-textarea.js";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./components/ui/tooltip.js";
 import { cn } from "./lib/utils.js";
 import { DatePicker, DateTimePicker, isDatePickerSurface } from "./components/ui/date-picker.js";
@@ -793,4 +794,4 @@ export function ConfirmationDialog({
   );
 }
 
-export { DatePicker, DateTimePicker, Input, Select, Textarea, ToastHost, toast };
+export { AutoTextarea, DatePicker, DateTimePicker, Input, Select, Textarea, ToastHost, toast };
