@@ -798,7 +798,7 @@ export class M2ApiClient {
   private async loadTask(id: string): Promise<TaskApiRecord> {
     const select = this.taskSelect();
     const primary = await this.db().from("tasks").select(select).eq("id", id).maybeSingle();
-    if (primary.error && select === TASK_SELECT) {
+    if (primary.error && select === TASK_SELECT && this.isMissingInitiatorContactSchema(primary.error)) {
       this.markInitiatorContactUnavailable();
       const fallback = await this.db().from("tasks").select(TASK_SELECT_WITHOUT_INITIATOR_CONTACT).eq("id", id).maybeSingle();
       throwIfError(fallback.error);

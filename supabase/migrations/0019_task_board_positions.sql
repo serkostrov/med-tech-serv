@@ -2,15 +2,14 @@
 -- другой, наверх или вниз колонки, и этот порядок видят все.
 --
 -- Порядок хранится отдельно от задачи. Перестановка не меняет саму задачу: не сдвигает
--- дату изменения, не пишет журнал и не запускает проверки задачи. Переставить карточку
--- может тот, кто может менять задачу (те же правила, что для акта и фото).
+-- дату изменения, не пишет журнал и не запускает проверки задачи. Видят порядок все,
+-- кто видит задачу; расставляет тот, у кого есть право менять задачи (координатор,
+-- руководитель). Инженер видит порядок у себя на доске, но не меняет его.
 --
 -- Место действует только в том этапе (колонке), где его задали. Если задача перешла
 -- в другой этап из карточки, а не перетаскиванием, в новой колонке она встаёт после
 -- расставленных вручную, по обычной сортировке доски. Если задача вернулась в этап,
 -- где её уже ставили вручную (например, с проверки на доработку), она встаёт на прежнее место.
---
--- Расставляет карточки координатор на общей доске без фильтров; инженер видит этот порядок.
 
 CREATE TABLE IF NOT EXISTS public.task_board_positions (
   task_id uuid PRIMARY KEY REFERENCES public.tasks(id) ON DELETE CASCADE,
@@ -32,17 +31,17 @@ CREATE POLICY role_read ON public.task_board_positions FOR SELECT TO authenticat
 -- в чужой колонке (например, «На проверке») нельзя.
 CREATE POLICY role_insert ON public.task_board_positions FOR INSERT TO authenticated
   WITH CHECK (
-    public.app_can_write_task(task_id)
-    AND status_code = (SELECT t.status_code FROM public.tasks AS t WHERE t.id = task_id)
+    (SELECT public.app_has_permission('tasks.write'))
+    AND status_code = (SELECT t.status_code FROM public.tasks AS t WHERE t.id = task_board_positions.task_id)
   );
 CREATE POLICY role_update ON public.task_board_positions FOR UPDATE TO authenticated
-  USING (public.app_can_write_task(task_id))
+  USING ((SELECT public.app_has_permission('tasks.write')))
   WITH CHECK (
-    public.app_can_write_task(task_id)
-    AND status_code = (SELECT t.status_code FROM public.tasks AS t WHERE t.id = task_id)
+    (SELECT public.app_has_permission('tasks.write'))
+    AND status_code = (SELECT t.status_code FROM public.tasks AS t WHERE t.id = task_board_positions.task_id)
   );
 CREATE POLICY role_delete ON public.task_board_positions FOR DELETE TO authenticated
-  USING (public.app_can_write_task(task_id));
+  USING ((SELECT public.app_has_permission('tasks.write')));
 
 REVOKE ALL ON TABLE public.task_board_positions FROM PUBLIC, anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE public.task_board_positions TO authenticated;

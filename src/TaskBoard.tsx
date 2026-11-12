@@ -145,7 +145,10 @@ export function planBoardPositions(
   // Последняя загруженная карточка остаётся на месте; если её нет (место взяли у следующей
   // за загруженными), все встают строго перед ней.
   const even = (last - first) / Math.max(1, placedBelow.length > 0 ? ordered.length - 1 : ordered.length);
-  if (even > room(first, last)) return ordered.map((taskId, offset) => ({ taskId, position: first + even * offset }));
+  if (even > room(first, last)) {
+    // Последняя загруженная карточка с местом остаётся ровно на своём месте (без ошибки округления).
+    return ordered.map((taskId, offset) => ({ taskId, position: placedBelow.length > 0 && offset === ordered.length - 1 ? last : first + even * offset }));
+  }
   // Места совпали совсем: ставим шагом 1 вниз от последнего известного, чтобы карточки
   // дальше по колонке (там места больше) остались ниже.
   const end = placedBelow.length > 0 ? last : last - 1;
@@ -201,6 +204,12 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   // Места сохраняются строго в порядке переносов: иначе ответ раннего переноса мог бы
   // прийти позже и затереть места, расставленные следующим.
   const saveTurn = useRef<Promise<void>>(Promise.resolve());
+  // Колонки, где перенос ещё узнаёт место следующей карточки: пока план не готов, места
+  // на экране старые, поэтому новую перестановку в этой колонке не начинаем.
+  const lookups = useRef<Set<string>>(new Set());
+  // Свежие загрузчик и колонки: обновление после переноса читает доску с текущими фильтрами.
+  const loadColumnRef = useRef(loadColumn);
+  loadColumnRef.current = loadColumn;
   const touchColumn = (code: string) => { columnVersions.current[code] = (columnVersions.current[code] ?? 0) + 1; };
   // Задачи, которые сейчас перетаскивают (одну или все отмеченные).
   const [draggedIds, setDraggedIds] = useState<readonly string[]>([]);
@@ -359,7 +368,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     if (!onReorder || !loadColumn) return false;
     // Колонка ещё грузится или пришла без ручного порядка (в базе его нет): места не показываем.
     const page = pages[code];
-    if (!page || page.loading || page.manualOrder !== true) return false;
+    if (!page || page.loading || page.manualOrder !== true || lookups.current.has(code)) return false;
     const status = columns.find((item) => (item.code ?? item.id) === code);
     if (!status || isCompletedBoardStatus(status)) return false;
     // Задачу на проверке инженер уже не меняет, порядок в этой колонке тоже.
@@ -383,12 +392,13 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
    * шёл запрос (перенос, догрузка), перечитываем ещё раз. Смена фильтров отменяет обновление.
    */
   const refreshColumn = async (code: string, generation: number, attempt = 0): Promise<void> => {
-    if (!loadColumn || generation !== loadGeneration.current || (pendingMoves.current[code] ?? 0) > 0) return;
+    const load = loadColumnRef.current;
+    if (!load || generation !== loadGeneration.current || (pendingMoves.current[code] ?? 0) > 0) return;
     const version = columnVersions.current[code] ?? 0;
     const limit = Math.max(COLUMN_PAGE_SIZE, pagesRef.current[code]?.items.length ?? 0);
     let page: TaskBoardPage;
     try {
-      page = await loadColumn(code, 0, limit);
+      page = await load(code, 0, limit);
     } catch {
       // Не обновилось: на доске остаётся то, что показали сразу после переноса.
       return;
@@ -400,10 +410,14 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     }
     setPages((state) => ({ ...state, [code]: { items: page.items, total: page.total, loading: false, loadingMore: false, ...(page.manualOrder ? { manualOrder: true } : {}) } }));
   };
-  /** generation: номер загрузки доски на момент переноса; если фильтры с тех пор сменились, не обновляем. */
-  const refreshColumns = async (codes: readonly string[], generation = loadGeneration.current) => {
-    if (generation !== loadGeneration.current) return;
-    await Promise.all([...new Set(codes)].map((code) => refreshColumn(code, generation)));
+  /**
+   * Перечитывает колонки доски такой, какая она сейчас: если за время переноса сменили фильтры,
+   * колонки читаются уже с новыми фильтрами, а пропавшие с доски не трогаем.
+   */
+  const refreshColumns = async (codes: readonly string[]) => {
+    const generation = loadGeneration.current;
+    const shown = new Set(Object.keys(pagesRef.current));
+    await Promise.all([...new Set(codes)].filter((code) => shown.has(code)).map((code) => refreshColumn(code, generation)));
   };
 
   const report = (problems: readonly DropProblem[], moved: number, attempted: number, targetStatus: string) => {
@@ -465,12 +479,11 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
         openable: decision.kind === "card"
       });
     }
-    // Номер загрузки доски: если за время переноса сменят фильтры, старые колонки не перечитываем.
-    const generation = loadGeneration.current;
-    // Очередь сохранения мест занимаем сразу, в порядке переносов.
-    const previousSave = saveTurn.current;
+    // Очередь сохранения мест занимаем сразу, в порядке переносов, и только если места сохраняем.
+    const saves = reorder && Boolean(onReorder);
+    const previousSave = saves ? saveTurn.current : Promise.resolve();
     let releaseSave: () => void = () => undefined;
-    saveTurn.current = new Promise<void>((resolve) => { releaseSave = () => resolve(); });
+    if (saves) saveTurn.current = new Promise<void>((resolve) => { releaseSave = () => resolve(); });
     // Места в колонке считаем по тому, что видно на доске до переноса.
     const landing = [...staying, ...direct, ...checked].sort(boardOrder);
     const landingIds = new Set(landing.map((entry) => entry.task.id));
@@ -499,7 +512,12 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
         let after: TaskApiRecord | undefined;
         // Ставим в самый низ загруженной части, а ниже есть ещё задачи: узнаём место следующей.
         if (index === rest.length && (rest.length === 0 || rest.at(-1)?.boardPosition !== undefined) && loadColumn && loaded.length < totalFor(targetStatus)) {
-          after = await loadColumn(targetStatus, loaded.length, 1).then((page) => page.items[0]).catch(() => undefined);
+          lookups.current.add(targetStatus);
+          try {
+            after = await loadColumn(targetStatus, loaded.length, 1).then((page) => page.items[0]).catch(() => undefined);
+          } finally {
+            lookups.current.delete(targetStatus);
+          }
         }
         plan = planBoardPositions(rest, index, landing.map((entry) => entry.task.id), after);
         places = new Map(plan.map((item) => [item.taskId, item.position]));
@@ -534,7 +552,9 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
       // Места сохраняем, когда этапы уже сменились: место действует только в своём этапе.
       // Вместе с ними закрепляем карточки без места над выбранным местом.
       const savedIds = new Set(landing.filter((entry) => entry.source === targetStatus || moved.has(entry.task.id)).map((entry) => entry.task.id));
-      await previousSave;
+      // Ждём сохранение предыдущего переноса, но не дольше 20 секунд: зависший запрос
+      // не должен останавливать доску.
+      await Promise.race([previousSave, new Promise<void>((resolve) => { window.setTimeout(resolve, 20_000); })]);
       if (reorder && onReorder && savedIds.size > 0) {
         try {
           await onReorder(targetStatus, plan.filter((item) => savedIds.has(item.taskId) || !landingIds.has(item.taskId)));
@@ -547,7 +567,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
       for (const code of touched) pendingMoves.current[code] = Math.max(0, (pendingMoves.current[code] ?? 0) - 1);
     }
     // Порядок и счётчики колонок как на сервере: перенесённые и возвращённые задачи на своих местах.
-    void refreshColumns(touched, generation);
+    void refreshColumns(touched);
     // С выбора снимаем перенесённые и те, что уже лежали в колонке; не перенесённые и другие остаются.
     setSelected((current) => new Set([...current].filter((id) => !moved.has(id) && !alreadyThere.has(id))));
     if (entries.length > 0) report(problems, moved.size, entries.length, targetStatus);
@@ -590,7 +610,10 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     // или её можно перенести сразу. Если нужна карточка задачи (инженер, отмена), места нет.
     const lands = draggedEntries.some((entry) => entry.source === code
       || ["move", "check"].includes(boardDropDecision(entry.task, entry.source, code, engineerMode).kind));
-    if (!lands || !canReorder(code)) {
+    // Колонка закрыта для переносимых сюда карточек (её видно бледной): места тоже нет.
+    const incoming = draggedEntries.filter((entry) => entry.source !== code);
+    const blocked = incoming.length > 0 && incoming.every((entry) => boardDropDecision(entry.task, entry.source, code, engineerMode).kind === "no");
+    if (!lands || blocked || !canReorder(code)) {
       if (dropSlotRef.current?.code === code) updateSlot(null);
       return;
     }
