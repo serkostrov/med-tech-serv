@@ -103,17 +103,29 @@ const mailIntakeEnabled = flag("MAIL_INTAKE_ENABLED", false);
 const mailIntervalMs = interval("MAIL_POLL_INTERVAL_MS", 60_000);
 let mailIntake: ImapMailIntake | undefined;
 let autoreplySender: AutoreplySender | undefined;
+// Ошибка в настройках почты для заявок не должна останавливать уведомления:
+// пишем её в журнал и работаем без забора писем.
+let intakeSettings: ReturnType<typeof imapSettings> | undefined;
 if (mailIntakeEnabled) {
+  try {
+    intakeSettings = imapSettings(process.env);
+  } catch (error) {
+    console.error(`Заявки из почты выключены, ошибка в настройках: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+if (intakeSettings) {
   const files = supabaseMailFileStore(process.env);
   if (!files) console.warn("SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY не заданы: вложения писем сохраняться не будут");
-  mailIntake = new ImapMailIntake(imapSettings(process.env), database, files, aiMailParserFromEnv(process.env));
+  mailIntake = new ImapMailIntake(intakeSettings, database, files, aiMailParserFromEnv(process.env));
   if (flag("MAIL_AUTOREPLY_ENABLED", true)) {
+    // Ответ клиента на автоответ должен вернуться в заявки: адрес для ответа тот, с которого берём заявки.
+    const replyTo = intakeSettings.onlyTo;
     if (dryRun) {
       autoreplySender = { send: async (message) => console.log(`Пробный режим: автоответ на ${message.toAddress} не отправлен`) };
     } else {
       const smtp = smtpConfiguration(process.env);
       const transport = new NodeSmtpTransport(smtp);
-      autoreplySender = { send: (message) => transport.send({ ...message, fromAddress: smtp.fromAddress, fromName: smtp.fromName }) };
+      autoreplySender = { send: (message) => transport.send({ ...message, fromAddress: smtp.fromAddress, fromName: smtp.fromName, ...(replyTo ? { replyTo } : {}) }) };
     }
   }
 }

@@ -245,10 +245,13 @@ export function addressedTo(source: Uint8Array, address: string): boolean {
   const end = text.search(/\r?\n\r?\n/u);
   // Перенос длинного заголовка на следующую строку убираем, чтобы адрес не разорвался.
   const headers = (end >= 0 ? text.slice(0, end) : text).replace(/\r?\n[ \t]+/gu, " ");
-  const wanted = address.toLowerCase();
+  // Адрес целиком, а не кусок другого адреса: до и после него граница (начало, пробел,
+  // скобка, запятая, точка с запятой, двоеточие или кавычка).
+  const escaped = address.toLowerCase().replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
+  const whole = new RegExp(`(^|[\\s<,:;"'])${escaped}($|[\\s>,;"'])`, "u");
   return headers.split(/\r?\n/u).some((line) => {
     const match = /^(to|cc|delivered-to|x-original-to|envelope-to)\s*:(.*)$/iu.exec(line);
-    return Boolean(match?.[2]?.toLowerCase().includes(wanted));
+    return whole.test(match?.[2]?.toLowerCase() ?? "");
   });
 }
 

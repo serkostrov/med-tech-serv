@@ -420,3 +420,13 @@ describe("письмо о задаче в канале e-mail", () => {
     assert.match(String(parsed.html), /Открыть задачу/u);
   });
 });
+
+
+it("autoreplies can point replies to the request address", async () => {
+  const { smtpMessageData } = await import("./smtp.js");
+  const base = { messageId: "a@b.example", fromAddress: "crm@b.example", fromName: "CRM", toAddress: "client@clinic.example", subject: "Заявка принята", body: "Текст" };
+  const data = smtpMessageData({ ...base, replyTo: "crm+zayavki@b.example", autoSubmitted: true });
+  assert.match(data, /^Reply-To: <crm\+zayavki@b\.example>$/mu);
+  assert.doesNotMatch(smtpMessageData(base), /^Reply-To:/mu);
+  assert.throws(() => smtpMessageData({ ...base, replyTo: "bad address\r\nBcc: x@y.z" }));
+});

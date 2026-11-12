@@ -231,4 +231,9 @@ test("only mail sent to the request address is taken from a shared mailbox", asy
   // даже если адрес для заявок упомянут в теме или в теле письма.
   assert.equal(addressedTo(mail("To: demo.user@gmail.com\r\nSubject: напишите на demo.user+zayavki@gmail.com"), wanted), false);
   assert.equal(addressedTo(mail("Delivered-To: demo.user@gmail.com\r\nTo: Demo <demo.user@gmail.com>"), wanted), false);
+  // Только адрес целиком: похожие адреса, где нужный лишь часть, не берутся.
+  assert.equal(addressedTo(mail("To: petrdemo.user+zayavki@gmail.com"), wanted), false);
+  assert.equal(addressedTo(mail("To: demo.user+zayavki@gmail.com.example.org"), wanted), false);
+  assert.equal(addressedTo(mail("To: \"demo.user+zayavki@gmail.com\" <demo.user+zayavki@gmail.com>"), wanted), true);
+  assert.equal(addressedTo(mail("Cc: a@b.example;demo.user+zayavki@gmail.com"), wanted), true);
 });
