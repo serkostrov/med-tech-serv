@@ -42,6 +42,12 @@ const EVENT_LOOK: Readonly<Record<string, StatusLook>> = {
 };
 const DEFAULT_LOOK: StatusLook = { label: "Задача", light: "#52627a", dark: "#a3b1c6" };
 
+/** Полупрозрачный цвет этапа для фона блока: #rrggbb → rgba(). */
+function tint(hex: string, alpha: number): string {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return `rgba(${(value >> 16) & 255},${(value >> 8) & 255},${value & 255},${alpha})`;
+}
+
 export function escapeHtml(value: string): string {
   return value
     .replace(/&/gu, "&amp;")
@@ -102,9 +108,12 @@ export function formatTaskPeriod(from: string | undefined, to: string | undefine
   return `${start.day} ${start.month} – ${end.day} ${end.month}`;
 }
 
-/** Общие стили: поля как у обычного текста сообщения, место под время в углу пузыря. */
+/**
+ * Общие стили: поля как у обычного текста сообщения. Место под время в углу пузыря — только снизу:
+ * отступ справа на всю высоту сужал блоки карточки.
+ */
 const BASE_STYLE = "body{margin:0;padding:0}"
-  + ".c{padding:10px max(12px,var(--tg-content-safe-area-corner-right)) max(10px,env(safe-area-inset-bottom)) max(12px,var(--tg-content-safe-area-corner-left));"
+  + ".c{padding:10px 12px max(10px,env(safe-area-inset-bottom));"
   + "font:15px/1.35 system-ui,sans-serif;color:var(--tg-theme-text-color)}";
 
 const TASK_STYLE = BASE_STYLE
@@ -113,8 +122,10 @@ const TASK_STYLE = BASE_STYLE
   + ".t{margin:0 0 8px;font-size:17px;font-weight:700;line-height:1.3;word-break:break-word}"
   + ".r{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:14px}"
   + ".r dt{color:var(--tg-theme-hint-color)}.r dd{margin:0;word-break:break-word}"
-  + ".m{display:block;box-sizing:border-box;width:100%;margin:9px 0 0;padding:7px 10px;border-radius:8px;border-left:3px solid var(--k);background:var(--tg-theme-secondary-bg-color);font-size:14px;white-space:pre-wrap;word-break:break-word}"
-  + ".m b{display:block;margin:0 0 2px;font-size:12px;font-weight:600;color:var(--tg-theme-hint-color);white-space:normal}"
+  // «Что доработать»: блок, слегка тонированный цветом этапа, без рамок
+  // (полоску слева со скруглением Telegram рисует с искажением).
+  + ".m{display:block;box-sizing:border-box;width:100%;margin:10px 0 0;padding:8px 11px;border-radius:10px;background:var(--kb);font-size:14px;white-space:pre-wrap;word-break:break-word}"
+  + ".m b{display:block;margin:0 0 2px;font-size:12px;font-weight:600;color:var(--k);white-space:normal}"
   + ".x{color:var(--tg-theme-hint-color)}";
 
 /**
@@ -135,7 +146,9 @@ export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow")
     period ? `<dt>Срок</dt><dd>${escapeHtml(period)}</dd>` : ""
   ].join("");
   // Цвет этапа: в светлой теме темнее, в тёмной светлее.
-  const colors = `.c{--k:${look.light}}@media (prefers-color-scheme:dark){.c{--k:${look.dark}}}`;
+  const colors = `.c{--k:${look.light};--kb:${tint(look.light, 0.1)}}`
+    // В тёмной теме тонировка на синем фоне выходит грязной: там родной фон блока Telegram.
+    + `@media (prefers-color-scheme:dark){.c{--k:${look.dark};--kb:var(--tg-theme-secondary-bg-color)}}`;
   return `<style>${TASK_STYLE}${colors}</style>`
     + `<div class="c" title="${escapeHtml(look.label)}">`
     + `<p class="t"><span class="d"></span>${escapeHtml(title)}</p>`
