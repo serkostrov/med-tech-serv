@@ -138,6 +138,8 @@ export interface TaskApiRecord {
   readonly cancellationReason?: string;
   readonly reworkComment?: string;
   readonly isOverdue?: boolean;
+  /** Место карточки в колонке доски, если его задали вручную (только для запросов доски). */
+  readonly boardPosition?: number;
   readonly customer?: {
     readonly siteName: string;
     readonly address: string;
@@ -601,6 +603,16 @@ const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
 /** После 0007 в tasks появляются initiator_contact_id / initiator_name. Пока миграции нет — select без них. */
 let tasksInitiatorContactAvailable: boolean | null = null;
 
+/** Порядок карточек на доске появляется с миграцией 0019. Пока её нет, доска сортирует как раньше. */
+let boardOrderAvailable = true;
+
+/** Ошибка из-за того, что в базе ещё нет порядка карточек (миграция 0019 не применена). */
+function isMissingBoardOrderSchema(error: { readonly message?: string; readonly code?: string; readonly details?: string; readonly hint?: string } | null): boolean {
+  if (!error) return false;
+  const blob = [error.message, error.code, error.details, error.hint].filter(Boolean).join(" ");
+  return /board_position/iu.test(blob);
+}
+
 export function mapEquipment(row: Row): EquipmentApiRecord {
   const manufacturer = related(row, "manufacturer");
   const model = related(row, "model");
@@ -647,6 +659,7 @@ export function mapTask(row: Row): TaskApiRecord {
   const device = related(row, "device");
   const deviceSerial = optionalText(device, "serial_number");
   const engineerRow = related(row, "engineer");
+  const boardPosition = numberValue(row.board_position);
   return {
     id: text(row, "id"),
     number: text(row, "number"),
@@ -694,6 +707,7 @@ export function mapTask(row: Row): TaskApiRecord {
     cancellationReason: optionalText(row, "cancellation_reason"),
     reworkComment: optionalText(row, "rework_comment"),
     isOverdue,
+    ...(boardPosition !== undefined ? { boardPosition } : {}),
     customer: {
       siteName: text(site, "name"),
       address: text(site, "address"),
@@ -1728,6 +1742,8 @@ export class M2ApiClient {
     readonly periodTo?: string;
     readonly overdue?: boolean;
     readonly sort?: "deadline_asc" | "deadline_desc" | "updated_asc" | "updated_desc";
+    /** Колонка доски: сначала карточки, расставленные вручную, затем остальные по сортировке. */
+    readonly boardOrder?: boolean;
     readonly limit?: number;
     readonly offset?: number;
     /** Счётчики «новые» и «на проверке» (по умолчанию не запрашиваются: экраны их не показывают). */
@@ -1764,22 +1780,35 @@ export class M2ApiClient {
     };
     const select = this.taskSelect();
     const withAttention = query.withAttention === true;
+    // Доска: сначала карточки по месту, заданному вручную, остальные ниже по обычной сортировке.
+    // Номер задачи в конце, чтобы при одинаковом сроке порядок не прыгал между страницами.
+    const pageRequest = (fields: string, board: boolean) => {
+      const request = this.db().from("tasks").select(board ? `${fields}, board_position` : fields, { count: "exact" });
+      const ordered = board
+        ? request.order("board_position", { ascending: true, nullsFirst: false }).order(sortColumn, { ascending }).order("id", { ascending: true })
+        : request.order(sortColumn, { ascending });
+      return applyTaskFilters(ordered.range(offset, offset + limit - 1));
+    };
+    let board = query.boardOrder === true && boardOrderAvailable;
     // Список и счётчики идут одновременно, а не друг за другом.
-    const [primary, newCountResult, reviewCountResult] = await Promise.all([
-      applyTaskFilters(
-        this.db().from("tasks").select(select, { count: "exact" }).order(sortColumn, { ascending }).range(offset, offset + limit - 1)
-      ),
+    const [firstPage, newCountResult, reviewCountResult] = await Promise.all([
+      pageRequest(select, board),
       withAttention ? this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "new") : Promise.resolve({ count: 0 }),
       withAttention ? this.db().from("tasks").select("id", { count: "exact", head: true }).eq("status_code", "under_review") : Promise.resolve({ count: 0 })
     ]);
+    let primary = firstPage;
+    if (board && isMissingBoardOrderSchema(primary.error)) {
+      // В базе ещё нет порядка карточек: показываем доску как раньше, по сортировке.
+      boardOrderAvailable = false;
+      board = false;
+      primary = await pageRequest(select, false);
+    }
     let rows = primary.data;
     let error = primary.error;
     let count = primary.count;
     if (error && select === TASK_SELECT) {
       this.markInitiatorContactUnavailable();
-      const fallback = await applyTaskFilters(
-        this.db().from("tasks").select(TASK_SELECT_WITHOUT_INITIATOR_CONTACT, { count: "exact" }).order(sortColumn, { ascending }).range(offset, offset + limit - 1)
-      );
+      const fallback = await pageRequest(TASK_SELECT_WITHOUT_INITIATOR_CONTACT, board);
       rows = fallback.data as typeof rows;
       error = fallback.error;
       count = fallback.count;
@@ -2730,6 +2759,29 @@ export class M2ApiClient {
       hasClosure: Boolean(closure.data),
       resultFilled: Boolean(optionalText(row, "call_reason")?.trim() && optionalText(row, "work_description")?.trim())
     };
+  }
+
+  /**
+   * Запоминает места карточек в колонке доски. Саму задачу не меняет: место хранится отдельно
+   * и действует, пока задача в этом этапе.
+   */
+  public async setTaskBoardPositions(status: string, positions: readonly { readonly taskId: string; readonly position: number }[]): Promise<void> {
+    if (positions.length === 0) return;
+    if (!boardOrderAvailable) throw new M2ApiError(400, "Порядок карточек пока не сохраняется: на сервере не обновлена база");
+    if (positions.some((item) => !Number.isFinite(item.position))) throw new M2ApiError(400, "Не получилось вычислить место карточки");
+    const { error } = await this.db().from("task_board_positions").upsert(
+      positions.map((item) => ({ task_id: item.taskId, status_code: status, position: item.position })),
+      { onConflict: "task_id" }
+    );
+    if (!error) return;
+    const blob = [error.message, error.code, error.details, error.hint].filter(Boolean).join(" ");
+    if (/task_board_positions/iu.test(blob) && /PGRST205|42P01|schema cache|does not exist/iu.test(blob)) {
+      throw new M2ApiError(400, "Порядок карточек пока не сохраняется: на сервере не обновлена база");
+    }
+    if (error.code === "42501" || /row-level security/iu.test(blob)) {
+      throw new M2ApiError(403, "Нет прав менять порядок этих карточек");
+    }
+    throwIfError(error, "Не получилось сохранить порядок карточек");
   }
 
   public async transitionTask(id: string, status: string, details: Readonly<Record<string, string>> = {}): Promise<TaskApiRecord> {

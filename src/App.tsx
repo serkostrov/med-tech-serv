@@ -56,7 +56,7 @@ import {
   ReportsPage as OperationsReportsPage,
   WarehousePage as OperationsWarehousePage
 } from "./OperationsPages.js";
-import { TaskBoard } from "./TaskBoard.js";
+import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
@@ -1268,6 +1268,15 @@ function TaskCardLoading({ task, onBack, backLabel = "К задачам" }: { re
  * как и по кнопке «Передать на проверку» в карточке; иначе ошибка с тем, что заполнить.
  * Ошибки показывает сама доска (одним сообщением, если переносили несколько задач).
  */
+/** Ручной порядок карточек есть во всех колонках, кроме закрытых и отменённых: там по дате. */
+function boardOrderFor(status: string): boolean {
+  return status !== "closed" && status !== "cancelled";
+}
+
+async function saveBoardPositions(status: string, positions: readonly BoardPosition[]): Promise<void> {
+  await m2Api.setTaskBoardPositions(status, positions);
+}
+
 async function moveTaskOnBoard(id: string, status: string): Promise<void> {
   if (status === "under_review") {
     const readiness = await m2Api.taskReviewReadiness(id);
@@ -1464,6 +1473,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
       ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
       ...(appliedFilters.overdue ? { overdue: true } : {}),
       sort: appliedFilters.sort,
+      boardOrder: boardOrderFor(status),
       limit,
       offset,
       withAttention: false
@@ -1544,7 +1554,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
-      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
+      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} onReorder={saveBoardPositions} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
         <section className="card card--table" aria-labelledby="tasks-table-title">
           <CardHeader headingId="tasks-table-title" meta={`${tasks.length} из ${total}`} title="Все задачи" />
           {(loading || !listLoaded) && tasks.length === 0
@@ -3003,10 +3013,11 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
       engineers={[]}
       equipment={[]}
       loadColumn={async (status, offset, limit) => {
-        const page = await m2Api.tasksPage({ engineerId: user.id, status, sort: status === "closed" ? "updated_desc" : "deadline_asc", limit, offset });
+        const page = await m2Api.tasksPage({ engineerId: user.id, status, sort: status === "closed" ? "updated_desc" : "deadline_asc", boardOrder: boardOrderFor(status), limit, offset });
         return { items: page.items, total: page.total };
       }}
       onMove={moveTaskOnBoard}
+      onReorder={saveBoardPositions}
       onOpen={openFromList}
       engineerMode
       hideEngineer

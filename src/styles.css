@@ -8529,3 +8529,18 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .equipment-card-loading__block { height: 120px; margin-bottom: 16px; border-radius: 12px; }
 .equipment-card-loading__block--tall { height: 320px; }
 .equipment-card-loading__aside { height: 420px; border-radius: 12px; }
+
+/* Место, куда встанет перетаскиваемая карточка (как в Trello): колонка раздвигается под неё. */
+.task-board__slot {
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  min-height: 44px;
+  border: 1.5px dashed rgb(35 142 190 / 55%);
+  border-radius: 9px;
+  background: rgb(35 142 190 / 7%);
+  color: var(--color-accent-dark);
+  font-size: 12.5px;
+  font-weight: 600;
+  pointer-events: none;
+}
