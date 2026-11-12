@@ -300,6 +300,24 @@ export interface OperationsReportRecord {
   readonly tasksByMonth: readonly { readonly key: string; readonly name: string; readonly value: number }[];
 }
 
+/** Заявка для выгрузки отчёта в Excel: одна строка листа «Заявки». */
+export interface ReportTaskRow {
+  readonly number: string;
+  readonly createdAt: string;
+  readonly title: string;
+  readonly status: string;
+  readonly statusName: string;
+  readonly priority: "urgent" | "planned";
+  readonly workTypeName?: string;
+  readonly siteName?: string;
+  readonly equipment?: string;
+  readonly serialNumber?: string;
+  readonly engineerName?: string;
+  readonly periodFrom?: string;
+  readonly periodTo?: string;
+  readonly completedAt?: string;
+}
+
 export class M2ApiError extends Error {
   public constructor(public readonly status: number, message: string) {
     super(message);
@@ -602,6 +620,59 @@ const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
 
 /** После 0007 в tasks появляются initiator_contact_id / initiator_name. Пока миграции нет — select без них. */
 let tasksInitiatorContactAvailable: boolean | null = null;
+
+type PageResponse = { readonly data: unknown; readonly error: { readonly message?: string } | null; readonly count?: number | null };
+
+/**
+ * Все строки запроса. Сервер отдаёт не больше 1000 строк за раз, поэтому читаем страницами:
+ * первая страница заодно сообщает, сколько всего строк, остальные идут до 4 одновременно.
+ * Запрос должен быть упорядочен однозначно (например, по дате и id), иначе страницы перекроются.
+ */
+export async function allPages(
+  request: (from: number, to: number, withCount: boolean) => PromiseLike<PageResponse>,
+  failure: string,
+  pageSize = 1000
+): Promise<unknown[]> {
+  const rowsOf = (response: PageResponse): unknown[] => {
+    throwIfError(response.error, failure);
+    return Array.isArray(response.data) ? response.data : [];
+  };
+  const first = await request(0, pageSize - 1, true);
+  const rows = rowsOf(first);
+  if (rows.length < pageSize) return rows;
+  const offsets: number[] = [];
+  if (typeof first.count === "number") for (let offset = pageSize; offset < first.count; offset += pageSize) offsets.push(offset);
+  const pages: unknown[][] = new Array<unknown[]>(offsets.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, offsets.length) }, async () => {
+    while (next < offsets.length) {
+      const index = next;
+      next += 1;
+      const offset = offsets[index] ?? 0;
+      pages[index] = rowsOf(await request(offset, offset + pageSize - 1, false));
+    }
+  }));
+  for (const page of pages) rows.push(...page);
+  // Пока читали, могли добавиться строки: дочитываем, пока страница полная.
+  let last = pages.length > 0 ? pages[pages.length - 1] ?? [] : rows;
+  let offset = pageSize * (offsets.length + 1);
+  while (last.length >= pageSize) {
+    last = rowsOf(await request(offset, offset + pageSize - 1, false));
+    rows.push(...last);
+    offset += pageSize;
+  }
+  return rows;
+}
+
+/**
+ * Просрочена ли заявка в отчёте за период: открыта и срок вышел к концу периода,
+ * но не позже сегодняшнего дня (период может заканчиваться в будущем).
+ */
+export function reportTaskOverdue(deadlineTo: string | undefined, status: string, periodTo: string, today = new Date().toISOString().slice(0, 10)): boolean {
+  if (!deadlineTo || status === "closed" || status === "cancelled") return false;
+  const reference = periodTo < today ? periodTo : today;
+  return deadlineTo.slice(0, 10) < reference;
+}
 
 /** Порядок карточек на доске появляется с миграцией 0019. Пока её нет, доска сортирует как раньше. */
 let boardOrderAvailable = true;
@@ -2640,12 +2711,15 @@ export class M2ApiClient {
   }
 
   public async operationsReport(from: string, to: string): Promise<OperationsReportRecord> {
-    const [{ data, error }, workTypesResult] = await Promise.all([
-      this.db().from("tasks").select("status_code, work_type_code, deadline_to, completed_at, created_at").gte("created_at", from).lte("created_at", `${to}T23:59:59.999Z`),
+    // Все заявки периода, а не первые 1000: столько сервер отдаёт за один запрос.
+    const [tasks, workTypesResult] = await Promise.all([
+      allPages((start, end, withCount) => this.db().from("tasks")
+        .select("id, status_code, work_type_code, deadline_to, completed_at, created_at", withCount ? { count: "exact" } : undefined)
+        .gte("created_at", from).lte("created_at", `${to}T23:59:59.999Z`)
+        .order("created_at", { ascending: true }).order("id", { ascending: true })
+        .range(start, end), "Не получилось построить отчёт"),
       this.db().from("work_types").select("code, name")
     ]);
-    throwIfError(error);
-    const tasks = data ?? [];
     const workTypeNames = new Map((workTypesResult.error ? [] : workTypesResult.data ?? []).map((item) => {
       const row = asRow(item);
       return [text(row, "code"), text(row, "name")] as const;
@@ -2681,8 +2755,7 @@ export class M2ApiClient {
         closedOnTimePercent: datedClosed ? Math.round((onTimeClosed / datedClosed) * 100) : 0,
         overdueCount: tasks.filter((item) => {
           const row = asRow(item);
-          const deadline = optionalText(row, "deadline_to");
-          return Boolean(deadline && deadline < to && !["closed", "cancelled"].includes(text(row, "status_code")));
+          return reportTaskOverdue(optionalText(row, "deadline_to"), text(row, "status_code"), to);
         }).length,
         activeEngineerCount: 0,
         belowMinimumCount: 0
@@ -2699,6 +2772,55 @@ export class M2ApiClient {
         value: byMonth.get(key) ?? 0
       }))
     };
+  }
+
+  /**
+   * Заявки за период для выгрузки в Excel: те же, что считает отчёт (созданные в периоде),
+   * с площадкой, прибором и инженером. Читаем страницами по 1000, как отдаёт сервер.
+   */
+  public async operationsReportTasks(from: string, to: string): Promise<readonly ReportTaskRow[]> {
+    const pageSize = 1000;
+    const select = "id, number, title, status_code, priority, work_type_code, deadline_from, deadline_to, completed_at, created_at, "
+      + "site:sites!site_id(name), device:equipment!equipment_id(serial_number, model:equipment_models(name), maker:manufacturers(name)), "
+      + "engineer:users!engineer_id(full_name)";
+    // Справочники и заявки читаем одновременно, а не друг за другом.
+    const [workTypesResult, statusesResult, page] = await Promise.all([
+      this.db().from("work_types").select("code, name"),
+      this.db().from("task_statuses").select("code, name"),
+      allPages((start, end, withCount) => this.db().from("tasks")
+        .select(select, withCount ? { count: "exact" } : undefined)
+        .gte("created_at", from).lte("created_at", `${to}T23:59:59.999Z`)
+        .order("created_at", { ascending: true }).order("id", { ascending: true })
+        .range(start, end), "Не получилось выгрузить заявки за период", pageSize)
+    ]);
+    const workTypeNames = new Map((workTypesResult.error ? [] : workTypesResult.data ?? []).map((item) => [text(asRow(item), "code"), text(asRow(item), "name")] as const));
+    const statusNames = new Map((statusesResult.error ? [] : statusesResult.data ?? []).map((item) => [text(asRow(item), "code"), text(asRow(item), "name")] as const));
+    const rows: ReportTaskRow[] = [];
+    for (const item of page) {
+      const row = asRow(item);
+      const device = related(row, "device");
+      const maker = optionalText(related(device, "maker"), "name");
+      const model = optionalText(related(device, "model"), "name");
+      const status = text(row, "status_code");
+      const workType = optionalText(row, "work_type_code");
+      rows.push({
+        number: text(row, "number"),
+        createdAt: optionalText(row, "created_at") ?? iso(row.created_at),
+        title: text(row, "title"),
+        status,
+        statusName: statusNames.get(status) || TASK_STATUS_LABELS[status] || status,
+        priority: text(row, "priority") === "urgent" ? "urgent" : "planned",
+        ...(workType ? { workTypeName: workTypeNames.get(workType) || workType } : {}),
+        ...(optionalText(related(row, "site"), "name") ? { siteName: optionalText(related(row, "site"), "name") } : {}),
+        ...(maker || model ? { equipment: [maker, model].filter(Boolean).join(" ") } : {}),
+        ...(optionalText(device, "serial_number") ? { serialNumber: optionalText(device, "serial_number") } : {}),
+        ...(optionalText(related(row, "engineer"), "full_name") ? { engineerName: optionalText(related(row, "engineer"), "full_name") } : {}),
+        ...(optionalText(row, "deadline_from") ? { periodFrom: optionalText(row, "deadline_from") } : {}),
+        ...(optionalText(row, "deadline_to") ? { periodTo: optionalText(row, "deadline_to") } : {}),
+        ...(optionalText(row, "completed_at") ? { completedAt: optionalText(row, "completed_at") } : {})
+      });
+    }
+    return rows;
   }
 
   public async assignTask(id: string, engineerId: string, _comment?: string): Promise<TaskApiRecord> {

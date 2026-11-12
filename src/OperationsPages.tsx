@@ -3,6 +3,8 @@ import { m2Api, type EngineerOverview, type InventoryPartRecord, type Operations
 import { Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, toast } from "./ui.js";
 import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate, todayIsoDate } from "./date-format.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
+import { reportFileName, reportWorkbook } from "./report-export.js";
+import { XLSX_MIME } from "./xlsx.js";
 
 function competencyText(engineer: EngineerOverview): string {
   const values = engineer.competencies.map((item) => [item.manufacturer, item.modelLine].filter(Boolean).join(" · ")).filter(Boolean);
@@ -214,12 +216,44 @@ function ReportBars({
   );
 }
 
+/** 1 заявка, 2 заявки, 5 заявок. */
+function requestsWord(count: number): string {
+  const tens = count % 100;
+  const ones = count % 10;
+  if (tens >= 11 && tens <= 14) return "заявок";
+  if (ones === 1) return "заявка";
+  if (ones >= 2 && ones <= 4) return "заявки";
+  return "заявок";
+}
+
 export function ReportsPage() {
   const initial = periodForPreset("half");
   const [period, setPeriod] = useState(initial);
   const [preset, setPreset] = useState<ReportPreset | null>("half");
   const [report, setReport] = useState<OperationsReportRecord | null>(null);
   const [loading, setLoading] = useState(true);
+  const [exporting, setExporting] = useState(false);
+  // Выгрузка за тот период, что сейчас на экране: сводка и все заявки периода в файл Excel.
+  const exportExcel = async () => {
+    if (!report) return;
+    setExporting(true);
+    try {
+      const tasks = await m2Api.operationsReportTasks(report.period.from, report.period.to);
+      const url = URL.createObjectURL(new Blob([(await reportWorkbook(report, tasks)) as BlobPart], { type: XLSX_MIME }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = reportFileName(report);
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      toast.success(`В файле сводка и ${tasks.length} ${requestsWord(tasks.length)}`, { title: "Отчёт выгружен" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить отчёт", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
   const reload = async (next = period) => {
     setLoading(true);
     try { setReport(await m2Api.operationsReport(next.from, next.to)); }
@@ -243,7 +277,11 @@ export function ReportsPage() {
   const periodLabel = `${formatDisplayDate(period.from)} — ${formatDisplayDate(period.to)}`;
   return (
     <div className="report-page">
-      <PageIntro description="Сколько заявок за период, что закрыто вовремя и где уже вышел срок." title="Отчёты" />
+      <PageIntro
+        actions={<Button busy={exporting} busyLabel="Готовим файл…" disabled={!report || loading} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>}
+        description="Сколько заявок за период, что закрыто вовремя и где уже вышел срок."
+        title="Отчёты"
+      />
       <div className="report-presets" role="group" aria-label="Быстрый период">
         {REPORT_PRESETS.map((item) => (
           <Button
