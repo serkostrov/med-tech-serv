@@ -195,3 +195,40 @@ test("хранилище: ключ без кириллицы, ключ серв�
   assert.equal(url, `http://localhost:8000/storage/v1/object/medtech-files/${key}`);
   assert.equal(supabaseMailFileStore({}), undefined);
 });
+
+test("mailbox for requests defaults to the sending account and its app password", async () => {
+  const { imapSettings } = await import("./mail-intake.js");
+  const base = { IMAP_HOST: "imap.gmail.com", SMTP_USERNAME: "Demo.User@gmail.com", SMTP_PASSWORD: "app-password-16ch" };
+  const same = imapSettings(base);
+  assert.equal(same.user, "Demo.User@gmail.com");
+  assert.equal(same.password, "app-password-16ch");
+  assert.equal(same.mailbox, "INBOX");
+  assert.equal(same.onlyTo, undefined);
+  // Тот же ящик, указанный явно (другой регистр): пароль всё равно от отправки.
+  assert.equal(imapSettings({ ...base, IMAP_USER: "demo.user@gmail.com" }).password, "app-password-16ch");
+  // Свой пароль для чтения важнее.
+  assert.equal(imapSettings({ ...base, IMAP_PASSWORD: "own-imap" }).password, "own-imap");
+  // Другой ящик без своего пароля: пароль отправки не подставляем.
+  assert.throws(() => imapSettings({ ...base, IMAP_USER: "requests@clinic.example" }), /IMAP_PASSWORD is required/u);
+  assert.throws(() => imapSettings({ IMAP_HOST: "imap.gmail.com" }), /IMAP_USER is required/u);
+});
+
+test("only mail sent to the request address is taken from a shared mailbox", async () => {
+  const { addressedTo, imapSettings, intakeAddress } = await import("./mail-intake.js");
+  assert.equal(intakeAddress("+zayavki", "Demo.User@gmail.com"), "demo.user+zayavki@gmail.com");
+  assert.equal(intakeAddress(" Requests@Clinic.Example ", "x@y.z"), "requests@clinic.example");
+  assert.equal(intakeAddress("", "x@y.z"), undefined);
+  assert.throws(() => intakeAddress("+заявки", "x@y.z"), /tag after \+/u);
+  assert.throws(() => intakeAddress("not-an-address", "x@y.z"), /e-mail address or \+tag/u);
+  assert.equal(imapSettings({ IMAP_HOST: "imap.gmail.com", SMTP_USERNAME: "demo.user@gmail.com", SMTP_PASSWORD: "p", MAIL_INTAKE_ONLY_TO: "+zayavki" }).onlyTo, "demo.user+zayavki@gmail.com");
+
+  const mail = (headers: string) => new TextEncoder().encode(`${headers}\r\n\r\nТело письма: demo.user+zayavki@gmail.com`);
+  const wanted = "demo.user+zayavki@gmail.com";
+  assert.equal(addressedTo(mail("From: client@clinic.example\r\nTo: Demo <Demo.User+Zayavki@gmail.com>"), wanted), true);
+  assert.equal(addressedTo(mail("To: someone@else.example\r\nCc: other@x.example,\r\n demo.user+zayavki@gmail.com"), wanted), true);
+  assert.equal(addressedTo(mail("Delivered-To: demo.user+zayavki@gmail.com\r\nTo: undisclosed-recipients:;"), wanted), true);
+  // Обычная почта ящика и уведомления самой CRM на основной адрес не берутся,
+  // даже если адрес для заявок упомянут в теме или в теле письма.
+  assert.equal(addressedTo(mail("To: demo.user@gmail.com\r\nSubject: напишите на demo.user+zayavki@gmail.com"), wanted), false);
+  assert.equal(addressedTo(mail("Delivered-To: demo.user@gmail.com\r\nTo: Demo <demo.user@gmail.com>"), wanted), false);
+});

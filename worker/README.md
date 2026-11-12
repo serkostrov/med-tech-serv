@@ -71,8 +71,9 @@ tg-medtech.138-124-231-240.sslip.io {
 | Переменная | Значение |
 |---|---|
 | `MAIL_INTAKE_ENABLED` | `true`, чтобы забирать письма (по умолчанию выключено) |
-| `IMAP_HOST`, `IMAP_PORT` (993), `IMAP_SECURE` (`true`), `IMAP_USER`, `IMAP_PASSWORD`, `IMAP_MAILBOX` (`INBOX`) | ящик для заявок. Для Яндекса: `imap.yandex.ru`, пароль приложения |
+| `IMAP_HOST`, `IMAP_PORT` (993), `IMAP_SECURE` (`true`), `IMAP_USER`, `IMAP_PASSWORD`, `IMAP_MAILBOX` (`INBOX`) | ящик для заявок. Для Яндекса: `imap.yandex.ru`, для Gmail: `imap.gmail.com`, пароль приложения. Без `IMAP_USER` берётся `SMTP_USERNAME`; если ящик тот же, что для отправки, пароль берётся из `SMTP_PASSWORD` |
 | `MAIL_INTAKE_SINCE_DAYS` | за сколько дней забрать письма при первом запуске, по умолчанию 3 |
+| `MAIL_INTAKE_ONLY_TO` | забирать только письма на этот адрес. `+zayavki` значит адрес ящика с приставкой (`user+zayavki@gmail.com`): письма на него Gmail и Яндекс кладут в тот же ящик, а остальная почта ящика в CRM не попадает и целиком не скачивается. Пусто: все письма ящика |
 | `MAIL_POLL_INTERVAL_MS` | частота забора, по умолчанию 60000 |
 | `MAIL_AUTOREPLY_ENABLED` | автоответ клиенту, по умолчанию `true`; отправляется через `SMTP_*` |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | для загрузки вложений в хранилище. Без них письма разбираются, но файлы не сохраняются |

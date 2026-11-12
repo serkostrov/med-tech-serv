@@ -179,6 +179,8 @@ export interface ImapSettings {
   readonly password: string;
   readonly mailbox: string;
   readonly sinceDays: number;
+  /** Забирать только письма на этот адрес (в нижнем регистре); без него все письма ящика. */
+  readonly onlyTo?: string;
 }
 
 export function imapSettings(environment: NodeJS.ProcessEnv): ImapSettings {
@@ -190,15 +192,64 @@ export function imapSettings(environment: NodeJS.ProcessEnv): ImapSettings {
   const port = Number(environment.IMAP_PORT?.trim() || "993");
   if (!Number.isInteger(port) || port < 1 || port > 65_535) throw new Error("IMAP_PORT must be a port number");
   const sinceDays = Number(environment.MAIL_INTAKE_SINCE_DAYS?.trim() || "3");
+  // Ящик для заявок по умолчанию тот же, что для отправки (SMTP): логин и пароль приложения
+  // подходят и для чтения, второй раз вводить их не нужно.
+  const smtpUser = environment.SMTP_USERNAME?.trim();
+  const user = environment.IMAP_USER?.trim() || smtpUser || required("IMAP_USER");
+  const password = environment.IMAP_PASSWORD?.trim()
+    ? environment.IMAP_PASSWORD
+    : smtpUser && user.toLowerCase() === smtpUser.toLowerCase() && environment.SMTP_PASSWORD?.trim()
+      ? environment.SMTP_PASSWORD
+      : required("IMAP_PASSWORD");
+  const onlyTo = intakeAddress(environment.MAIL_INTAKE_ONLY_TO, user);
   return {
     host: required("IMAP_HOST"),
     port,
     secure: (environment.IMAP_SECURE?.trim().toLowerCase() ?? "true") !== "false",
-    user: required("IMAP_USER"),
-    password: environment.IMAP_PASSWORD?.trim() ? environment.IMAP_PASSWORD : required("IMAP_PASSWORD"),
+    user,
+    password,
     mailbox: environment.IMAP_MAILBOX?.trim() || "INBOX",
-    sinceDays: Number.isFinite(sinceDays) && sinceDays > 0 ? sinceDays : 3
+    sinceDays: Number.isFinite(sinceDays) && sinceDays > 0 ? sinceDays : 3,
+    ...(onlyTo ? { onlyTo } : {})
   };
+}
+
+/**
+ * Адрес для заявок в общем ящике. «+zayavki» значит адрес ящика с приставкой:
+ * user+zayavki@gmail.com (Gmail и Яндекс доставляют такие письма в тот же ящик).
+ * Так в CRM попадают только заявки, а не вся почта ящика.
+ */
+export function intakeAddress(value: string | undefined, mailboxUser: string): string | undefined {
+  const raw = value?.trim().toLowerCase();
+  if (!raw) return undefined;
+  if (raw.startsWith("+")) {
+    const at = mailboxUser.lastIndexOf("@");
+    if (at <= 0) throw new Error("MAIL_INTAKE_ONLY_TO=+… needs IMAP_USER as an e-mail address");
+    const tag = raw.slice(1);
+    if (!/^[a-z0-9._-]+$/u.test(tag)) throw new Error("MAIL_INTAKE_ONLY_TO: the tag after + may contain only letters, digits, dot, dash and underscore");
+    return `${mailboxUser.slice(0, at).toLowerCase()}+${tag}${mailboxUser.slice(at).toLowerCase()}`;
+  }
+  if (!/^[^\s@]+@[^\s@]+$/u.test(raw)) throw new Error("MAIL_INTAKE_ONLY_TO must be an e-mail address or +tag");
+  return raw;
+}
+
+/** Заголовки, где может стоять адрес для заявок. */
+const ADDRESS_HEADERS = ["to", "cc", "delivered-to", "x-original-to", "envelope-to"];
+
+/**
+ * Письмо адресовано этому адресу: он есть в заголовках To, Cc, Delivered-To, X-Original-To
+ * или Envelope-To. Смотрим только заголовки, тело письма не разбираем.
+ */
+export function addressedTo(source: Uint8Array, address: string): boolean {
+  const text = Buffer.from(source).toString("latin1");
+  const end = text.search(/\r?\n\r?\n/u);
+  // Перенос длинного заголовка на следующую строку убираем, чтобы адрес не разорвался.
+  const headers = (end >= 0 ? text.slice(0, end) : text).replace(/\r?\n[ \t]+/gu, " ");
+  const wanted = address.toLowerCase();
+  return headers.split(/\r?\n/u).some((line) => {
+    const match = /^(to|cc|delivered-to|x-original-to|envelope-to)\s*:(.*)$/iu.exec(line);
+    return Boolean(match?.[2]?.toLowerCase().includes(wanted));
+  });
 }
 
 /**
@@ -238,9 +289,25 @@ export class ImapMailIntake {
       const since = new Date(Date.now() - this.settings.sinceDays * 24 * 60 * 60_000);
       const range = this.lastUid > 0 ? { uid: `${this.lastUid + 1}:*` } : { since };
       const messages: Array<{ uid: number; source: Uint8Array; date: Date }> = [];
-      for await (const message of client.fetch(range, { uid: true, source: true, internalDate: true }, { uid: true })) {
-        if (message.uid <= this.lastUid || !message.source) continue;
-        messages.push({ uid: message.uid, source: new Uint8Array(message.source), date: message.internalDate instanceof Date ? message.internalDate : new Date() });
+      let skippedUid = 0;
+      // С адресом для заявок сначала смотрим только адреса в заголовках: обычную почту ящика
+      // целиком не скачиваем и не сохраняем, только запоминаем, что её уже видели.
+      let sourceRange: typeof range | string | undefined = range;
+      const onlyTo = this.settings.onlyTo;
+      if (onlyTo) {
+        const wanted: number[] = [];
+        for await (const message of client.fetch(range, { uid: true, headers: ADDRESS_HEADERS }, { uid: true })) {
+          if (message.uid <= this.lastUid) continue;
+          if (message.headers && addressedTo(new Uint8Array(message.headers), onlyTo)) wanted.push(message.uid);
+          else skippedUid = Math.max(skippedUid, message.uid);
+        }
+        sourceRange = wanted.length > 0 ? wanted.join(",") : undefined;
+      }
+      if (sourceRange !== undefined) {
+        for await (const message of client.fetch(sourceRange, { uid: true, source: true, internalDate: true }, { uid: true })) {
+          if (message.uid <= this.lastUid || !message.source) continue;
+          messages.push({ uid: message.uid, source: new Uint8Array(message.source), date: message.internalDate instanceof Date ? message.internalDate : new Date() });
+        }
       }
       for (const message of messages.sort((a, b) => a.uid - b.uid)) {
         fetched += 1;
@@ -270,6 +337,10 @@ export class ImapMailIntake {
         this.attempts.delete(message.uid);
         this.lastUid = Math.max(this.lastUid, message.uid);
       }
+      // Пропущенные письма больше не перечитываем, если все заявки до них обработаны:
+      // иначе отложенная заявка с меньшим номером потерялась бы.
+      const pending = messages.some((message) => message.uid > this.lastUid);
+      if (!pending) this.lastUid = Math.max(this.lastUid, skippedUid);
     } finally {
       await client.logout().catch(() => undefined);
     }
