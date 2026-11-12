@@ -26,6 +26,8 @@ export interface TaskWidgetData {
 
 interface StatusLook {
   readonly label: string;
+  /** Что случилось, строкой под названием задачи. */
+  readonly event: string;
   /** Цвет текста и полоски: в светлой и тёмной теме чата. */
   readonly light: string;
   readonly dark: string;
@@ -33,14 +35,14 @@ interface StatusLook {
 
 /** Этап задачи после события, цвета как в CRM: назначена жёлтая, в работе зелёная, на проверке синяя. */
 const EVENT_LOOK: Readonly<Record<string, StatusLook>> = {
-  task_application_accepted: { label: "Новая", light: "#52627a", dark: "#a3b1c6" },
-  task_engineer_assigned: { label: "Назначена", light: "#946300", dark: "#f2b630" },
-  task_engineer_accepted: { label: "В работе", light: "#1d7f47", dark: "#4fc47e" },
-  task_work_completed: { label: "На проверке", light: "#1c66b8", dark: "#5ea9f2" },
-  task_rework_requested: { label: "На доработке", light: "#b9570c", dark: "#f59d4f" },
-  task_overdue: { label: "Просрочена", light: "#bf3434", dark: "#f27373" }
+  task_application_accepted: { label: "Новая", event: "Заявка принята", light: "#52627a", dark: "#a3b1c6" },
+  task_engineer_assigned: { label: "Назначена", event: "Назначен инженер", light: "#946300", dark: "#f2b630" },
+  task_engineer_accepted: { label: "В работе", event: "Инженер принял задачу", light: "#1d7f47", dark: "#4fc47e" },
+  task_work_completed: { label: "На проверке", event: "Работы завершены", light: "#1c66b8", dark: "#5ea9f2" },
+  task_rework_requested: { label: "На доработке", event: "Возвращена на доработку", light: "#b9570c", dark: "#f59d4f" },
+  task_overdue: { label: "Просрочена", event: "Задача просрочена", light: "#bf3434", dark: "#f27373" }
 };
-const DEFAULT_LOOK: StatusLook = { label: "Задача", light: "#52627a", dark: "#a3b1c6" };
+const DEFAULT_LOOK: StatusLook = { label: "Задача", event: "Изменения по задаче", light: "#52627a", dark: "#a3b1c6" };
 
 /** Полупрозрачный цвет этапа для фона блока: #rrggbb → rgba(). */
 function tint(hex: string, alpha: number): string {
@@ -117,9 +119,10 @@ const BASE_STYLE = "body{margin:0;padding:0}"
   + "font:15px/1.35 system-ui,sans-serif;color:var(--tg-theme-text-color)}";
 
 const TASK_STYLE = BASE_STYLE
-  // Цветная точка этапа перед названием, как у колонок на доске CRM.
-  + ".d{display:inline-block;width:9px;height:9px;margin:0 8px 2px 0;border-radius:50%;background:var(--k);vertical-align:middle}"
-  + ".t{margin:0 0 8px;font-size:17px;font-weight:700;line-height:1.3;word-break:break-word}"
+  // Название задачи цветом этапа, под ним что случилось и номер задачи.
+  + ".t{margin:0 0 2px;font-size:17px;font-weight:700;line-height:1.3;color:var(--k);word-break:break-word}"
+  + ".e{margin:0 0 9px;font-size:14px;color:var(--tg-theme-text-color)}"
+  + ".e span{color:var(--tg-theme-hint-color);font-variant-numeric:tabular-nums}"
   + ".r{display:grid;grid-template-columns:auto 1fr;gap:3px 12px;margin:0;font-size:14px}"
   + ".r dt{color:var(--tg-theme-hint-color)}.r dd{margin:0;word-break:break-word}"
   // «Что доработать»: блок, слегка тонированный цветом этапа, без рамок
@@ -129,11 +132,12 @@ const TASK_STYLE = BASE_STYLE
   + ".x{color:var(--tg-theme-hint-color)}";
 
 /**
- * HTML карточки задачи для sendWidget. Что случилось и номер задачи пишет подпись над карточкой
- * (её же видно в уведомлении), поэтому в карточке их нет: название, площадка, инженер, срок, комментарий.
+ * HTML карточки задачи для sendWidget: название цветом этапа, под ним что случилось и номер,
+ * затем площадка, инженер, срок и «Что доработать». Подписи над карточкой нет.
  */
 export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow"): string {
   const look = EVENT_LOOK[data.eventCode] ?? DEFAULT_LOOK;
+  const number = clipText(data.taskNumber, 24);
   // Высота пузыря не больше 600 px, лишнее обрезается: поля держим короткими.
   const title = clipText(data.taskTitle, 120) ?? "Без названия";
   const site = clipText(data.siteName, 100);
@@ -152,7 +156,8 @@ export function taskWidgetHtml(data: TaskWidgetData, timeZone = "Europe/Moscow")
     + `@media (prefers-color-scheme:dark){.c{--k:${look.dark}}.m{background:var(--tg-theme-secondary-bg-color)}}`;
   return `<style>${TASK_STYLE}${colors}</style>`
     + `<div class="c" title="${escapeHtml(look.label)}">`
-    + `<p class="t"><span class="d"></span>${escapeHtml(title)}</p>`
+    + `<p class="t">${escapeHtml(title)}</p>`
+    + `<p class="e">${escapeHtml(look.event)}${number ? ` <span>· ${escapeHtml(number)}</span>` : ""}</p>`
     + `<dl class="r">${rows}</dl>`
     + (comment ? `<div class="m"><b>Что доработать</b>${escapeHtml(comment)}</div>` : "")
     + "</div>";

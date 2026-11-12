@@ -1,5 +1,5 @@
 import { renderNotificationTemplate, type BusinessEvent } from "./domain.js";
-import { chatIdWidgetHtml, clipUtf16, escapeHtml, taskWidgetHtml, WIDGET_CAPTION_LIMIT, widgetFitsLimits, type TaskWidgetData } from "./telegram-widget.js";
+import { chatIdWidgetHtml, clipUtf16, escapeHtml, taskWidgetHtml, widgetFitsLimits, type TaskWidgetData } from "./telegram-widget.js";
 import {
   ChannelDeliveryError,
   channelDeliveryIdempotencyKey,
@@ -201,13 +201,10 @@ export class TelegramDeliveryChannel implements DeliveryChannel {
     }
     const html = card ? taskWidgetHtml(card) : undefined;
     if (html && widgetFitsLimits(html)) {
-      const subject = command.subject.replace(/\s+/gu, " ").trim();
-      const caption = subject ? clipUtf16(subject, WIDGET_CAPTION_LIMIT) : `${card?.taskNumber ?? "Задача"}`;
+      // Без подписи: что случилось и номер задачи — в самой карточке (так решил Тимур 12.11.2026).
       const { status, body } = await this.client.call("sendWidget", {
         chat_id: chatId,
         html,
-        caption,
-        show_caption_above_media: true,
         ...(replyMarkup ? { reply_markup: replyMarkup } : {})
       });
       if (isOk(status, body)) return deliveryReceipt(chatId, body);

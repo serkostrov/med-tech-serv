@@ -95,13 +95,12 @@ describe("Telegram", () => {
     assert.equal(receipt.providerMessageId, "telegram:123456789:78");
     assert.equal(calls.length, 1);
     assert.equal(calls[0]?.url, `https://api.telegram.org/bot${TOKEN}/sendWidget`);
-    const body = calls[0]?.body as { html: string; caption: string; show_caption_above_media: boolean; reply_markup: unknown };
-    assert.equal(body.caption, "По задаче MTS-1 назначен инженер");
-    assert.equal(body.show_caption_above_media, true);
+    const body = calls[0]?.body as { html: string; caption?: string; show_caption_above_media?: boolean; reply_markup: unknown };
+    // Подписи над карточкой нет: что случилось и номер — в карточке.
+    assert.equal(body.caption, undefined);
+    assert.equal(body.show_caption_above_media, undefined);
     assert.deepEqual(body.reply_markup, { inline_keyboard: [[{ text: "Открыть задачу", url: "https://crm.example.test/tasks/t1" }]] });
-    // Номер и что случилось — в подписи над карточкой, в самой карточке их не повторяем.
-    assert.doesNotMatch(body.html, /З-000007/u);
-    assert.match(body.html, /class="d"/u);
+    assert.match(body.html, /Назначен инженер <span>· З-000007<\/span>/u);
     assert.match(body.html, /Замена &lt;насоса&gt; &amp; калибровка/u);
     assert.doesNotMatch(body.html, /<насоса>/u);
     assert.match(body.html, /12–13 нояб/u);
