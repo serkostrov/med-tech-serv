@@ -33,6 +33,7 @@ Telegram получают только сотрудники с номером ч
 | `TELEGRAM_NOTIFICATIONS_ENABLED` | по умолчанию `false` |
 | `TELEGRAM_BOT_TOKEN` | токен бота от @BotFather |
 | `TELEGRAM_CHAT_ID_REPLIES` | бот отвечает номером чата на `/start`, по умолчанию `true` |
+| `TELEGRAM_API_BASE_URL` | обходной адрес Telegram API (https), если сервер не достаёт до `api.telegram.org`, например Cloudflare Worker, который пересылает запросы бота в Telegram. Пусто — `https://api.telegram.org` |
 | `OUTBOX_POLL_INTERVAL_MS` | частота прохода, по умолчанию 5000 |
 | `MAINTENANCE_ACTIVATION_RULE`, `MAINTENANCE_ACTIVATION_LEAD_DAYS`, `MAINTENANCE_ACTIVATION_TIME_ZONE` | когда запускать ТО: в день начала периода (по умолчанию) или за N дней, по московскому времени |
 

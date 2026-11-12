@@ -18,8 +18,6 @@ describe("переменные службы в docker-compose.yml", () => {
     const used = new Set(
       [...`${smtp}\n${telegram}\n${main}`.matchAll(/\b((?:SMTP|TELEGRAM|EMAIL)_[A-Z0-9_]+)\b/gu)]
         .map((match) => match[1] ?? "")
-        // Адрес Telegram API подменяют только тесты.
-        .filter((name) => name !== "TELEGRAM_API_BASE_URL")
     );
     assert.ok(used.has("EMAIL_TEST_REDIRECT_TO"));
     for (const name of used) {

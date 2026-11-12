@@ -28,6 +28,8 @@ services:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
       TELEGRAM_CHAT_ID_REPLIES: ${TELEGRAM_CHAT_ID_REPLIES:-true}
       TELEGRAM_TIMEOUT_MS: ${TELEGRAM_TIMEOUT_MS:-}
+      # Обходной адрес Telegram API (например, Cloudflare Worker), если сервер не достаёт до api.telegram.org.
+      TELEGRAM_API_BASE_URL: ${TELEGRAM_API_BASE_URL:-}
       OUTBOX_POLL_INTERVAL_MS: ${OUTBOX_POLL_INTERVAL_MS:-5000}
       MAIL_INTAKE_ENABLED: ${MAIL_INTAKE_ENABLED:-false}
       IMAP_HOST: ${IMAP_HOST:-}
