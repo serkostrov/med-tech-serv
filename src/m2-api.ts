@@ -645,6 +645,85 @@ function escapePostgrestSearchTerm(value: string): string {
   return value.trim().replace(/[%_,.()\\]/gu, "");
 }
 
+/**
+ * Слова поиска по складу и приборам: строка подходит, если нашлось каждое слово (в любом поле).
+ * «ё» ищем как «е»: так записан текст для поиска в базе (миграция 0025). Больше 10 слов не берём.
+ */
+export function searchTokens(value: string | undefined): readonly string[] {
+  return (value ?? "").replace(/[Ёё]/gu, "е").split(/\s+/u).filter(Boolean).slice(0, 10);
+}
+
+/**
+ * Шаблон ilike для слова поиска по столбцу search_text. Это обычный фильтр, а не `.or(...)`,
+ * поэтому запятые, точки и скобки остаются (артикул «6.1234.56»), а % _ \ ищутся как знаки.
+ */
+export function searchTextPattern(token: string): string {
+  return `%${escapeIlikePattern(token)}%`;
+}
+
+/**
+ * Ошибка из-за того, что представления или функции из новой миграции ещё нет в базе
+ * (или PostgREST её ещё не видит). Тогда список работает по-старому, а не падает.
+ */
+function isMissingSchemaObject(
+  error: { readonly message?: string; readonly code?: string; readonly details?: string; readonly hint?: string } | null,
+  name: string
+): boolean {
+  if (!error) return false;
+  const blob = [error.message, error.code, error.details, error.hint].filter(Boolean).join(" ");
+  return blob.includes(name) && /PGRST20[025]|42P01|42883|42703|schema cache|does not exist/iu.test(blob);
+}
+
+const PART_SELECT = "id, article_number, name, minimum_stock, notes, is_active";
+
+/** Столбцы представления склада inventory_part_registry (миграция 0025): остатки уже посчитаны базой. */
+const INVENTORY_REGISTRY_SELECT = `${PART_SELECT}, on_hand_quantity, reserved_quantity, available_quantity, with_engineers_quantity, below_minimum`;
+
+type SortColumns = readonly (readonly [column: string, ascending: boolean])[];
+
+/** По наименованию: так склад упорядочен, если сортировку не выбрали (и так было раньше). */
+const DEFAULT_INVENTORY_SORT: SortColumns = [["name", true], ["article_number", true], ["id", true]];
+
+/**
+ * Сортировки окна «Склад». Последние столбцы решают при равных значениях,
+ * чтобы строки не перескакивали между страницами.
+ */
+const INVENTORY_SORTS: ReadonlyMap<string, SortColumns> = new Map<string, SortColumns>([
+  ["article_asc", [["article_number", true], ["id", true]]],
+  ["article_desc", [["article_number", false], ["id", false]]],
+  ["name_asc", DEFAULT_INVENTORY_SORT],
+  ["available_asc", [["available_quantity", true], ["article_number", true], ["id", true]]],
+  ["available_desc", [["available_quantity", false], ["article_number", true], ["id", true]]]
+]);
+
+/** Строка склада: из представления 0025 или собранная из parts, stock_balances и выданных резервов. */
+function inventoryPartRecord(row: Row): InventoryPartRecord {
+  const minimumStock = numberValue(row.minimum_stock) ?? 0;
+  const availableQuantity = numberValue(row.available_quantity) ?? 0;
+  return {
+    id: text(row, "id"),
+    articleNumber: text(row, "article_number"),
+    name: text(row, "name"),
+    minimumStock,
+    notes: optionalText(row, "notes"),
+    isActive: row.is_active !== false,
+    onHandQuantity: numberValue(row.on_hand_quantity) ?? 0,
+    reservedQuantity: numberValue(row.reserved_quantity) ?? 0,
+    availableQuantity,
+    withEngineersQuantity: numberValue(row.with_engineers_quantity) ?? 0,
+    belowMinimum: typeof row.below_minimum === "boolean" ? row.below_minimum : availableQuantity < minimumStock
+  };
+}
+
+/** Сводка по показанным строкам: так она считалась до миграции 0025. */
+function inventoryPageSummary(items: readonly InventoryPartRecord[]): InventoryPartPage["summary"] {
+  return {
+    active: items.filter((item) => item.isActive).length,
+    belowMinimum: items.filter((item) => item.belowMinimum).length,
+    withEngineers: items.filter((item) => item.withEngineersQuantity > 0).length
+  };
+}
+
 function paged<Item>(items: readonly Item[], total: number, limit: number, offset: number): ApiPage<Item> {
   return { items, total, limit, offset };
 }
@@ -944,6 +1023,11 @@ const CATALOG_TABLE: Readonly<Record<string, { readonly table: string; readonly 
 
 export class M2ApiClient {
   public constructor(private readonly client?: AppSupabaseClient) {}
+
+  /** Представления и функция из миграции 0025. Пока их нет в базе, склад и поиск приборов работают как раньше. */
+  private inventoryRegistryAvailable = true;
+  private inventorySummaryAvailable = true;
+  private equipmentSearchAvailable = true;
 
   private db(): AppSupabaseClient {
     return this.client ?? getSupabase();
@@ -1434,38 +1518,57 @@ export class M2ApiClient {
   } = {}): Promise<ApiPage<EquipmentApiRecord>> {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
-    let request = this.db().from("equipment").select(EQUIPMENT_SELECT, { count: "exact" }).order("serial_number").range(offset, offset + limit - 1);
-    if (query.status) request = request.eq("status_code", query.status);
+    let siteId: string | undefined;
+    let payerId: string | undefined;
+    let manufacturerId: string | undefined;
     if (query.site) {
-      const siteId = await this.resolveFilterId("sites", query.site);
+      siteId = await this.resolveFilterId("sites", query.site);
       if (!siteId) return paged([], 0, limit, offset);
-      request = request.eq("current_site_id", siteId);
     }
     if (query.payer) {
-      const payerId = await this.resolveFilterId("payers", query.payer);
-      if (!payerId) return paged([], 0, offset, offset);
-      request = request.eq("current_payer_id", payerId);
+      payerId = await this.resolveFilterId("payers", query.payer);
+      if (!payerId) return paged([], 0, limit, offset);
     }
     if (query.manufacturer) {
-      const manufacturerId = await this.resolveFilterId("manufacturers", query.manufacturer);
-      if (!manufacturerId) return paged([], 0, offset, offset);
-      request = request.eq("manufacturer_id", manufacturerId);
+      manufacturerId = await this.resolveFilterId("manufacturers", query.manufacturer);
+      if (!manufacturerId) return paged([], 0, limit, offset);
     }
-    if (query.search?.trim()) {
-      const term = escapePostgrestSearchTerm(query.search);
-      if (term) {
-        request = request.or(
-          [`serial_number.ilike.%${term}%`, `notes.ilike.%${term}%`].join(",")
-        );
+    const pageRequest = (source: "equipment" | "equipment_search") => {
+      let request = this.db().from(source).select(EQUIPMENT_SELECT, { count: "exact" }).order("serial_number").range(offset, offset + limit - 1);
+      if (query.status) request = request.eq("status_code", query.status);
+      if (siteId) request = request.eq("current_site_id", siteId);
+      if (payerId) request = request.eq("current_payer_id", payerId);
+      if (manufacturerId) request = request.eq("manufacturer_id", manufacturerId);
+      return request;
+    };
+    const tokens = searchTokens(query.search);
+    let response: Awaited<ReturnType<typeof pageRequest>> | undefined;
+    if (tokens.length > 0 && this.equipmentSearchAvailable) {
+      // Поиск по S/N, модели, производителю, площадке, организации, плательщику и примечанию
+      // в базе (представление equipment_search, миграция 0025): каждое слово должно найтись.
+      // Строки, связи и права те же, что у таблицы equipment.
+      let request = pageRequest("equipment_search");
+      for (const token of tokens) request = request.ilike("search_text", searchTextPattern(token));
+      response = await request;
+      if (isMissingSchemaObject(response.error, "equipment_search")) {
+        this.equipmentSearchAvailable = false;
+        response = undefined;
       }
     }
-    const { data, error, count } = await request;
+    if (!response) {
+      // Без миграции 0025 ищем, как раньше, по S/N и примечанию.
+      let request = pageRequest("equipment");
+      const term = tokens.length > 0 ? escapePostgrestSearchTerm(query.search ?? "") : "";
+      if (term) request = request.or([`serial_number.ilike.%${term}%`, `notes.ilike.%${term}%`].join(","));
+      response = await request;
+    }
+    const { data, error, count } = response;
     // Старый Select мог прислать подпись вместо uuid — не роняем список, показываем пусто.
     if (error && /invalid input syntax for type uuid|22P02/iu.test(error.message)) {
       return paged([], 0, limit, offset);
     }
     throwIfError(error);
-    return paged((data ?? []).map((item) => mapEquipment(asRow(item))), count ?? 0, offset, offset);
+    return paged((data ?? []).map((item) => mapEquipment(asRow(item))), count ?? 0, limit, offset);
   }
 
   /** Фильтр мог прийти id или отображаемым именем (старый Select без value). */
@@ -2803,65 +2906,91 @@ export class M2ApiClient {
   }
 
   public async inventoryParts(includeInactive = true): Promise<readonly InventoryPartRecord[]> {
-    return (await this.inventoryPartPage({ limit: 500, ...(includeInactive ? {} : { state: "active" }) })).items;
+    // Выбору запчасти в задаче сводка склада не нужна.
+    return (await this.inventoryPartRows(includeInactive ? {} : { state: "active" }, 500, 0)).items;
   }
 
+  /**
+   * Страница склада. Фильтр, поиск, сортировку и общее число считает база по представлению
+   * inventory_part_registry, карточки над списком — функция inventory_part_summary() по всему
+   * складу, а не по странице (миграция 0025).
+   */
   public async inventoryPartPage(query: { readonly search?: string; readonly state?: string; readonly sort?: string; readonly limit?: number; readonly offset?: number } = {}): Promise<InventoryPartPage> {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
-    let request = this.db().from("parts").select("id, article_number, name, minimum_stock, notes, is_active", { count: "exact" }).order("name").range(offset, offset + limit - 1);
-    if (query.search?.trim()) request = request.or(`article_number.ilike.%${query.search.trim()}%,name.ilike.%${query.search.trim()}%`);
+    const [{ items, total }, summary] = await Promise.all([
+      this.inventoryPartRows(query, limit, offset),
+      this.inventoryPartSummary()
+    ]);
+    const hasMore = offset + items.length < total;
+    return {
+      items,
+      total,
+      limit,
+      offset,
+      hasMore,
+      nextOffset: hasMore ? offset + items.length : undefined,
+      summary: summary ?? inventoryPageSummary(items)
+    };
+  }
+
+  /**
+   * Строки склада по состоянию (active, low — активные ниже минимума, inactive, all),
+   * словам поиска (артикул, наименование) и сортировке из окна «Склад».
+   */
+  private async inventoryPartRows(
+    query: { readonly search?: string; readonly state?: string; readonly sort?: string },
+    limit: number,
+    offset: number
+  ): Promise<{ readonly items: readonly InventoryPartRecord[]; readonly total: number }> {
+    if (this.inventoryRegistryAvailable) {
+      let request = this.db().from("inventory_part_registry").select(INVENTORY_REGISTRY_SELECT, { count: "exact" });
+      if (query.state === "active" || query.state === "low") request = request.eq("is_active", true);
+      if (query.state === "low") request = request.eq("below_minimum", true);
+      if (query.state === "inactive") request = request.eq("is_active", false);
+      for (const token of searchTokens(query.search)) request = request.ilike("search_text", searchTextPattern(token));
+      for (const [column, ascending] of INVENTORY_SORTS.get(query.sort ?? "") ?? DEFAULT_INVENTORY_SORT) {
+        request = request.order(column, { ascending });
+      }
+      const { data, error, count } = await request.range(offset, offset + limit - 1);
+      if (!isMissingSchemaObject(error, "inventory_part_registry")) {
+        throwIfError(error, "Не получилось загрузить склад");
+        return { items: (data ?? []).map((item) => inventoryPartRecord(asRow(item))), total: count ?? 0 };
+      }
+      this.inventoryRegistryAvailable = false;
+    }
+    return this.legacyInventoryPartRows(query, limit, offset);
+  }
+
+  /** Склад без миграции 0025, как раньше: фильтр только «Активные», порядок по наименованию. */
+  private async legacyInventoryPartRows(
+    query: { readonly search?: string; readonly state?: string },
+    limit: number,
+    offset: number
+  ): Promise<{ readonly items: readonly InventoryPartRecord[]; readonly total: number }> {
+    let request = this.db().from("parts").select(PART_SELECT, { count: "exact" }).order("name").range(offset, offset + limit - 1);
+    const term = escapePostgrestSearchTerm(query.search ?? "");
+    if (term) request = request.or(`article_number.ilike.%${term}%,name.ilike.%${term}%`);
     if (query.state === "active") request = request.eq("is_active", true);
     const { data, error, count } = await request;
     throwIfError(error);
-    const ids = (data ?? []).map((item) => text(asRow(item), "id"));
-    const { data: balances, error: balanceError } = ids.length
-      ? await this.db().from("stock_balances").select("part_id, on_hand_quantity, reserved_quantity, available_quantity").in("part_id", ids)
-      : { data: [], error: null };
-    throwIfError(balanceError);
-    const withEngineersByPart = await this.issuedQuantityByPart(ids);
-    const balanceByPart = new Map<string, { onHandQuantity: number; reservedQuantity: number; availableQuantity: number }>();
-    for (const item of balances ?? []) {
-      const balance = asRow(item);
-      const partId = text(balance, "part_id");
-      const current = balanceByPart.get(partId) ?? { onHandQuantity: 0, reservedQuantity: 0, availableQuantity: 0 };
-      balanceByPart.set(partId, {
-        onHandQuantity: current.onHandQuantity + (numberValue(balance.on_hand_quantity) ?? 0),
-        reservedQuantity: current.reservedQuantity + (numberValue(balance.reserved_quantity) ?? 0),
-        availableQuantity: current.availableQuantity + (numberValue(balance.available_quantity) ?? 0)
-      });
+    return { items: await this.inventoryRecordsFromParts((data ?? []).map((item) => asRow(item))), total: count ?? 0 };
+  }
+
+  /** Карточки над складом по всему складу (функция 0025). Функции в базе нет: undefined, сводка по странице, как раньше. */
+  private async inventoryPartSummary(): Promise<InventoryPartPage["summary"] | undefined> {
+    if (!this.inventorySummaryAvailable) return undefined;
+    const { data, error } = await this.db().rpc("inventory_part_summary", {}, { get: true });
+    if (isMissingSchemaObject(error, "inventory_part_summary")) {
+      this.inventorySummaryAvailable = false;
+      return undefined;
     }
-    const items = (data ?? []).map((item) => {
-      const row = asRow(item);
-      const balance = balanceByPart.get(text(row, "id")) ?? { onHandQuantity: 0, reservedQuantity: 0, availableQuantity: 0 };
-      const withEngineersQuantity = withEngineersByPart.get(text(row, "id")) ?? 0;
-      const minimumStock = numberValue(row.minimum_stock) ?? 0;
-      return {
-        id: text(row, "id"),
-        articleNumber: text(row, "article_number"),
-        name: text(row, "name"),
-        minimumStock,
-        notes: optionalText(row, "notes"),
-        isActive: row.is_active !== false,
-        onHandQuantity: balance.onHandQuantity,
-        reservedQuantity: balance.reservedQuantity,
-        availableQuantity: balance.availableQuantity,
-        withEngineersQuantity,
-        belowMinimum: balance.availableQuantity < minimumStock
-      };
-    });
+    throwIfError(error, "Не получилось посчитать склад");
+    const row = Array.isArray(data) ? asRow(data[0]) : asRow(data);
     return {
-      items,
-      total: count ?? 0,
-      limit,
-      offset,
-      hasMore: offset + items.length < (count ?? 0),
-      nextOffset: offset + items.length < (count ?? 0) ? offset + items.length : undefined,
-      summary: {
-        active: items.filter((item) => item.isActive).length,
-        belowMinimum: items.filter((item) => item.belowMinimum).length,
-        withEngineers: items.filter((item) => item.withEngineersQuantity > 0).length
-      }
+      active: numberValue(row.active) ?? 0,
+      belowMinimum: numberValue(row.below_minimum) ?? 0,
+      withEngineers: numberValue(row.with_engineers) ?? 0
     };
   }
 
@@ -2948,39 +3077,41 @@ export class M2ApiClient {
   }
 
   private async loadInventoryPart(id: string): Promise<InventoryPartRecord> {
-    const { data, error } = await this.db().from("parts").select("id, article_number, name, minimum_stock, notes, is_active").eq("id", id).maybeSingle();
+    const { data, error } = await this.db().from("parts").select(PART_SELECT).eq("id", id).maybeSingle();
     throwIfError(error);
     if (!data) throw new M2ApiError(404, "Номенклатура не найдена");
-    const row = asRow(data);
-    const { data: balances, error: balanceError } = await this.db()
-      .from("stock_balances")
-      .select("on_hand_quantity, reserved_quantity, available_quantity")
-      .eq("part_id", id);
+    const [record] = await this.inventoryRecordsFromParts([asRow(data)]);
+    if (!record) throw new M2ApiError(404, "Номенклатура не найдена");
+    return record;
+  }
+
+  /**
+   * Остатки по состояниям (stock_balances) и выданное инженерам для строк parts:
+   * карточка запчасти и склад без миграции 0025. Считается так же, как inventory_part_registry.
+   */
+  private async inventoryRecordsFromParts(rows: readonly Row[]): Promise<readonly InventoryPartRecord[]> {
+    const ids = rows.map((row) => text(row, "id"));
+    if (ids.length === 0) return [];
+    const [{ data: balances, error: balanceError }, withEngineersByPart] = await Promise.all([
+      this.db().from("stock_balances").select("part_id, on_hand_quantity, reserved_quantity, available_quantity").in("part_id", ids),
+      this.issuedQuantityByPart(ids)
+    ]);
     throwIfError(balanceError);
-    let onHandQuantity = 0;
-    let reservedQuantity = 0;
-    let availableQuantity = 0;
+    const totals = new Map<string, { on_hand_quantity: number; reserved_quantity: number; available_quantity: number }>();
     for (const item of balances ?? []) {
       const balance = asRow(item);
-      onHandQuantity += numberValue(balance.on_hand_quantity) ?? 0;
-      reservedQuantity += numberValue(balance.reserved_quantity) ?? 0;
-      availableQuantity += numberValue(balance.available_quantity) ?? 0;
+      const partId = text(balance, "part_id");
+      const current = totals.get(partId) ?? { on_hand_quantity: 0, reserved_quantity: 0, available_quantity: 0 };
+      totals.set(partId, {
+        on_hand_quantity: current.on_hand_quantity + (numberValue(balance.on_hand_quantity) ?? 0),
+        reserved_quantity: current.reserved_quantity + (numberValue(balance.reserved_quantity) ?? 0),
+        available_quantity: current.available_quantity + (numberValue(balance.available_quantity) ?? 0)
+      });
     }
-    const minimumStock = numberValue(row.minimum_stock) ?? 0;
-    const withEngineersQuantity = (await this.issuedQuantityByPart([id])).get(id) ?? 0;
-    return {
-      id: text(row, "id"),
-      articleNumber: text(row, "article_number"),
-      name: text(row, "name"),
-      minimumStock,
-      notes: optionalText(row, "notes"),
-      isActive: row.is_active !== false,
-      onHandQuantity,
-      reservedQuantity,
-      availableQuantity,
-      withEngineersQuantity,
-      belowMinimum: availableQuantity < minimumStock
-    };
+    return rows.map((row) => {
+      const id = text(row, "id");
+      return inventoryPartRecord({ ...row, ...totals.get(id), with_engineers_quantity: withEngineersByPart.get(id) ?? 0 });
+    });
   }
 
   /** Сколько штук каждой запчасти сейчас выдано инженерам и ещё не установлено и не возвращено. */
