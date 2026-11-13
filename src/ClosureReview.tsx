@@ -6,6 +6,30 @@ import { formatDisplayDate } from "./date-format.js";
 /** Вкладка карточки задачи, куда ведёт пункт сводки. */
 export type ClosureReviewSection = "work" | "parts";
 
+/** Сколько фото с выезда нужно для закрытия (п. 3.3 ТЗ: 3–5 фото, до 10). Ту же границу проверяет база. */
+export const MIN_CLOSURE_PHOTOS = 3;
+
+/**
+ * Почему задачу пока нельзя закрыть: база отклонит закрытие без фото акта, без трёх фото с выезда
+ * и без трёх отметок акта. Пустой список: закрыть можно.
+ */
+export function closureBlockers(card: Pick<TaskCardResponse, "files" | "closure" | "task">): readonly string[] {
+  const { task, closure } = card;
+  const blockers: string[] = [];
+  const hasAct = card.files.some((file) => file.id === closure?.actFileId || file.kind === "act");
+  if (!hasAct) blockers.push("нет фото акта");
+  const photos = card.files.filter((file) => file.kind === "photo").length;
+  if (photos < MIN_CLOSURE_PHOTOS) blockers.push(`фото с выезда ${photos} из ${MIN_CLOSURE_PHOTOS} обязательных`);
+  const checks: readonly [boolean | undefined, string][] = [
+    [task.workCompleted ?? closure?.workCompleted, "работы выполнены полностью"],
+    [task.apparatusApproved ?? closure?.apparatusApproved, "аппарат исправен и допущен"],
+    [task.customerHasNoClaims ?? closure?.customerHasNoClaims, "претензий нет"]
+  ];
+  const unchecked = checks.filter(([value]) => value !== true).map(([, label]) => label);
+  if (unchecked.length) blockers.push(`не отмечено в акте: ${unchecked.join(", ")}`);
+  return blockers;
+}
+
 /**
  * Решение по задаче на проверке: кто и когда сдал работу, «На доработку» и «Проверено — закрыть».
  * Сами материалы (результат, фото акта, фото с выезда, запчасти) показаны один раз ниже,
@@ -33,12 +57,21 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
   const submitter = handIn?.actorName ?? closure?.submittedByName ?? card.engineer?.fullName ?? "Инженер";
   const submittedAt = handIn?.occurredAt ?? closure?.submittedAt;
   const hasAct = card.files.some((file) => file.id === closure?.actFileId || file.kind === "act");
-  const media = card.files.filter((file) => file.kind === "photo" || file.kind === "video").length;
+  const photos = card.files.filter((file) => file.kind === "photo").length;
+  const videos = card.files.filter((file) => file.kind === "video").length;
   const summary: readonly { readonly label: string; readonly section: ClosureReviewSection; readonly missing?: boolean }[] = [
     { label: hasAct ? "Фото акта загружено" : "Фото акта не загружено", section: "work", missing: !hasAct },
-    { label: media ? `Фото и видео с выезда: ${media}` : "Фото с выезда нет", section: "work" },
+    {
+      label: photos >= MIN_CLOSURE_PHOTOS
+        ? `Фото с выезда: ${photos}${videos ? `, видео: ${videos}` : ""}`
+        : `Фото с выезда: ${photos} из ${MIN_CLOSURE_PHOTOS} обязательных${videos ? `, видео: ${videos}` : ""}`,
+      section: "work",
+      missing: photos < MIN_CLOSURE_PHOTOS
+    },
     { label: card.parts.length ? `Запчасти: ${card.parts.length}` : "Запчасти не использовались", section: "parts" }
   ];
+  // Закрыть нельзя, пока не хватает того, что проверяет база: объясняем сразу, а не ошибкой после нажатия.
+  const blockers = closureBlockers(card);
 
   return <section aria-labelledby="closure-review-title" className="closure-review">
     <header className="closure-review__header">
@@ -56,9 +89,12 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
       </div>
       <div className="closure-review__buttons">
         <Button disabled={busy || !canReturn} onClick={() => setReworkOpen((open) => !open)} variant="secondary">На доработку</Button>
-        <button className="button button--success" disabled={busy || !canClose} onClick={() => void onClose()} type="button">Проверено — закрыть</button>
+        <button className="button button--success" disabled={busy || !canClose || blockers.length > 0} onClick={() => void onClose()} title={blockers.length ? `Закрыть пока нельзя: ${blockers.join("; ")}` : undefined} type="button">Проверено — закрыть</button>
       </div>
     </header>
+    {canClose && blockers.length ? <p className="closure-review__blocked" role="note">
+      Закрыть пока нельзя: {blockers.join("; ")}. Верните задачу на доработку и напишите инженеру, что добавить.
+    </p> : null}
 
     {reworkOpen ? <div className="closure-review__rework">
       <label htmlFor={`rework-comment-${task.id}`}>Что исправить инженеру</label>

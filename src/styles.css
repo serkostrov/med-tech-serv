@@ -8366,6 +8366,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .customer-people-group h4 { margin: 0; color: var(--color-muted); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .customer-site-card { border-radius: 12px; }
 
+/* Время начала и окончания работ в форме результата: рядом, на телефоне друг под другом. */
+.result-times { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.result-times label { min-width: 0; }
+@media (max-width: 480px) { .result-times { grid-template-columns: minmax(0, 1fr); } }
+/* ===== Проверка закрытия: почему закрыть пока нельзя ===== */
+.closure-review__blocked { margin: 10px 0 0; padding: 8px 12px; border-radius: 8px; background: var(--color-warning-soft); color: var(--color-warning); font-size: 13.5px; line-height: 1.45; }
+
 /* ===== Склад: резервы под задачи ===== */
 /* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана: с меню слева на ноутбуке и планшете кнопки не уезжают за край. */
 .reservations-container { container-type: inline-size; }

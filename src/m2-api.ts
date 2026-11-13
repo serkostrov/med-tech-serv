@@ -765,6 +765,16 @@ export function localDay(value: string | undefined): string | undefined {
 }
 
 /** Закрыта вовремя: день закрытия (по местному времени) не позже конца срока. Без срока или даты: не считаем. */
+/**
+ * Массовое назначение инженера: новая задача получает инженера и этап «Назначена»; у запланированной,
+ * назначенной и задачи в работе меняется только инженер; сданную, закрытую и отменённую не трогаем.
+ */
+export function bulkAssignMode(status: string): "assign" | "engineer_only" | "refuse" {
+  if (status === "new") return "assign";
+  if (status === "planned" || status === "assigned" || status === "in_progress") return "engineer_only";
+  return "refuse";
+}
+
 export function closedOnTime(completedAt: string | undefined, deadlineTo: string | undefined): boolean | undefined {
   const completed = localDay(completedAt);
   const deadline = deadlineTo?.slice(0, 10);
@@ -2307,8 +2317,15 @@ export class M2ApiClient {
     readonly workModifier?: "G" | "N" | null;
     readonly meterReading?: number | null;
     readonly hours?: number | null;
+    /** Дата выезда (календарная дата) и время начала и окончания работ из акта. */
+    readonly visitDate?: string | null;
+    readonly workStartedAt?: string | null;
+    readonly workFinishedAt?: string | null;
   }): Promise<TaskCardResponse> {
     const { error } = await this.db().from("tasks").update({
+      ...(input.visitDate !== undefined ? { visit_date: input.visitDate } : {}),
+      ...(input.workStartedAt !== undefined ? { work_started_at: input.workStartedAt } : {}),
+      ...(input.workFinishedAt !== undefined ? { work_finished_at: input.workFinishedAt } : {}),
       ...(input.reasonCode !== undefined ? { reason_code: input.reasonCode } : {}),
       ...(input.workModifier !== undefined ? { work_modifier: input.workModifier } : {}),
       ...(input.meterReading !== undefined ? { meter_reading: input.meterReading } : {}),
@@ -3174,12 +3191,32 @@ export class M2ApiClient {
     return this.loadTask(id);
   }
 
+  /** Этап и номер выбранных задач одним запросом: массовые операции решают, что с какой задачей можно. */
+  private async bulkTaskStates(taskIds: readonly string[]): Promise<ReadonlyMap<string, { readonly status: string; readonly number: string }>> {
+    if (taskIds.length === 0) return new Map();
+    const { data, error } = await this.db().from("tasks").select("id, status_code, number").in("id", [...taskIds]);
+    throwIfError(error);
+    return new Map((data ?? []).map((item) => {
+      const row = asRow(item);
+      return [text(row, "id"), { status: text(row, "status_code"), number: text(row, "number") }] as const;
+    }));
+  }
+
   public async bulkAssignTasks(taskIds: readonly string[], engineerId: string): Promise<BulkTaskCommandResponse> {
     const succeededTaskIds: string[] = [];
     const failures: Array<{ readonly taskId: string; readonly code: "conflict" | "invalid_status" | "not_found"; readonly error: string }> = [];
+    const states = await this.bulkTaskStates(taskIds);
     for (const taskId of taskIds) {
+      const state = states.get(taskId);
+      if (!state) { failures.push({ taskId, code: "not_found", error: "Задача не найдена" }); continue; }
+      const mode = bulkAssignMode(state.status);
+      if (mode === "refuse") {
+        failures.push({ taskId, code: "invalid_status", error: `${state.number}: задача ${TASK_STATUS_LABELS[state.status]?.toLowerCase() ?? state.status}, инженера не меняем` });
+        continue;
+      }
       try {
-        await this.assignTask(taskId, engineerId);
+        if (mode === "assign") await this.assignTask(taskId, engineerId);
+        else await this.reassignTask(taskId, engineerId);
         succeededTaskIds.push(taskId);
       } catch (caught) {
         failures.push({ taskId, code: "conflict", error: caught instanceof Error ? caught.message : "Не удалось назначить" });
@@ -3198,9 +3235,17 @@ export class M2ApiClient {
   public async bulkChangeTaskPeriod(taskIds: readonly string[], periodFrom: string, periodTo: string): Promise<BulkTaskCommandResponse> {
     const succeededTaskIds: string[] = [];
     const failures: Array<{ readonly taskId: string; readonly code: "conflict" | "invalid_status" | "not_found"; readonly error: string }> = [];
+    const states = await this.bulkTaskStates(taskIds);
     for (const taskId of taskIds) {
+      const state = states.get(taskId);
+      if (!state) { failures.push({ taskId, code: "not_found", error: "Задача не найдена" }); continue; }
+      // Срок закрытой или отменённой задачи не меняем: от него считается «закрыто вовремя».
+      if (state.status === "closed" || state.status === "cancelled") {
+        failures.push({ taskId, code: "invalid_status", error: `${state.number}: задача ${TASK_STATUS_LABELS[state.status]?.toLowerCase() ?? state.status}, срок не меняем` });
+        continue;
+      }
       const { error } = await this.db().from("tasks").update({ deadline_from: periodFrom, deadline_to: periodTo }).eq("id", taskId);
-      if (error) failures.push({ taskId, code: "conflict", error: error.message });
+      if (error) failures.push({ taskId, code: "conflict", error: publicApiErrorMessage(error.message, "Не получилось сменить срок") });
       else succeededTaskIds.push(taskId);
     }
     return {
@@ -3214,17 +3259,20 @@ export class M2ApiClient {
   }
 
   /** Лёгкая проверка перед переносом на проверку: есть ли результат и акт (два запроса вместо полной карточки). */
-  public async taskReviewReadiness(id: string): Promise<{ readonly hasClosure: boolean; readonly resultFilled: boolean }> {
-    const [task, closure] = await Promise.all([
+  public async taskReviewReadiness(id: string): Promise<{ readonly hasClosure: boolean; readonly resultFilled: boolean; readonly photoCount: number }> {
+    const [task, closure, photos] = await Promise.all([
       this.db().from("tasks").select("call_reason, work_description").eq("id", id).maybeSingle(),
-      this.db().from("task_closures").select("task_id").eq("task_id", id).maybeSingle()
+      this.db().from("task_closures").select("task_id").eq("task_id", id).maybeSingle(),
+      this.db().from("files").select("id", { count: "exact", head: true }).eq("task_id", id).eq("kind", "photo")
     ]);
     throwIfError(task.error);
     throwIfError(closure.error);
+    throwIfError(photos.error);
     const row = task.data ? asRow(task.data) : {};
     return {
       hasClosure: Boolean(closure.data),
-      resultFilled: Boolean(optionalText(row, "call_reason")?.trim() && optionalText(row, "work_description")?.trim())
+      resultFilled: Boolean(optionalText(row, "call_reason")?.trim() && optionalText(row, "work_description")?.trim()),
+      photoCount: photos.count ?? 0
     };
   }
 

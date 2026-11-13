@@ -45,7 +45,7 @@ import {
 } from "./m2-api.js";
 import { WorkAct } from "./WorkAct.js";
 import { buildWorkAct, type WorkActEquipmentRow, type WorkActWorkRow } from "./work-act.js";
-import { ClosureReview } from "./ClosureReview.js";
+import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
@@ -94,7 +94,7 @@ import {
   Select,
   toast
 } from "./ui.js";
-import { formatDisplayDate, todayIsoDate } from "./date-format.js";
+import { formatDisplayDate, formatDisplayTime, parseDisplayTime, todayIsoDate } from "./date-format.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { toTechnicalCode } from "./slug.js";
 import { AppShell } from "./components/app-shell.js";
@@ -838,6 +838,19 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       if (quotaError) throw new Error(quotaError);
       const numberField = (name: string) => String(data.get(name) ?? "").trim() === "" ? null : Number(String(data.get(name)).replace(",", "."));
       const reasonCode = String(data.get("reasonCode") ?? "") || null;
+      // Дата выезда и время работ из акта: время относится к дню выезда, по часам телефона или компьютера.
+      const visitRaw = String(data.get("visitDate") ?? "").trim();
+      const startTime = parseDisplayTime(String(data.get("workStartTime") ?? ""));
+      const finishTime = parseDisplayTime(String(data.get("workFinishTime") ?? ""));
+      if (startTime === null || finishTime === null) throw new Error("Время работ укажите как чч:мм, например 09:30");
+      if ((startTime || finishTime) && !visitRaw) throw new Error("Укажите дату выезда: к ней относится время работ");
+      if (startTime && finishTime && finishTime < startTime) throw new Error("Время окончания работ раньше времени начала");
+      const visitDate = visitRaw ? taskCalendarDate(visitRaw) : null;
+      const actTimes = {
+        visitDate,
+        workStartedAt: visitDate && startTime ? localDateTimeToIso(`${visitDate}T${startTime}`) : null,
+        workFinishedAt: visitDate && finishTime ? localDateTimeToIso(`${visitDate}T${finishTime}`) : null
+      };
       const workModifier = (String(data.get("workModifier") ?? "") || null) as "G" | "N" | null;
       const payload = {
         callReason: String(data.get("callReason") ?? "").trim(),
@@ -848,6 +861,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         apparatusApproved: data.get("apparatusApproved") === "on",
         customerHasNoClaims: data.get("customerHasNoClaims") === "on",
         continuedInPrimary: data.get("continuedInPrimary") === "on",
+        ...actTimes,
         // Отправляем только то, что поменяли: так не сотрём значение, которого нет в списке.
         ...(data.has("reasonCode") && reasonCode !== (task.reasonCode ?? card.reason?.code ?? null) ? { reasonCode } : {}),
         ...(data.has("workModifier") && workModifier !== (task.workModifier ?? null) ? { workModifier } : {}),
@@ -938,6 +952,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const isTaskEngineer = card.canSubmitResult === true;
   const needsResult = task.status === "in_progress" && canEditResult;
   const resultFilled = Boolean(task.callReason?.trim() && task.workDescription?.trim());
+  // На проверку только с тремя фото с выезда: без них координатор не сможет закрыть задачу.
+  const photosMissing = Math.max(0, MIN_CLOSURE_PHOTOS - photoCount);
+  const readyForReview = resultFilled && photosMissing === 0;
   // Проверяющий видит все поля акта, в том числе пустые: так видно, чего не хватает.
   // Остальным показываем только заполненное. Значения берём из задачи, иначе из закрытия.
   const reviewing = task.status === "under_review" && (canCloseReview || canReturnReview);
@@ -962,7 +979,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     canAssign ? { title: "Назначьте инженера", hint: "Задача ждёт исполнителя. После назначения инженер получит уведомление." }
       : workflowActions.some((action) => action.code === "accept") ? (card.isTaskEngineer ? { title: "Примите задачу", hint: "Подтвердите, что берёте задачу в работу. Координатор увидит, что вы приступили." } : { title: `Задача ждёт, когда инженер${card.engineer ? ` ${card.engineer.fullName}` : ""} её примет`, hint: "Принять за инженера можно, если он подтвердил выезд по телефону." })
         : reworkNote && isTaskEngineer ? { title: "Задачу вернули на доработку", hint: `Что исправить: ${reworkNote}. Поправьте результат или фото и снова передайте на проверку.`, tone: "warning" }
-          : workflowActions.some((action) => action.code === "submit_for_review") && resultFilled ? { title: "Всё заполнено, можно передать на проверку", hint: "Координатор проверит акт и фото и закроет задачу." }
+          : workflowActions.some((action) => action.code === "submit_for_review") && resultFilled ? (photosMissing
+            ? { title: "Загрузите фото с выезда", hint: `Для проверки нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, сейчас ${photoCount}. Добавьте ещё ${photosMissing} во вкладке «Работа и акт» или в форме результата.`, tone: "warning" as const }
+            : { title: "Всё заполнено, можно передать на проверку", hint: "Координатор проверит акт и фото и закроет задачу." })
             : needsResult && isTaskEngineer ? { title: "Заполните результат работ", hint: hasActPhoto ? "Опишите причину вызова и работы, отметьте пункты акта. Потом появится кнопка «Передать на проверку»." : "Опишите работы и загрузите фото подписанного акта. Потом появится кнопка «Передать на проверку»." }
               : needsResult ? { title: `Задача в работе у инженера${card.engineer ? ` ${card.engineer.fullName}` : ""}`, hint: reworkNote ? `Возвращена на доработку: ${reworkNote}` : "Инженер заполнит результат и передаст задачу на проверку. При необходимости результат можно дописать за него." }
                 : workflowActions.some((action) => action.code === "activate") ? { title: "Задача запланирована", hint: "Когда подойдёт срок, отметьте её как новую, чтобы назначить инженера." }
@@ -1010,7 +1029,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <div className="task-next-step__actions">
         {needsResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={workflowActions.length || !isTaskEngineer ? "secondary" : "primary"}>{!isTaskEngineer ? "Заполнить результат за инженера" : resultFilled ? "Изменить результат и фото" : "Заполнить результат и фото"}</Button> : null}
         {canAssign ? <Button disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)}>Назначить инженера</Button> : null}
-        {workflowActions.filter((action) => action.code !== "submit_for_review" || resultFilled).map((action) => <Button busy={busy} disabled={busy} key={action.code} onClick={() => void perform(action.code)}>{action.label}</Button>)}
+        {workflowActions.filter((action) => action.code !== "submit_for_review" || readyForReview).map((action) => <Button busy={busy} disabled={busy} key={action.code} onClick={() => void perform(action.code)}>{action.label}</Button>)}
       </div>
     </section> : null}
     {task.status === "under_review" && (canCloseReview || canReturnReview) ? <ClosureReview
@@ -1136,6 +1155,11 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <label className="field-wide">Замечания пользователя<AutoTextarea defaultValue={task.userRemarks ?? ""} maxLength={2000} name="userRemarks" rows={3} /></label>
       <label>Причина неисправности<Select defaultValue={task.reasonCode ?? card.reason?.code ?? ""} name="reasonCode"><option value="">Не выбрана</option>{card.reason && !resultCatalogs.reasons.some((item) => (item.code ?? item.id) === card.reason?.code) ? <option value={card.reason.code}>{card.reason.name}</option> : null}{resultCatalogs.reasons.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
       {card.canSetWorkModifier ? <label>Гарантия или неправильная эксплуатация<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Обычная работа</option><option value="G">Г, гарантийная</option><option value="N">Н, неправильная эксплуатация</option></Select></label> : null}
+      <label>Дата выезда<DatePicker defaultValue={task.visitDate ?? todayIsoDate()} name="visitDate" /></label>
+      <div className="result-times">
+        <label>Начало работ<input autoComplete="off" defaultValue={formatDisplayTime(task.workStartedAt)} inputMode="numeric" name="workStartTime" placeholder="чч:мм" /></label>
+        <label>Окончание работ<input autoComplete="off" defaultValue={formatDisplayTime(task.workFinishedAt)} inputMode="numeric" name="workFinishTime" placeholder="чч:мм" /></label>
+      </div>
       {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
       {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
       <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
@@ -1145,7 +1169,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <label className="field-check"><input defaultChecked={task.continuedInPrimary === true} name="continuedInPrimary" type="checkbox" /><span>Продолжение первичной заявки</span></label>
       </fieldset>
       <FileDropField accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hint={hasActPhoto ? "Фото акта уже есть, можно заменить новым" : "Обязательно для передачи на проверку: JPEG, PNG, WebP или HEIC"} name="actPhoto" title="Фото подписанного акта" />
-      <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Необязательно. Можно выбрать сразу несколько: всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео).`} multiple name="fieldMedia" title="Фото и видео с выезда" />
+      <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео). Можно выбрать сразу несколько.`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
     {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
     <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
@@ -1314,6 +1338,9 @@ async function moveTaskOnBoard(id: string, status: string): Promise<void> {
     const readiness = await m2Api.taskReviewReadiness(id);
     if (!readiness.hasClosure) throw new Error("Сначала заполните результат работ и загрузите фото акта в карточке задачи");
     if (!readiness.resultFilled) throw new Error("Сначала заполните в карточке задачи причину вызова и описание работ");
+    if (readiness.photoCount < MIN_CLOSURE_PHOTOS) {
+      throw new Error(`Для проверки нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, сейчас ${readiness.photoCount}. Загрузите их в карточке задачи`);
+    }
   }
   await m2Api.transitionTask(id, status);
 }

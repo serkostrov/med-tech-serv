@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ClosureReview } from "./ClosureReview.js";
+import { ClosureReview, closureBlockers } from "./ClosureReview.js";
 import type { TaskCardResponse } from "./m2-api.js";
 
 const card: TaskCardResponse = {
@@ -69,12 +69,31 @@ describe("coordinator closure review", () => {
     const markup = render();
     for (const expected of [
       "Проверка закрытия", "Инженер Учебный передал работу на проверку", "Фото акта загружено",
-      "Фото и видео с выезда: 1", "Запчасти: 1", "Проверено — закрыть", "На доработку"
+      "Фото с выезда: 1 из 3 обязательных", "Запчасти: 1", "Проверено — закрыть", "На доработку"
     ]) assert.ok(markup.includes(expected), expected);
     // Результат, файлы и запчасти показаны один раз ниже, во вкладках карточки, а не здесь.
     for (const repeated of ["акт-тест-35.jpg", "фото-работы-35.jpg", "TEST-PART-35", "Выполнена диагностика и замена узла", "Открыть акт"]) {
       assert.ok(!markup.includes(repeated), repeated);
     }
+  });
+
+  it("не даёт закрыть без трёх фото с выезда и объясняет почему, с тремя фото закрыть можно", () => {
+    const blocked = render();
+    assert.ok(blocked.includes("Закрыть пока нельзя: фото с выезда 1 из 3 обязательных"));
+    assert.match(blocked, /<button[^>]*disabled=""[^>]*>Проверено — закрыть<\/button>/u);
+    const photo = (index: number) => ({ id: `photo-${index}`, kind: "photo" as const, originalName: `фото-${index}.jpg`, contentType: "image/jpeg", byteSize: 1024, createdAt: "2026-08-18T09:52:00.000Z" });
+    const ready = render({ card: { ...card, files: [...card.files, photo(2), photo(3)] } });
+    assert.ok(!ready.includes("Закрыть пока нельзя"));
+    assert.ok(ready.includes("Фото с выезда: 3"));
+    assert.doesNotMatch(ready, /<button[^>]*disabled=""[^>]*>Проверено — закрыть<\/button>/u);
+  });
+
+  it("называет, чего не хватает для закрытия: акт, фото, отметки акта", () => {
+    // Акт удалили: в закрытии ссылка на файл, которого больше нет.
+    const noAct = closureBlockers({ ...card, closure: { ...card.closure!, actFileId: "act-deleted" }, files: card.files.filter((file) => file.kind !== "act") });
+    assert.ok(noAct.includes("нет фото акта"));
+    const unchecked = closureBlockers({ ...card, task: { ...card.task, apparatusApproved: false, customerHasNoClaims: false } });
+    assert.ok(unchecked.some((item) => item === "не отмечено в акте: аппарат исправен и допущен, претензий нет"), JSON.stringify(unchecked));
   });
 
   it("shows the latest hand-in from the task history, not the first saved act", () => {
