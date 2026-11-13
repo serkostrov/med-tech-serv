@@ -3,6 +3,7 @@ import { availableTaskActions, type AvailableTaskAction } from "./domain/task-ac
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
+import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
@@ -269,7 +270,7 @@ export interface EngineerOverview {
   readonly id: string;
   readonly fullName: string;
   readonly isActive: boolean;
-  readonly competencies: readonly { readonly manufacturer?: string; readonly modelLine?: string }[];
+  readonly competencies: readonly EngineerCompetency[];
   readonly assignedTaskCount: number;
   readonly inProgressTaskCount: number;
   readonly overdueTaskCount: number;
@@ -531,6 +532,18 @@ export function publicApiErrorMessage(message: string | undefined, fallback = "�
   if (/tasks_engineer_required_after_assignment/iu.test(text)) {
     return "Для этого статуса нужно назначить инженера.";
   }
+  // Удаление периода, по которому уже создана задача (старый путь сохранения плана).
+  if (/task_maintenance_plan_equipment_fk/iu.test(text) && /update or delete on table "?maintenance_plans/iu.test(text)) {
+    return "По этому прибору уже созданы задачи из плана: периоды с задачами нельзя изменить или удалить.";
+  }
+  // Этап задачи выключен в справочнике статусов (например, «Запланирована» для задач из плана ТО).
+  const inactiveStatus = /Статус задачи не активен: (\w+)/u.exec(text);
+  if (inactiveStatus) {
+    // Название как в справочнике и на доске: «Запланировано», а не «Запланирована».
+    const code = inactiveStatus[1] ?? "";
+    const label = code === "planned" ? "Запланировано" : TASK_STATUS_LABELS[code] ?? code;
+    return `Этап «${label}» выключен в справочнике статусов задач. Включите его в «Справочниках».`;
+  }
   // Коды статусов из базы («under_review») показываем по-русски.
   const transition = /Недопустимый переход задачи: (\w+) -> (\w+)/u.exec(text) ?? /перевести задачу из «(\w+)» в «(\w+)»/u.exec(text);
   if (transition) {
@@ -754,6 +767,25 @@ export async function allPages(
   }
   return rows;
 }
+
+/** Сколько id за раз уходит в фильтр «in»: длинный список не помещается в адрес запроса. */
+const IN_FILTER_CHUNK = 100;
+
+function inChunks<T>(items: readonly T[], size: number): T[][] {
+  const result: T[][] = [];
+  for (let index = 0; index < items.length; index += size) result.push(items.slice(index, index + size));
+  return result;
+}
+
+/** PostgREST не знает связи между таблицами (схема базы старше приложения). */
+function isMissingRelationship(error: { readonly message?: string; readonly code?: string; readonly details?: string; readonly hint?: string } | null): boolean {
+  if (!error) return false;
+  return /PGRST200|PGRST201|relationship/iu.test([error.code, error.message, error.details, error.hint].filter(Boolean).join(" "));
+}
+
+const MAINTENANCE_PLAN_SELECT = "id, equipment_id, plan_year, period_no, period_from, period_to, status, assigned_engineer_id, comment, equipment:equipment(serial_number, manufacturer:manufacturers(name), model:equipment_models(name), site:sites!current_site_id(id, name, organization_id, organization:organizations(name))), engineer:users!assigned_engineer_id(full_name)";
+/** Задача, созданная по периоду: связь по составному ключу (период, прибор). */
+const MAINTENANCE_PLAN_TASK_EMBED = "generated_task:tasks!task_maintenance_plan_equipment_fk(id)";
 
 /** День по местному времени («2026-11-12») для момента ISO; строка без времени возвращается как есть. */
 export function localDay(value: string | undefined): string | undefined {
@@ -2221,6 +2253,11 @@ export class M2ApiClient {
   }
 
   public async createTask(input: Readonly<Record<string, unknown>>): Promise<TaskApiRecord> {
+    return this.loadTask(await this.insertTask(input));
+  }
+
+  /** Вставка задачи без чтения карточки: id новой задачи. */
+  private async insertTask(input: Readonly<Record<string, unknown>>): Promise<string> {
     const actor = await this.actorId();
     let siteId = input.siteId ?? null;
     let payerId = input.payerId ?? null;
@@ -2233,9 +2270,13 @@ export class M2ApiClient {
       throw new M2ApiError(400, "Укажите прибор с площадкой и плательщиком в паспорте.");
     }
     const callReason = typeof input.callReason === "string" ? input.callReason.trim() : "";
+    // Задача из плана ТО создаётся «Запланированной»: новой её сделает запуск по расписанию
+    // (activate_due_maintenance_tasks) к началу периода. Остальные задачи создаются новыми.
+    const planned = input.isMaintenancePlan === true && input.statusCode === "planned";
     const payload = {
       title: input.title,
       work_type_code: String(input.workTypeCode || "diagnostics"),
+      ...(planned ? { status_code: "planned" } : {}),
       priority: input.priority ?? "planned",
       is_maintenance_plan: input.isMaintenancePlan === true,
       maintenance_plan_id: input.maintenancePlanId ?? null,
@@ -2267,7 +2308,7 @@ export class M2ApiClient {
       ({ data, error } = await this.db().from("tasks").insert(withoutInitiator).select("id").single());
     }
     throwIfError(error, "Не получилось создать задачу");
-    return this.loadTask(text(asRow(data), "id"));
+    return text(asRow(data), "id");
   }
 
   public async updateTaskOverview(id: string, input: {
@@ -2414,16 +2455,8 @@ export class M2ApiClient {
     view: "equipment" | "engineer" | "organization",
     filters: { readonly equipmentId?: string; readonly engineerId?: string; readonly organizationId?: string } = {}
   ): Promise<MaintenancePlanListResponse> {
-    let request = this.db()
-      .from("maintenance_plans")
-      .select("id, equipment_id, plan_year, period_no, period_from, period_to, status, assigned_engineer_id, comment, equipment:equipment(serial_number, manufacturer:manufacturers(name), model:equipment_models(name), site:sites!current_site_id(id, name, organization_id, organization:organizations(name))), engineer:users!assigned_engineer_id(full_name)")
-      .eq("plan_year", year)
-      .order("period_from");
-    if (filters.equipmentId) request = request.eq("equipment_id", filters.equipmentId);
-    if (filters.engineerId) request = request.eq("assigned_engineer_id", filters.engineerId);
-    const { data, error } = await request;
-    throwIfError(error);
-    const items: MaintenancePlanPeriodResponse[] = (data ?? []).map((item) => {
+    const data = await this.maintenancePlanRows(year, filters);
+    const items: MaintenancePlanPeriodResponse[] = data.map((item) => {
       const row = asRow(item);
       const equipment = related(row, "equipment");
       const site = related(equipment, "site");
@@ -2440,6 +2473,7 @@ export class M2ApiClient {
         assignedEngineerId: optionalText(row, "assigned_engineer_id"),
         assignedEngineerName: optionalText(related(row, "engineer"), "full_name"),
         comment: optionalText(row, "comment"),
+        generatedTaskId: optionalText(related(row, "generated_task"), "id"),
         equipment: {
           serialNumber: text(equipment, "serial_number"),
           manufacturer: text(related(equipment, "manufacturer"), "name"),
@@ -2467,72 +2501,185 @@ export class M2ApiClient {
     return { year, view, items, groups: [...groupsMap.values()] };
   }
 
+  /**
+   * Все периоды года, а не первые 1000 (столько сервер отдаёт за раз), вместе с задачей,
+   * созданной по периоду. Если база не знает связи с задачами, план читается без них.
+   */
+  private async maintenancePlanRows(
+    year: number,
+    filters: { readonly equipmentId?: string; readonly engineerId?: string }
+  ): Promise<unknown[]> {
+    let relationMissing = false;
+    const load = (select: string) => allPages((start, end, withCount) => {
+      let request = this.db().from("maintenance_plans")
+        .select(select, withCount ? { count: "exact" } : undefined)
+        .eq("plan_year", year);
+      if (filters.equipmentId) request = request.eq("equipment_id", filters.equipmentId);
+      if (filters.engineerId) request = request.eq("assigned_engineer_id", filters.engineerId);
+      return request.order("period_from").order("id").range(start, end).then((response) => {
+        if (isMissingRelationship(response.error)) relationMissing = true;
+        return response;
+      });
+    }, "Не получилось загрузить план ТО");
+    try {
+      return await load(`${MAINTENANCE_PLAN_SELECT}, ${MAINTENANCE_PLAN_TASK_EMBED}`);
+    } catch (error) {
+      if (!relationMissing) throw error;
+      return load(MAINTENANCE_PLAN_SELECT);
+    }
+  }
+
+  /**
+   * Годовой план прибора сохраняется одной транзакцией (функция базы, миграция 0026): если новый
+   * период не сохранится, старые останутся. Периоды с задачей и закрытые база не меняет (их даты
+   * должны прийти без изменений), свободные с теми же датами меняет на месте, остальные заменяет.
+   * Номер ТО на экране — порядок дат, period_no в базе — только место периода.
+   */
   public async replaceMaintenancePlan(input: ReplaceAnnualMaintenancePlanRequest): Promise<{
     readonly year: number;
     readonly items: MaintenancePlanListResponse["items"];
   }> {
     assertAnnualMaintenancePlan(input);
-    const actor = await this.actorId();
-    const { error: deleteError } = await this.db().from("maintenance_plans").delete().eq("equipment_id", input.equipmentId).eq("plan_year", input.year);
-    throwIfError(deleteError);
-    const rows = input.periods.map((period, index) => ({
-      equipment_id: input.equipmentId,
-      plan_year: input.year,
-      period_no: index + 1,
-      period_from: period.periodFrom,
-      period_to: period.periodTo,
-      work_type_code: "maintenance",
-      assigned_engineer_id: period.assignedEngineerId ?? null,
-      comment: period.comment ?? null,
-      created_by: actor
-    }));
-    const { error } = await this.db().from("maintenance_plans").insert(rows);
-    throwIfError(error);
+    const periods = [...input.periods].sort((left, right) => left.periodFrom.localeCompare(right.periodFrom) || left.periodTo.localeCompare(right.periodTo));
+    const { error } = await this.db().rpc("replace_maintenance_plan", {
+      p_equipment_id: input.equipmentId,
+      p_year: input.year,
+      p_periods: periods.map((period) => ({
+        periodFrom: period.periodFrom,
+        periodTo: period.periodTo,
+        assignedEngineerId: period.assignedEngineerId || null,
+        comment: period.comment?.trim() || null
+      }))
+    });
+    if (error && (error as { readonly code?: string }).code === "PGRST202") {
+      await this.replaceMaintenancePlanInSteps(input.equipmentId, input.year, periods);
+    } else {
+      throwIfError(error, "Не получилось сохранить план");
+    }
     const list = await this.maintenancePlans(input.year, "equipment", { equipmentId: input.equipmentId });
     return { year: input.year, items: list.items };
   }
 
+  /** Пока в базе нет функции из 0026: как раньше, удаление и вставка отдельными запросами. */
+  private async replaceMaintenancePlanInSteps(
+    equipmentId: string,
+    year: number,
+    periods: ReplaceAnnualMaintenancePlanRequest["periods"]
+  ): Promise<void> {
+    const actor = await this.actorId();
+    const { error: deleteError } = await this.db().from("maintenance_plans").delete().eq("equipment_id", equipmentId).eq("plan_year", year);
+    throwIfError(deleteError, "Не получилось сохранить план");
+    const rows = periods.map((period, index) => ({
+      equipment_id: equipmentId,
+      plan_year: year,
+      period_no: index + 1,
+      period_from: period.periodFrom,
+      period_to: period.periodTo,
+      work_type_code: "maintenance",
+      assigned_engineer_id: period.assignedEngineerId || null,
+      comment: period.comment?.trim() || null,
+      created_by: actor
+    }));
+    const { error } = await this.db().from("maintenance_plans").insert(rows);
+    throwIfError(error, "Не получилось сохранить план");
+  }
+
+  /**
+   * Задачи по запланированным периодам года: «Запланированные», с инженером из плана, если он
+   * указан. Новыми их делает запуск по расписанию к началу периода. Повторный запуск задач не
+   * дублирует: у периода задача одна (tasks_maintenance_plan_once_uq).
+   */
   public async generateMaintenanceTasks(year: number, planIds?: readonly string[]): Promise<GenerateMaintenanceTasksResponse> {
     const actor = await this.actorId();
-    let request = this.db().from("maintenance_plans").select("id, equipment_id, period_from, period_to, assigned_engineer_id, status").eq("plan_year", year).eq("status", "planned");
-    if (planIds?.length) request = request.in("id", [...planIds]);
-    const { data, error } = await request;
-    throwIfError(error);
+    const rows = await this.plannedMaintenanceRows(year, planIds);
     const created: Array<{ readonly planId: string; readonly taskId: string }> = [];
     const existing: Array<{ readonly planId: string; readonly taskId: string }> = [];
     const failures: Array<{ readonly planId: string; readonly code: "invalid_status" | "missing_relation" | "not_found"; readonly error: string }> = [];
-    for (const item of data ?? []) {
-      const row = asRow(item);
-      const planId = text(row, "id");
-      const { data: existingTask, error: existingError } = await this.db().from("tasks").select("id").eq("maintenance_plan_id", planId).maybeSingle();
-      throwIfError(existingError);
-      if (existingTask) {
-        existing.push({ planId, taskId: text(asRow(existingTask), "id") });
-        continue;
-      }
-      try {
-        const task = await this.createTask({
-          title: `ТО ${year}`,
-          workTypeCode: "maintenance",
-          isMaintenancePlan: true,
-          maintenancePlanId: planId,
-          equipmentId: text(row, "equipment_id"),
-          engineerId: optionalText(row, "assigned_engineer_id"),
-          periodFrom: text(row, "period_from"),
-          periodTo: text(row, "period_to")
-        });
-        const { error: updateError } = await this.db().from("maintenance_plans").update({
-          status: "generated",
-          generated_at: new Date().toISOString(),
-          generated_by: actor
-        }).eq("id", planId);
-        throwIfError(updateError);
-        created.push({ planId, taskId: task.id });
-      } catch (caught) {
-        failures.push({ planId, code: "invalid_status", error: caught instanceof Error ? caught.message : "Не удалось создать задачу" });
+    for (const chunk of inChunks(rows, IN_FILTER_CHUNK)) {
+      // Уже созданные задачи этих периодов одним запросом, а не по запросу на период.
+      const ids = chunk.map((item) => text(asRow(item), "id"));
+      const { data: tasks, error: tasksError } = await this.db().from("tasks").select("id, maintenance_plan_id").in("maintenance_plan_id", ids);
+      throwIfError(tasksError, "Не получилось проверить задачи плана");
+      const taskByPlan = new Map((tasks ?? []).map((item) => [text(asRow(item), "maintenance_plan_id"), text(asRow(item), "id")]));
+      for (const item of chunk) {
+        const row = asRow(item);
+        const planId = text(row, "id");
+        const existingTaskId = taskByPlan.get(planId);
+        if (existingTaskId) {
+          // Задача уже есть, а период всё ещё «Запланирован» (прошлый запуск прервался): отмечаем.
+          existing.push({ planId, taskId: existingTaskId });
+          await this.markMaintenancePeriodGenerated(planId, actor);
+          continue;
+        }
+        let taskId: string;
+        try {
+          // Только вставка, без чтения карточки: ошибка чтения не выдала бы созданную задачу за неудачу.
+          taskId = await this.insertTask({
+            title: `ТО ${year}`,
+            workTypeCode: "maintenance",
+            statusCode: "planned",
+            isMaintenancePlan: true,
+            maintenancePlanId: planId,
+            equipmentId: text(row, "equipment_id"),
+            engineerId: optionalText(row, "assigned_engineer_id"),
+            periodFrom: text(row, "period_from"),
+            periodTo: text(row, "period_to")
+          });
+        } catch (caught) {
+          // Задачу по периоду мог только что создать другой координатор: тогда она «уже была».
+          const { data: raced } = await this.db().from("tasks").select("id").eq("maintenance_plan_id", planId).maybeSingle();
+          if (raced) {
+            existing.push({ planId, taskId: text(asRow(raced), "id") });
+            await this.markMaintenancePeriodGenerated(planId, actor);
+            continue;
+          }
+          failures.push({ planId, code: "invalid_status", error: caught instanceof Error ? caught.message : "Не удалось создать задачу" });
+          continue;
+        }
+        // Задача создана: она и считается, даже если отметка периода не запишется
+        // (её поставит следующий запуск, задача второй раз не создастся).
+        created.push({ planId, taskId });
+        await this.markMaintenancePeriodGenerated(planId, actor);
       }
     }
-    return { requestedCount: (data ?? []).length, created, existing, failures };
+    return { requestedCount: rows.length, created, existing, failures };
+  }
+
+  /** Запланированные периоды года: все или выбранные (id частями, чтобы адрес запроса не вырос). */
+  private async plannedMaintenanceRows(year: number, planIds?: readonly string[]): Promise<unknown[]> {
+    const select = "id, equipment_id, period_from, period_to, assigned_engineer_id, status";
+    if (!planIds?.length) {
+      return allPages((start, end, withCount) => this.db().from("maintenance_plans")
+        .select(select, withCount ? { count: "exact" } : undefined)
+        .eq("plan_year", year).eq("status", "planned")
+        .order("period_from").order("id")
+        .range(start, end), "Не получилось загрузить план ТО");
+    }
+    const rows: unknown[] = [];
+    for (const ids of inChunks([...new Set(planIds)], IN_FILTER_CHUNK)) {
+      const { data, error } = await this.db().from("maintenance_plans").select(select)
+        .eq("plan_year", year).eq("status", "planned").in("id", ids)
+        .order("period_from").order("id");
+      throwIfError(error, "Не получилось загрузить план ТО");
+      rows.push(...(data ?? []));
+    }
+    return rows;
+  }
+
+  /**
+   * Период отмечается «Задача создана», только если он ещё «Запланирован». Ошибку не поднимаем:
+   * задача уже есть и видна в плане, отметку поставит следующий запуск (задача не задвоится).
+   */
+  private async markMaintenancePeriodGenerated(planId: string, actor: string): Promise<void> {
+    try {
+      await this.db().from("maintenance_plans").update({
+        status: "generated",
+        generated_at: new Date().toISOString(),
+        generated_by: actor
+      }).eq("id", planId).eq("status", "planned");
+    } catch {
+      // Сеть оборвалась: отметку поставит следующий запуск.
+    }
   }
 
   public async taskCard(id: string): Promise<TaskCardResponse> {
@@ -2754,7 +2901,7 @@ export class M2ApiClient {
     // Инженеры и их открытые задачи одновременно. Загрузка: только незакрытые задачи,
     // все, а не первые 1000 (столько сервер отдаёт за один запрос).
     const [{ data, error }, tasks] = await Promise.all([
-      this.db().from("users").select("id, full_name, is_active, engineer_competencies(model_line, manufacturer:manufacturers(name))").eq("role", "engineer").order("full_name"),
+      this.db().from("users").select("id, full_name, is_active, engineer_competencies(id, manufacturer_id, model_line, manufacturer:manufacturers(name))").eq("role", "engineer").order("full_name"),
       allPages((start, end, withCount) => this.db().from("tasks")
         .select("id, engineer_id, status_code, deadline_to", withCount ? { count: "exact" } : undefined)
         .not("engineer_id", "is", null).not("status_code", "in", "(closed,cancelled)")
@@ -2773,9 +2920,14 @@ export class M2ApiClient {
         id,
         fullName: text(row, "full_name"),
         isActive: row.is_active !== false,
-        competencies: competencies.map((competency) => ({
-          manufacturer: optionalText(related(asRow(competency), "manufacturer"), "name"),
-          modelLine: optionalText(asRow(competency), "model_line")
+        competencies: sortCompetencies(competencies.map((competency) => {
+          const value = asRow(competency);
+          return {
+            id: optionalText(value, "id"),
+            manufacturerId: optionalText(value, "manufacturer_id"),
+            manufacturer: optionalText(related(value, "manufacturer"), "name"),
+            modelLine: optionalText(value, "model_line")
+          };
         })),
         assignedTaskCount: assigned.length,
         inProgressTaskCount: assigned.filter((task) => text(asRow(task), "status_code") === "in_progress").length,
@@ -2788,7 +2940,27 @@ export class M2ApiClient {
     });
   }
 
+  /**
+   * Карточка инженера: имя, активность и набор компетенций. Набор заменяется целиком функцией
+   * базы (миграция 0026) в одной транзакции: убранные удаляются, новые добавляются, при ошибке
+   * набор не меняется. Компетенции сохраняются первыми, имя — вторым запросом: если функции
+   * в базе ещё нет или набор не прошёл проверку, не меняется ничего; если после набора не
+   * сохранилось имя, окно покажет ошибку, и повтор запишет только имя.
+   */
   public async updateEngineer(id: string, input: Readonly<Record<string, unknown>>): Promise<EngineerOverview> {
+    if (Array.isArray(input.competencies)) {
+      let competencies: ReturnType<typeof competencyPayload>;
+      try {
+        competencies = competencyPayload(input.competencies as readonly EngineerCompetency[]);
+      } catch (invalid) {
+        throw new M2ApiError(400, invalid instanceof Error ? invalid.message : "Проверьте компетенции");
+      }
+      const { error } = await this.db().rpc("replace_engineer_competencies", { p_engineer_id: id, p_competencies: competencies });
+      if (error && (error as { readonly code?: string }).code === "PGRST202") {
+        throw new M2ApiError(501, "Компетенции заработают после обновления базы на сервере. Карточка пока не сохранена");
+      }
+      throwIfError(error, "Не получилось сохранить компетенции");
+    }
     const patch: Row = {};
     if (input.fullName !== undefined) patch.full_name = input.fullName;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
@@ -3273,13 +3445,17 @@ export class M2ApiClient {
     return this.loadTask(id);
   }
 
-  public async taskAssignmentSuggestions(_id: string, manufacturer: string, modelLine?: string): Promise<readonly AssignmentSuggestionRecord[]> {
-    const engineers = await this.engineers();
+  /**
+   * Кого назначить: по компетенциям (производитель и линейка модели прибора) и занятости.
+   * Отключённых инженеров не предлагаем: база всё равно не даст назначить их.
+   */
+  public async taskAssignmentSuggestions(_id: string, manufacturer: string, model?: string): Promise<readonly AssignmentSuggestionRecord[]> {
+    const engineers = (await this.engineers()).filter((engineer) => engineer.isActive);
     return engineers.map((engineer) => ({
       engineerId: engineer.id,
       fullName: engineer.fullName,
       isAvailable: engineer.inProgressTaskCount === 0,
-      previouslyWorkedWithEquipment: engineer.competencies.some((competency) => competency.manufacturer === manufacturer && (!modelLine || competency.modelLine === modelLine))
+      previouslyWorkedWithEquipment: engineer.competencies.some((competency) => competencyMatchesEquipment(competency, manufacturer, model))
     }));
   }
 

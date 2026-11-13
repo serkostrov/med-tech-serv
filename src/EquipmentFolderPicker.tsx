@@ -14,10 +14,13 @@ const EMPTY_REFERENCES: EquipmentPassportReferences = {
 
 export function EquipmentFolderPicker({
   equipment,
-  onSelect
+  onSelect,
+  allowCreate = true
 }: {
   readonly equipment: readonly EquipmentApiRecord[];
   readonly onSelect: (device: EquipmentApiRecord) => void;
+  /** Кнопка «Новый» с созданием прибора; в плане ТО прибор только выбирают из уже заведённых. */
+  readonly allowCreate?: boolean;
 }) {
   const [query, setQuery] = useState("");
   const [open, setOpen] = useState(false);
@@ -201,10 +204,10 @@ export function EquipmentFolderPicker({
       return;
     }
     if (event.key === "Enter") {
-      if (open && activeDevice) {
-        event.preventDefault();
-        chooseEquipment(activeDevice.id);
-      }
+      // Enter в поиске прибора никогда не отправляет окно целиком: пока список грузится
+      // или пуст, так ушла бы форма со старым прибором.
+      event.preventDefault();
+      if (open && activeDevice) chooseEquipment(activeDevice.id);
       return;
     }
     if (event.key === "Escape") {
@@ -241,7 +244,7 @@ export function EquipmentFolderPicker({
             type="search"
             value={query}
           />
-          <Button icon="plus" onClick={openCreate} type="button" variant="secondary">Новый</Button>
+          {allowCreate ? <Button icon="plus" onClick={openCreate} type="button" variant="secondary">Новый</Button> : null}
         </div>
         {open ? (
           <div
@@ -276,7 +279,7 @@ export function EquipmentFolderPicker({
                 {equipmentLoading && !equipmentLoaded
                   ? "Загружаем приборы…"
                   : liveEquipment.length === 0
-                  ? "Приборов пока нет. Нажмите «Новый», чтобы добавить прибор."
+                  ? allowCreate ? "Приборов пока нет. Нажмите «Новый», чтобы добавить прибор." : "Приборов пока нет. Добавьте прибор в разделе «Приборы»."
                   : "Приборов по этому запросу нет"}
               </p>
             ) : null}
@@ -286,7 +289,7 @@ export function EquipmentFolderPicker({
           </div>
         ) : null}
       </div>
-      <AddEquipmentDialog
+      {allowCreate ? <AddEquipmentDialog
         availableModels={availableModels}
         error={formError}
         manufacturerId={manufacturerId}
@@ -300,7 +303,7 @@ export function EquipmentFolderPicker({
         references={references}
         saving={saving}
         sites={sites}
-      />
+      /> : null}
     </div>
   );
 }
