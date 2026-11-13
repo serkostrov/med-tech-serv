@@ -3,7 +3,8 @@ import { m2Api, type EngineerOverview, type InventoryPartRecord, type Operations
 import { EngineerCompetencyEditor, type CompetencyDraft, type CompetencyReferences } from "./EngineerCompetencyEditor.js";
 import { competenciesToSave, competencyKey, competencyLabel, withManufacturerIds, type EngineerCompetency } from "./engineer-competencies.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, toast } from "./ui.js";
-import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate, todayIsoDate } from "./date-format.js";
+import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate } from "./date-format.js";
+import { companyToday } from "./task-dates.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { reportFileName, reportWorkbook } from "./report-export.js";
 import { XLSX_MIME } from "./xlsx.js";
@@ -233,7 +234,8 @@ function startOfMonth(iso: string, monthsBack = 0): string {
   return isoCalendarDate(date.getUTCFullYear(), date.getUTCMonth() + 1, 1) ?? iso;
 }
 
-function periodForPreset(preset: ReportPreset, today = todayIsoDate()): { readonly from: string; readonly to: string } {
+/** Период отчёта до сегодняшнего дня по Москве: данные компании считаются по её часам, а не по поясу устройства. */
+function periodForPreset(preset: ReportPreset, today = companyToday()): { readonly from: string; readonly to: string } {
   const monthsBack = preset === "month" ? 0 : preset === "quarter" ? 2 : preset === "half" ? 5 : 11;
   return { from: startOfMonth(today, monthsBack), to: today };
 }

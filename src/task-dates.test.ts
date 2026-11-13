@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { companyDateText, companyDateTimeToIso, companyTime, taskCalendarDate } from "./task-dates.js";
+import { companyDateText, companyDateTimeToIso, companyDay, companyDayEnd, companyDayStart, companyTime, companyToday, taskCalendarDate } from "./task-dates.js";
 
 describe("task calendar dates", () => {
   it("keeps midnight on the selected Moscow calendar day", () => {
@@ -31,6 +31,25 @@ describe("время работ по часам компании", () => {
       assert.equal(companyTime(iso), "09:30");
       assert.equal(companyDateText("2026-11-13T22:30:00.000Z"), "14.11.2026");
       assert.equal(companyTime(undefined), "");
+    } finally {
+      if (previousTimezone === undefined) delete process.env.TZ; else process.env.TZ = previousTimezone;
+    }
+  });
+
+  it("сутки для отчёта начинаются и кончаются по Москве", () => {
+    const previousTimezone = process.env.TZ;
+    // Пояс западнее Москвы: на машине разработчика (+07) проверка идёт в другую сторону.
+    process.env.TZ = "America/Los_Angeles";
+    try {
+      assert.equal(companyDayStart("2026-11-13"), "2026-11-12T21:00:00.000Z");
+      assert.equal(companyDayEnd("2026-11-13"), "2026-11-13T20:59:59.999Z");
+      assert.equal(companyDay("2026-11-12T21:30:00.000Z"), "2026-11-13", "00:30 по Москве уже следующий день");
+      assert.equal(companyToday(new Date("2026-11-12T21:30:00.000Z")), "2026-11-13");
+      assert.equal(companyToday(new Date("2026-11-12T20:59:00.000Z")), "2026-11-12");
+      assert.equal(companyDayStart("не дата"), undefined);
+      assert.equal(companyDayEnd(""), undefined);
+      assert.equal(companyDayStart("2026-02-30"), undefined, "несуществующий день не переезжает в март");
+      assert.equal(companyDayEnd("2026-11-31"), undefined);
     } finally {
       if (previousTimezone === undefined) delete process.env.TZ; else process.env.TZ = previousTimezone;
     }

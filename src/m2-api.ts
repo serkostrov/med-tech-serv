@@ -1,7 +1,7 @@
 import type { Permission, WorkingRole } from "./domain/access.js";
 import { availableTaskActions, type AvailableTaskAction } from "./domain/task-actions.js";
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
-import { companyDay } from "./task-dates.js";
+import { companyDay, companyDayEnd, companyDayStart, companyToday } from "./task-dates.js";
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
@@ -356,6 +356,8 @@ export interface ReportTaskRow {
   readonly periodFrom?: string;
   readonly periodTo?: string;
   readonly completedAt?: string;
+  /** Время окончания работ из результата: только с ним в отчёте показываем время окончания. */
+  readonly workFinishedAt?: string;
 }
 
 export class M2ApiError extends Error {
@@ -871,8 +873,10 @@ const MAINTENANCE_PLAN_SELECT = "id, equipment_id, plan_year, period_no, period_
 /** Задача, созданная по периоду: связь по составному ключу (период, прибор). */
 const MAINTENANCE_PLAN_TASK_EMBED = "generated_task:tasks!task_maintenance_plan_equipment_fk(id)";
 
-/** День по местному времени («2026-11-12») для момента ISO; строка без времени возвращается как есть. */
-/** День момента по часам компании (Москва), а не по поясу устройства того, кто смотрит отчёт. */
+/**
+ * День момента ISO («2026-11-12») по часам компании (Москва), а не по поясу устройства того,
+ * кто смотрит отчёт. Строка без времени возвращается как есть.
+ */
 export function localDay(value: string | undefined): string | undefined {
   if (!value) return undefined;
   if (/^\d{4}-\d{2}-\d{2}$/u.test(value)) return value;
@@ -889,7 +893,7 @@ export function bulkAssignMode(status: string): "assign" | "engineer_only" | "re
   return "refuse";
 }
 
-/** Закрыта вовремя: день окончания работ (по местному времени) не позже конца срока. Без срока или даты: не считаем. */
+/** Закрыта вовремя: день окончания работ (по часам компании) не позже конца срока. Без срока или даты: не считаем. */
 export function closedOnTime(completedAt: string | undefined, deadlineTo: string | undefined): boolean | undefined {
   const completed = localDay(completedAt);
   const deadline = deadlineTo?.slice(0, 10);
@@ -897,13 +901,14 @@ export function closedOnTime(completedAt: string | undefined, deadlineTo: string
   return completed <= deadline;
 }
 
-/** Границы периода отчёта по местному времени: с начала первого дня до конца последнего. */
+/**
+ * Границы периода отчёта по часам компании (Москва): с начала первого дня до конца последнего.
+ * На любом устройстве одинаково: задача, созданная в 01:00 по Москве, попадает в свой день.
+ */
 export function reportPeriodBounds(from: string, to: string): { readonly start: string; readonly end: string } {
-  const start = new Date(`${from}T00:00:00`);
-  const end = new Date(`${to}T23:59:59.999`);
   return {
-    start: Number.isNaN(start.getTime()) ? from : start.toISOString(),
-    end: Number.isNaN(end.getTime()) ? `${to}T23:59:59.999Z` : end.toISOString()
+    start: companyDayStart(from) ?? from,
+    end: companyDayEnd(to) ?? `${to}T23:59:59.999Z`
   };
 }
 
@@ -911,7 +916,7 @@ export function reportPeriodBounds(from: string, to: string): { readonly start: 
  * Просрочена ли заявка в отчёте за период: открыта и срок вышел к концу периода,
  * но не позже сегодняшнего дня (период может заканчиваться в будущем).
  */
-export function reportTaskOverdue(deadlineTo: string | undefined, status: string, periodTo: string, today = new Date().toISOString().slice(0, 10)): boolean {
+export function reportTaskOverdue(deadlineTo: string | undefined, status: string, periodTo: string, today = companyToday()): boolean {
   if (!deadlineTo || status === "closed" || status === "cancelled") return false;
   const reference = periodTo < today ? periodTo : today;
   return deadlineTo.slice(0, 10) < reference;
@@ -964,7 +969,7 @@ export function mapTask(row: Row): TaskApiRecord {
   const contract = related(row, "contract");
   const periodTo = optionalText(row, "deadline_to");
   const status = text(row, "status_code");
-  const isOverdue = Boolean(periodTo && !["closed", "cancelled"].includes(status) && periodTo < new Date().toISOString().slice(0, 10));
+  const isOverdue = Boolean(periodTo && !["closed", "cancelled"].includes(status) && periodTo < companyToday());
   const hours = numberValue(row.hours);
   const meterReading = numberValue(row.meter_reading);
   const workModifier = text(row, "work_modifier");
@@ -2206,7 +2211,7 @@ export class M2ApiClient {
       if (query.periodFrom) next = next.gte("deadline_to", query.periodFrom.slice(0, 10));
       if (query.periodTo) next = next.lte("deadline_from", query.periodTo.slice(0, 10));
       if (query.overdue) {
-        next = next.lt("deadline_to", new Date().toISOString().slice(0, 10)).not("status_code", "in", "(closed,cancelled)");
+        next = next.lt("deadline_to", companyToday()).not("status_code", "in", "(closed,cancelled)");
       }
       if (query.status) next = next.eq("status_code", query.status);
       if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
@@ -2405,7 +2410,7 @@ export class M2ApiClient {
       engineer_id: input.engineerId ?? null,
       deadline_from: input.periodFrom ?? null,
       deadline_to: input.periodTo ?? null,
-      call_date: input.callDate ?? new Date().toISOString().slice(0, 10),
+      call_date: input.callDate ?? companyToday(),
       visit_date: input.visitDate ?? null,
       call_reason: callReason || null,
       created_by: actor,
@@ -3039,7 +3044,7 @@ export class M2ApiClient {
     ]);
     throwIfError(error);
     const engineers = data ?? [];
-    const today = new Date().toISOString().slice(0, 10);
+    const today = companyToday();
     return engineers.map((item) => {
       const row = asRow(item);
       const id = text(row, "id");
@@ -3383,6 +3388,8 @@ export class M2ApiClient {
 
   public async operationsReport(from: string, to: string): Promise<OperationsReportRecord> {
     const bounds = reportPeriodBounds(from, to);
+    // «Сегодня» по Москве один раз на весь отчёт, а не на каждую задачу.
+    const today = companyToday();
     // Все заявки периода, а не первые 1000: столько сервер отдаёт за один запрос.
     const [tasks, workTypesResult] = await Promise.all([
       allPages((start, end, withCount) => this.db().from("tasks")
@@ -3426,7 +3433,7 @@ export class M2ApiClient {
         closedOnTimePercent: datedClosed ? Math.round((onTimeClosed / datedClosed) * 100) : 0,
         overdueCount: tasks.filter((item) => {
           const row = asRow(item);
-          return reportTaskOverdue(optionalText(row, "deadline_to"), text(row, "status_code"), to);
+          return reportTaskOverdue(optionalText(row, "deadline_to"), text(row, "status_code"), to, today);
         }).length,
         activeEngineerCount: 0,
         belowMinimumCount: 0
@@ -3451,7 +3458,7 @@ export class M2ApiClient {
    */
   public async operationsReportTasks(from: string, to: string): Promise<readonly ReportTaskRow[]> {
     const pageSize = 1000;
-    const select = "id, number, title, status_code, priority, work_type_code, deadline_from, deadline_to, completed_at, created_at, "
+    const select = "id, number, title, status_code, priority, work_type_code, deadline_from, deadline_to, completed_at, work_finished_at, created_at, "
       + "site:sites!site_id(name), device:equipment!equipment_id(serial_number, model:equipment_models(name), maker:manufacturers(name)), "
       + "engineer:users!engineer_id(full_name)";
     // Справочники и заявки читаем одновременно, а не друг за другом.
@@ -3488,7 +3495,8 @@ export class M2ApiClient {
         ...(optionalText(related(row, "engineer"), "full_name") ? { engineerName: optionalText(related(row, "engineer"), "full_name") } : {}),
         ...(optionalText(row, "deadline_from") ? { periodFrom: optionalText(row, "deadline_from") } : {}),
         ...(optionalText(row, "deadline_to") ? { periodTo: optionalText(row, "deadline_to") } : {}),
-        ...(optionalText(row, "completed_at") ? { completedAt: optionalText(row, "completed_at") } : {})
+        ...(optionalText(row, "completed_at") ? { completedAt: optionalText(row, "completed_at") } : {}),
+        ...(optionalText(row, "work_finished_at") ? { workFinishedAt: optionalText(row, "work_finished_at") } : {})
       });
     }
     return rows;

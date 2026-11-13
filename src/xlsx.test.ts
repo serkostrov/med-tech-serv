@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, mock } from "node:test";
 import { crc32 as nodeCrc32, inflateRawSync } from "node:zlib";
 import { buildXlsx, buildXlsxCompressed, columnName, crc32, escapeXml, excelDate } from "./xlsx.js";
 import { reportWorkbook, reportWorkbookSheets } from "./report-export.js";
-import { allPages, closedOnTime, localDay, reportPeriodBounds, type OperationsReportRecord, type ReportTaskRow } from "./m2-api.js";
+import { allPages, closedOnTime, localDay, reportPeriodBounds, reportTaskOverdue, type OperationsReportRecord, type ReportTaskRow } from "./m2-api.js";
 
 /** Читает zip без сжатия, как его пишет генератор: имя файла → содержимое. */
 function unzip(data: Uint8Array): Map<string, string> {
@@ -65,6 +65,9 @@ describe("Excel file", () => {
     assert.equal(excelDate("не дата"), undefined);
     // 15:00 UTC это 18:00 по Москве: время в Excel по часам компании, где бы ни открыли отчёт.
     assert.equal(excelDate("2026-11-12T15:00:00.000Z", true), 46338.75);
+    // Без времени дата тоже по Москве: 18:00 UTC 04.11 это 21:00 04.11 по Москве (на устройстве в +07 уже 05.11).
+    assert.equal(excelDate("2026-11-04T18:00:00.000Z"), 46330);
+    assert.equal(excelDate("2026-11-04T21:30:00.000Z"), 46331, "00:30 по Москве уже 05.11");
   });
 
   it("freezes and filters the header row of the tasks sheet", () => {
@@ -106,6 +109,15 @@ describe("report export", () => {
     assert.equal(first?.[13], "Да");
     assert.equal(second?.[14], "Да", "срок вышел, задача открыта");
     assert.equal(third?.[14], "", "срок ещё не вышел");
+  });
+
+  it("shows the end time only when the work end time was entered", () => {
+    const base: ReportTaskRow = { number: "З-9", createdAt: "2026-11-02T07:00:00.000Z", title: "Ремонт", status: "closed", statusName: "Закрыта", priority: "planned", periodTo: "2026-11-05", completedAt: "2026-11-04T09:00:00.000Z" };
+    const end = (task: ReportTaskRow): unknown => reportWorkbookSheets(report, [task], "2026-11-12")[1]?.rows[1]?.[12];
+    assert.deepEqual(end({ ...base, workFinishedAt: "2026-11-04T09:00:00.000Z" }), { date: "2026-11-04T09:00:00.000Z", withTime: true });
+    assert.deepEqual(end(base), { date: "2026-11-04T09:00:00.000Z", withTime: false }, "полдень дня выезда не выдаём за время окончания");
+    const { completedAt: _notSubmitted, ...open } = base;
+    assert.equal(end({ ...open, status: "in_progress", statusName: "В работе" }), "");
   });
 });
 
@@ -210,10 +222,21 @@ describe("large reports, edge cases", () => {
     assert.equal(closedOnTime(lateNight, "2026-11-12"), false);
     assert.equal(closedOnTime("2026-11-12T20:00:00.000Z", "2026-11-12"), true);
     assert.equal(closedOnTime(undefined, "2026-11-12"), undefined);
+    // Границы периода по Москве на любом устройстве: 00:00 1-го и 23:59:59.999 30-го по Москве.
     const bounds = reportPeriodBounds("2026-11-01", "2026-11-30");
-    assert.equal(new Date(bounds.start).getDate(), 1);
-    assert.equal(new Date(bounds.start).getHours(), 0);
-    assert.equal(new Date(bounds.end).getDate(), 30);
-    assert.equal(new Date(bounds.end).getHours(), 23);
+    assert.equal(bounds.start, "2026-10-31T21:00:00.000Z");
+    assert.equal(bounds.end, "2026-11-30T20:59:59.999Z");
+    assert.deepEqual(reportPeriodBounds("не дата", "тоже"), { start: "не дата", end: "тожеT23:59:59.999Z" });
+  });
+
+  it("counts overdue by the Moscow day when no day is given", () => {
+    // 21:30 UTC 12.11 это 00:30 13.11 по Москве: срок «по 12.11» уже вышел, хотя по UTC ещё 12-е.
+    mock.timers.enable({ apis: ["Date"], now: Date.parse("2026-11-12T21:30:00.000Z") });
+    try {
+      assert.equal(reportTaskOverdue("2026-11-12", "in_progress", "2026-12-31"), true);
+      assert.equal(reportTaskOverdue("2026-11-13", "in_progress", "2026-12-31"), false);
+    } finally {
+      mock.timers.reset();
+    }
   });
 });

@@ -15,14 +15,45 @@ export function companyDateTimeToIso(date: string, time: string): string {
   return moment.toISOString();
 }
 
+// Форматтеры создаём один раз: отчёт и выгрузка зовут их на каждую задачу, а новый Intl.DateTimeFormat дорогой.
+const COMPANY_PARTS_FORMAT = new Intl.DateTimeFormat("ru-RU", {
+  timeZone: COMPANY_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
+});
+const COMPANY_CLOCK_FORMAT = new Intl.DateTimeFormat("en-GB", {
+  timeZone: COMPANY_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+});
+
 function companyParts(value: string | undefined): Readonly<Record<string, string>> | null {
   if (!value) return null;
   const moment = new Date(value);
   if (Number.isNaN(moment.getTime())) return null;
-  const parts = new Intl.DateTimeFormat("ru-RU", {
-    timeZone: COMPANY_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23"
-  }).formatToParts(moment);
-  return Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return Object.fromEntries(COMPANY_PARTS_FORMAT.formatToParts(moment).map((part) => [part.type, part.value]));
+}
+
+/** Календарная дата или пусто, если такой даты нет («2026-02-30» не превращается в 2 марта). */
+function calendarDateOrUndefined(value: string): string | undefined {
+  try {
+    return taskCalendarDate(value);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Начало дня «2026-11-01» по часам компании как момент ISO (граница периода отчёта). Пусто, если даты нет. */
+export function companyDayStart(date: string): string | undefined {
+  const day = calendarDateOrUndefined(date);
+  return day ? new Date(`${day}T00:00:00${COMPANY_UTC_OFFSET}`).toISOString() : undefined;
+}
+
+/** Последний миг дня по часам компании (23:59:59.999) как момент ISO. Пусто, если даты нет. */
+export function companyDayEnd(date: string): string | undefined {
+  const day = calendarDateOrUndefined(date);
+  return day ? new Date(`${day}T23:59:59.999${COMPANY_UTC_OFFSET}`).toISOString() : undefined;
+}
+
+/** Сегодня по часам компании («2026-11-13»): от него считаем просрочку на доске, в фильтрах и отчётах. */
+export function companyToday(now = new Date()): string {
+  return companyDay(now.toISOString()) ?? now.toISOString().slice(0, 10);
 }
 
 /** «2026-11-13»: календарный день момента по часам компании (для отчётов «вовремя» и по месяцам). */
@@ -35,9 +66,7 @@ export function companyDay(value: string | undefined): string | undefined {
 export function companyClock(value: string): readonly number[] | undefined {
   const moment = new Date(value);
   if (Number.isNaN(moment.getTime())) return undefined;
-  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
-    timeZone: COMPANY_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
-  }).formatToParts(moment).map((part) => [part.type, part.value]));
+  const parts = Object.fromEntries(COMPANY_CLOCK_FORMAT.formatToParts(moment).map((part) => [part.type, part.value]));
   return [parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second].map(Number);
 }
 

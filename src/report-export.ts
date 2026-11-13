@@ -1,5 +1,6 @@
 import type { OperationsReportRecord, ReportTaskRow } from "./m2-api.js";
 import { closedOnTime, reportTaskOverdue } from "./m2-api.js";
+import { companyToday } from "./task-dates.js";
 import { buildXlsxCompressed, type XlsxCell, type XlsxSheet } from "./xlsx.js";
 
 /** «2026-11-12» → «12.11.2026». */
@@ -20,6 +21,8 @@ function closedOnTimeLabel(task: ReportTaskRow): string {
  * со всеми заявками периода, по одной строке, с фильтрами в шапке.
  */
 export function reportWorkbookSheets(report: OperationsReportRecord, tasks: readonly ReportTaskRow[], today?: string): readonly XlsxSheet[] {
+  // «Сегодня» по Москве один раз на всю выгрузку, а не на каждую строку.
+  const day = today ?? companyToday();
   const period = `${dayLabel(report.period.from)} – ${dayLabel(report.period.to)}`;
   const cancelled = report.tasksByStatus.find((item) => item.code === "cancelled")?.value ?? 0;
   const open = Math.max(0, report.metrics.taskCount - report.metrics.closedCount - cancelled);
@@ -59,9 +62,11 @@ export function reportWorkbookSheets(report: OperationsReportRecord, tasks: read
     task.engineerName ?? "",
     task.periodFrom ? { date: task.periodFrom.slice(0, 10) } : "",
     task.periodTo ? { date: task.periodTo.slice(0, 10) } : "",
-    task.completedAt ? { date: task.completedAt, withTime: true } : "",
+    // Время окончания только если его ввели в результате работ: иначе дата окончания это полдень
+    // дня выезда или момент сдачи, и время в отчёте было бы придуманным.
+    task.completedAt ? { date: task.completedAt, withTime: Boolean(task.workFinishedAt) } : "",
     closedOnTimeLabel(task),
-    reportTaskOverdue(task.periodTo, task.status, report.period.to, today) ? "Да" : ""
+    reportTaskOverdue(task.periodTo, task.status, report.period.to, day) ? "Да" : ""
   ]);
   return [
     { name: "Сводка", rows: summary, widths: [34, 26, 10] },

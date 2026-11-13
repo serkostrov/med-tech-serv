@@ -51,7 +51,7 @@ export function columnName(index: number): string {
 
 /**
  * Дата Excel: число дней с 30.12.1899. Дата без времени («2026-11-12») так и считается;
- * момент времени (ISO с часами) переводится в местное время того, кто выгружает отчёт.
+ * момент времени (ISO с часами) переводится в часы компании (Москва), на любом устройстве одинаково.
  */
 export function excelDate(value: string, withTime = false): number | undefined {
   const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
