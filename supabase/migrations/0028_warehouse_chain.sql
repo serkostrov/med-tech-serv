@@ -184,11 +184,15 @@ BEGIN
   END IF;
 
   -- Сама отметка: один вызов задаёт полный список установленного по задаче.
+  -- Флаг открывает стражу stock_reservations_guard_task запись install_marked:
+  -- напрямую, минуя эту функцию, отметку не поставить (см. раздел 5).
+  PERFORM set_config('app.warehouse_chain', 'on', true);
   UPDATE public.stock_reservations AS r
      SET install_marked = (r.id = ANY (marked))
    WHERE r.task_id = p_task_id
      AND r.status = 'issued'
      AND r.install_marked IS DISTINCT FROM (r.id = ANY (marked));
+  PERFORM set_config('app.warehouse_chain', 'off', true);
 
   -- Дальше — только строки позиций для карточки задачи: по одной на запчасть и
   -- состояние, количество — сумма отмеченных резервов. Замок по задаче, чтобы два
@@ -398,7 +402,174 @@ CREATE TRIGGER tasks_release_reservations
   EXECUTE FUNCTION public.release_task_reservations_on_task_finish();
 
 -- ---------------------------------------------------------------------------
--- 5. Права на RPC: без входа недоступны, вошедшему сотруднику — да.
+-- 5. Отметка живёт ровно столько, сколько запчасть у инженера
+-- ---------------------------------------------------------------------------
+--
+-- Запчасть можно отметить установленной, а потом сдать задачу на проверку и вернуть
+-- её на склад (возврат требует только статуса «выдано»). Склад и история прибора при
+-- этом остаются верными — триггер закрытия возвращённый резерв пропускает, — а вот
+-- строка в карточке задачи застревала с прежним количеством: снять отметку уже нельзя
+-- (задача на проверке), и поправить её было нечем. Теперь уход из «выдано» сам снимает
+-- отметку и пересобирает строку: остаток отмеченного пересчитывается, а если не
+-- осталось ничего — строка убирается.
+--
+-- Флаг app.warehouse_chain отличает запись самой цепочки от прямого запроса из браузера:
+-- задать его может только код на сервере, PostgREST чужие настройки сессии не выставляет.
+
+CREATE OR REPLACE FUNCTION public.clear_install_mark_on_reservation_release()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- «Установлено» не трогаем: там запчасть осталась в приборе, отметка верна.
+  IF OLD.status = 'issued' AND NEW.status NOT IN ('issued', 'installed') AND NEW.install_marked THEN
+    NEW.install_marked := false;
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.clear_install_mark_on_reservation_release() FROM PUBLIC, anon, authenticated;
+COMMENT ON FUNCTION public.clear_install_mark_on_reservation_release() IS
+  'Возврат или снятие выданного резерва (0028): отметка «установлено» снимается — запчасти в приборе больше нет.';
+
+DROP TRIGGER IF EXISTS stock_reservations_unmark_on_release ON public.stock_reservations;
+CREATE TRIGGER stock_reservations_unmark_on_release
+  BEFORE UPDATE OF status ON public.stock_reservations
+  FOR EACH ROW EXECUTE FUNCTION public.clear_install_mark_on_reservation_release();
+
+CREATE OR REPLACE FUNCTION public.refresh_task_part_after_reservation_release()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  marked_quantity numeric(14, 3);
+  link_id uuid;
+  outer_flag text := coalesce(current_setting('app.warehouse_chain', true), 'off');
+BEGIN
+  IF NEW.task_id IS NULL THEN
+    RETURN NULL;
+  END IF;
+
+  SELECT coalesce(sum(r.quantity), 0) INTO marked_quantity
+    FROM public.stock_reservations AS r
+   WHERE r.task_id = NEW.task_id AND r.part_id = NEW.part_id
+     AND r.part_condition = NEW.part_condition
+     AND r.status = 'issued' AND r.install_marked;
+
+  -- Строку пересобирает цепочка, а не пользователь: кладовщик, принимающий возврат по
+  -- сданной задаче, прав на её позиции не имеет.
+  PERFORM set_config('app.warehouse_chain', 'on', true);
+  IF marked_quantity > 0 THEN
+    SELECT r.id INTO link_id
+      FROM public.stock_reservations AS r
+     WHERE r.task_id = NEW.task_id AND r.part_id = NEW.part_id
+       AND r.part_condition = NEW.part_condition
+       AND r.status = 'issued' AND r.install_marked
+     ORDER BY r.created_at, r.id
+     LIMIT 1;
+    UPDATE public.task_parts AS tp
+       SET quantity = marked_quantity,
+           reservation_id = link_id,
+           installed = true
+     WHERE tp.task_id = NEW.task_id AND tp.part_id = NEW.part_id
+       AND tp.part_condition = NEW.part_condition
+       AND tp.reservation_id IS NOT NULL AND NOT tp.for_sale;
+  ELSE
+    -- Отмеченного не осталось: строка ничего не отражает. Ручные позиции и позиции
+    -- «для продажи» не трогаем — их вписал человек, со складом они не связаны.
+    DELETE FROM public.task_parts AS tp
+     WHERE tp.task_id = NEW.task_id AND tp.part_id = NEW.part_id
+       AND tp.part_condition = NEW.part_condition
+       AND tp.reservation_id IS NOT NULL AND NOT tp.for_sale;
+  END IF;
+  PERFORM set_config('app.warehouse_chain', outer_flag, true);
+  RETURN NULL;
+END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.refresh_task_part_after_reservation_release() FROM PUBLIC, anon, authenticated;
+COMMENT ON FUNCTION public.refresh_task_part_after_reservation_release() IS
+  'Возврат или снятие выданного резерва (0028): строка позиции задачи пересобирается по оставшимся отмеченным резервам, а без них убирается — иначе в карточке навсегда осталось бы количество, которого в приборе нет.';
+
+DROP TRIGGER IF EXISTS stock_reservations_refresh_task_part ON public.stock_reservations;
+CREATE TRIGGER stock_reservations_refresh_task_part
+  AFTER UPDATE OF status ON public.stock_reservations
+  FOR EACH ROW
+  WHEN (OLD.status = 'issued' AND NEW.status NOT IN ('issued', 'installed'))
+  EXECUTE FUNCTION public.refresh_task_part_after_reservation_release();
+
+-- Стражи 0014 с учётом новой колонки и записей самой цепочки.
+CREATE OR REPLACE FUNCTION public.guard_reservation_task()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL
+     AND OLD.status NOT IN ('created', 'warehouse_notified')
+     AND (NEW.quantity IS DISTINCT FROM OLD.quantity
+          OR NEW.part_id IS DISTINCT FROM OLD.part_id
+          OR NEW.part_condition IS DISTINCT FROM OLD.part_condition) THEN
+    RAISE EXCEPTION 'После выдачи или отмены нельзя менять запчасть и количество резерва'
+      USING ERRCODE = '42501';
+  END IF;
+  IF auth.uid() IS NOT NULL
+     AND NEW.task_id IS NOT NULL
+     AND NEW.task_id IS DISTINCT FROM OLD.task_id
+     AND NOT public.app_task_accepts_reservations(NEW.task_id) THEN
+    RAISE EXCEPTION 'Резерв можно привязать только к задаче в работе'
+      USING ERRCODE = '42501';
+  END IF;
+  -- (0028) Отметку «установлено» ставит инженер в задаче через set_task_parts_installed.
+  -- Прямой PATCH закрыт: иначе склад проставил бы отметку сам, и при закрытии задачи
+  -- запчасть списалась бы на прибор без инженера. Флаг app.warehouse_chain ставит сама
+  -- цепочка склада (её функции), снаружи его не задать. Снятие отметки вместе с уходом
+  -- из «выдано» (возврат, снятие резерва) разрешено: это делает триггер цепочки.
+  IF auth.uid() IS NOT NULL
+     AND NEW.install_marked IS DISTINCT FROM OLD.install_marked
+     AND coalesce(current_setting('app.warehouse_chain', true), 'off') <> 'on'
+     AND NOT (NOT NEW.install_marked AND OLD.status = 'issued' AND NEW.status IS DISTINCT FROM OLD.status) THEN
+    RAISE EXCEPTION 'Отметку об установке ставит инженер в задаче, а не склад'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+CREATE OR REPLACE FUNCTION public.guard_task_part_warehouse_columns()
+RETURNS trigger
+LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+BEGIN
+  -- (0028) Строку позиции пересобирает сама цепочка склада, когда выданную запчасть
+  -- вернули: в этот момент у кладовщика прав на задачу уже может не быть.
+  IF auth.uid() IS NULL
+     OR coalesce(current_setting('app.warehouse_chain', true), 'off') = 'on'
+     OR public.app_can_write_task(OLD.task_id) THEN
+    RETURN NEW;
+  END IF;
+  IF NEW.task_id IS DISTINCT FROM OLD.task_id
+     OR NEW.part_id IS DISTINCT FROM OLD.part_id
+     OR NEW.part_condition IS DISTINCT FROM OLD.part_condition
+     OR NEW.article_number_snapshot IS DISTINCT FROM OLD.article_number_snapshot
+     OR NEW.name_snapshot IS DISTINCT FROM OLD.name_snapshot
+     OR NEW.quantity IS DISTINCT FROM OLD.quantity
+     OR NEW.position IS DISTINCT FROM OLD.position
+     OR NEW.for_sale IS DISTINCT FROM OLD.for_sale
+  THEN
+    RAISE EXCEPTION 'Недостаточно прав: кладовщик меняет только резерв и отметку об установке'
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+-- ---------------------------------------------------------------------------
+-- 6. Права на RPC: без входа недоступны, вошедшему сотруднику — да.
 -- ---------------------------------------------------------------------------
 
 REVOKE ALL ON FUNCTION public.create_task_part_reservation(uuid, uuid, public.part_condition, numeric) FROM PUBLIC, anon;
