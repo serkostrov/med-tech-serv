@@ -2426,7 +2426,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
       <section className="registry-toolbar" aria-labelledby="equipment-search-title">
         <label className="registry-toolbar__search" htmlFor="equipment-search">
           <span className="sr-only" id="equipment-search-title">Поиск приборов</span>
-          <input id="equipment-search" onChange={(event) => changeFilter("search", event.target.value)} placeholder="S/N, модель или организация" type="search" value={filters.search} />
+          <input id="equipment-search" onChange={(event) => changeFilter("search", event.target.value)} placeholder="S/N, модель или организация" title={engineer ? "Ищет по S/N, модели, производителю, площадке и организации. Можно несколько слов сразу, например модель и площадку." : "Ищет по S/N, модели, производителю, площадке, организации и плательщику. Можно несколько слов сразу, например модель и площадку."} type="search" value={filters.search} />
         </label>
         <div className="registry-toolbar__filters" aria-label="Фильтры списка приборов">
           <Select aria-label="Производитель" onChange={(event) => changeFilter("manufacturer", event.target.value)} value={filters.manufacturer}><option value="">Все производители</option>{references.manufacturers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select>
