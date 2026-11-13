@@ -413,7 +413,10 @@ SELECT pg_temp.check(NOT EXISTS (
        'app_can_read_equipment', 'app_can_write_equipment', 'app_storage_object_access', 'app_is_staff',
        'app_current_role_key', 'app_customer_organization_ids', 'app_task_is_open', 'app_is_task_engineer',
        'app_task_accepts_reservations', 'is_app_user', 'create_access_user', 'accept_task_closure',
-       'change_equipment_site', 'change_equipment_payer', 'set_my_telegram_chat_id')
+       'change_equipment_site', 'change_equipment_payer', 'set_my_telegram_chat_id',
+       -- 0028: отметку установки пишет в резервы, инженеру туда по политикам склада
+       -- нельзя, поэтому функция работает от владельца схемы и проверяет права сама.
+       'set_task_parts_installed')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');

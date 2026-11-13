@@ -92,8 +92,8 @@ DECLARE
   r text; uid uuid; base text;
   org uuid; site uuid; payer uuid; manuf uuid; model uuid; eq uuid; wt text;
   t1 uuid; t2 uuid; t3 uuid; t4 uuid;
-  part_a uuid; part_b uuid; part_c uuid; part_off uuid;
-  lot_a uuid; lot_b uuid; lot_c uuid;
+  part_a uuid; part_b uuid; part_c uuid; part_d uuid; part_off uuid;
+  lot_a uuid; lot_b uuid; lot_c uuid; lot_d uuid;
 BEGIN
   FOREACH r IN ARRAY roles LOOP
     uid := gen_random_uuid();
@@ -120,10 +120,11 @@ BEGIN
     current_date, current_date + 7, 'in_progress', current_date, 'Не включается', 'Заменён клапан', '2026-11-13 12:30:00+03')
   RETURNING id INTO t1;
   -- Задача другого инженера.
+  -- Задача другого инженера: по ней проверяем время установки без времени окончания работ.
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by,
-    deadline_from, deadline_to, status_code)
+    deadline_from, deadline_to, status_code, visit_date, call_reason, work_description)
   VALUES ('Задача другого инженера', wt, eq, site, payer, (SELECT id FROM ids WHERE k = 'engineer2'), (SELECT id FROM ids WHERE k = 'coordinator'),
-    current_date, current_date + 7, 'in_progress')
+    current_date, current_date + 7, 'in_progress', current_date, 'Шумит', 'Заменён датчик')
   RETURNING id INTO t2;
   -- Историческая задача без прибора.
   INSERT INTO tasks (title, work_type_code, site_id, payer_id, engineer_id, created_by,
@@ -140,18 +141,21 @@ BEGIN
   INSERT INTO parts (article_number, name) VALUES ('ART-A', 'Клапан тест') RETURNING id INTO part_a;
   INSERT INTO parts (article_number, name) VALUES ('ART-B', 'Датчик тест') RETURNING id INTO part_b;
   INSERT INTO parts (article_number, name) VALUES ('ART-C', 'Шприц тест') RETURNING id INTO part_c;
+  INSERT INTO parts (article_number, name) VALUES ('ART-D', 'Фильтр тест') RETURNING id INTO part_d;
   INSERT INTO parts (article_number, name, is_active) VALUES ('ART-OFF', 'Снятая с учёта', false) RETURNING id INTO part_off;
 
   INSERT INTO stock_lots (part_id, part_condition) VALUES (part_a, 'N') RETURNING id INTO lot_a;
   INSERT INTO stock_lots (part_id, part_condition) VALUES (part_b, 'N') RETURNING id INTO lot_b;
   INSERT INTO stock_lots (part_id, part_condition) VALUES (part_c, 'N') RETURNING id INTO lot_c;
+  INSERT INTO stock_lots (part_id, part_condition) VALUES (part_d, 'N') RETURNING id INTO lot_d;
   INSERT INTO stock_movements (idempotency_key, movement_type, lot_id, part_id, part_condition, quantity, on_hand_delta)
   VALUES ('receipt:a', 'receipt', lot_a, part_a, 'N', 10, 10),
          ('receipt:b', 'receipt', lot_b, part_b, 'N', 10, 10),
-         ('receipt:c', 'receipt', lot_c, part_c, 'N', 1, 1);
+         ('receipt:c', 'receipt', lot_c, part_c, 'N', 1, 1),
+         ('receipt:d', 'receipt', lot_d, part_d, 'N', 10, 10);
 
   INSERT INTO ids VALUES ('t1', t1), ('t2', t2), ('t3', t3), ('t4', t4),
-    ('part_a', part_a), ('part_b', part_b), ('part_c', part_c), ('part_off', part_off),
+    ('part_a', part_a), ('part_b', part_b), ('part_c', part_c), ('part_d', part_d), ('part_off', part_off),
     ('equipment', eq), ('site', site), ('payer', payer);
 END $$;
 
@@ -184,16 +188,19 @@ SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.set_task_parts_i
   'без входа отметку установки не вызвать');
 SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.install_task_parts_on_task_close()', 'EXECUTE'),
   'проведение установки напрямую не вызвать');
-SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.release_task_reservations_on_task_cancel()', 'EXECUTE'),
-  'снятие резервов при отмене напрямую не вызвать');
+SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.release_task_reservations_on_task_finish()', 'EXECUTE'),
+  'снятие резервов при закрытии и отмене напрямую не вызвать');
 SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'install_task_parts_on_task_close'),
   'проведение установки работает от владельца схемы');
-SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'release_task_reservations_on_task_cancel'),
-  'снятие резервов при отмене работает от владельца схемы');
+SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'release_task_reservations_on_task_finish'),
+  'снятие резервов при закрытии и отмене работает от владельца схемы');
 SELECT pg_temp.check(NOT (SELECT prosecdef FROM pg_proc WHERE proname = 'create_task_part_reservation'),
   'заказ запчасти работает с правами вызывающего');
-SELECT pg_temp.check(NOT (SELECT prosecdef FROM pg_proc WHERE proname = 'set_task_parts_installed'),
-  'отметка установки работает с правами вызывающего');
+SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'set_task_parts_installed'),
+  'отметка установки работает от владельца схемы: в резервы инженеру писать нельзя');
+SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.release_task_reservations_on_task_finish()', 'EXECUTE')
+                 AND NOT has_function_privilege('anon', 'public.install_task_parts_on_task_close()', 'EXECUTE'),
+  'без входа триггерные функции цепочки недоступны');
 
 -- ---------------------------------------------------------------- Заказ запчасти
 SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
@@ -201,6 +208,12 @@ SELECT pg_temp.check(pg_temp.make_reservation('res_a', (SELECT id FROM ids WHERE
   'координатор заказывает запчасть под задачу в работе');
 SELECT pg_temp.check(pg_temp.make_reservation('res_b', (SELECT id FROM ids WHERE k = 't1'), (SELECT id FROM ids WHERE k = 'part_b'), 'N', 1) IS NOT NULL,
   'вторая запчасть под ту же задачу');
+-- Второй резерв той же запчасти в том же состоянии: нормальный случай (два одинаковых
+-- предохранителя), строка позиции в карточке на них будет одна.
+SELECT pg_temp.check(pg_temp.make_reservation('res_a2', (SELECT id FROM ids WHERE k = 't1'), (SELECT id FROM ids WHERE k = 'part_a'), 'N', 3) IS NOT NULL,
+  'второй резерв той же запчасти в том же состоянии под ту же задачу');
+SELECT pg_temp.check(pg_temp.make_reservation('res_d', (SELECT id FROM ids WHERE k = 't1'), (SELECT id FROM ids WHERE k = 'part_d'), 'N', 1) IS NOT NULL,
+  'запчасть, по которой в карточке уже есть ручная позиция «для продажи»');
 RESET ROLE;
 SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
 
@@ -220,9 +233,10 @@ SELECT pg_temp.check((SELECT count(*) = 1 FROM integration_outbox o
                          AND o.aggregate_id = (SELECT id FROM ids WHERE k = 'res_a')
                          AND o.event_type = 'stock_reservation_created'),
   'событие «резерв создан» поставлено в очередь уведомлений');
-SELECT pg_temp.check((SELECT b.available_quantity = 8 FROM stock_balances b
-                       WHERE b.part_id = (SELECT id FROM ids WHERE k = 'part_a') AND b.part_condition = 'N'),
-  'доступный остаток уменьшился на количество резерва');
+SELECT pg_temp.check((SELECT b.available_quantity = 5 AND b.reserved_quantity = 5 AND b.on_hand_quantity = 10
+                      FROM stock_balances b
+                     WHERE b.part_id = (SELECT id FROM ids WHERE k = 'part_a') AND b.part_condition = 'N'),
+  'доступный остаток уменьшился на количество обоих резервов');
 
 -- Инженеру заказывать запчасти нельзя.
 SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
@@ -257,11 +271,14 @@ SELECT pg_temp.check(pg_temp.make_reservation('res_waiting', (SELECT id FROM ids
   'кладовщик заказывает запчасть под ту же задачу');
 
 -- ---------------------------------------------------------------- Выдача инженеру (0022)
-SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE public.stock_reservations SET status = %L WHERE id IN (%L, %L)',
-  'warehouse_notified', (SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_b'))) = 2,
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE public.stock_reservations SET status = %L WHERE id IN (%L, %L, %L, %L)',
+  'warehouse_notified', (SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_b'),
+  (SELECT id FROM ids WHERE k = 'res_a2'), (SELECT id FROM ids WHERE k = 'res_d'))) = 4,
   'кладовщик отмечает, что запчасти собраны');
 SELECT public.issue_stock_reservation((SELECT id FROM ids WHERE k = 'res_a'));
 SELECT public.issue_stock_reservation((SELECT id FROM ids WHERE k = 'res_b'));
+SELECT public.issue_stock_reservation((SELECT id FROM ids WHERE k = 'res_a2'));
+SELECT public.issue_stock_reservation((SELECT id FROM ids WHERE k = 'res_d'));
 RESET ROLE;
 SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
 SELECT pg_temp.check((SELECT r.status = 'issued' AND r.issued_to = (SELECT id FROM ids WHERE k = 'engineer')
@@ -270,6 +287,12 @@ SELECT pg_temp.check((SELECT r.status = 'issued' AND r.issued_to = (SELECT id FR
 SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_movements m
                        WHERE m.reservation_id = (SELECT id FROM ids WHERE k = 'res_a') AND m.movement_type = 'issue' AND m.on_hand_delta = -2),
   'выдача списала запчасть со склада');
+
+-- Координатор вписал в карточку ручную позицию «для продажи» по той же запчасти.
+INSERT INTO task_parts (task_id, part_id, part_condition, article_number_snapshot, name_snapshot, quantity, for_sale, position)
+VALUES ((SELECT id FROM ids WHERE k = 't1'), (SELECT id FROM ids WHERE k = 'part_d'), 'N',
+  'ART-D', 'Фильтр тест (продажа)', 1, true,
+  (SELECT coalesce(max(position) + 1, 0) FROM task_parts WHERE task_id = (SELECT id FROM ids WHERE k = 't1')));
 
 -- ---------------------------------------------------------------- Отметка установки
 -- Чужой инженер отметить не может.
@@ -317,10 +340,79 @@ SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
 SELECT public.set_task_parts_installed((SELECT id FROM ids WHERE k = 't1'), ARRAY[(SELECT id FROM ids WHERE k = 'res_a')]::uuid[]);
 RESET ROLE;
 SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
-SELECT pg_temp.check((SELECT count(*) = 1 FROM task_parts tp WHERE tp.task_id = (SELECT id FROM ids WHERE k = 't1')),
+SELECT pg_temp.check((SELECT count(*) = 1 FROM task_parts tp
+                       WHERE tp.task_id = (SELECT id FROM ids WHERE k = 't1')
+                         AND tp.part_id = (SELECT id FROM ids WHERE k = 'part_a')),
   'повторная отметка обновляет ту же строку позиции');
 SELECT pg_temp.check((SELECT tp.installed FROM task_parts tp WHERE tp.reservation_id = (SELECT id FROM ids WHERE k = 'res_a')),
   'повторная отметка снова ставит «установлено»');
+
+-- Пустое значение в списке — ошибка, а не молча пропущенный элемент.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT pg_temp.expect_message(
+  format('SELECT public.set_task_parts_installed(%L, ARRAY[%L, NULL]::uuid[])', (SELECT id FROM ids WHERE k = 't1'), (SELECT id FROM ids WHERE k = 'res_a')),
+  'В списке установленных запчастей попалось пустое значение', 'пустое значение в списке установленного не принимается');
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SELECT pg_temp.check((SELECT r.install_marked FROM stock_reservations r WHERE r.id = (SELECT id FROM ids WHERE k = 'res_a')),
+  'отказ из-за пустого значения ничего не изменил');
+
+-- Запчасть отметили, а потом вернули на склад: строка карточки осталась привязанной
+-- к возвращённому резерву. Следующая отметка не должна об неё спотыкаться.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.check(pg_temp.make_reservation('res_b2', (SELECT id FROM ids WHERE k = 't1'), (SELECT id FROM ids WHERE k = 'part_b'), 'N', 1) IS NOT NULL,
+  'второй резерв той же запчасти, что уже выдана инженеру');
+UPDATE public.stock_reservations SET status = 'warehouse_notified' WHERE id = (SELECT id FROM ids WHERE k = 'res_b2');
+SELECT public.issue_stock_reservation((SELECT id FROM ids WHERE k = 'res_b2'));
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT public.set_task_parts_installed((SELECT id FROM ids WHERE k = 't1'),
+  ARRAY[(SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_b2')]::uuid[]);
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT public.return_stock_reservation((SELECT id FROM ids WHERE k = 'res_b2'));
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SET CONSTRAINTS ALL IMMEDIATE;
+SET CONSTRAINTS ALL DEFERRED;
+SELECT pg_temp.check((SELECT r.status = 'returned' FROM stock_reservations r WHERE r.id = (SELECT id FROM ids WHERE k = 'res_b2')),
+  'отмеченную запчасть приняли обратно на склад');
+
+-- Отмечаем оба резерва одной запчасти и запчасть с ручной позицией «для продажи».
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT public.set_task_parts_installed((SELECT id FROM ids WHERE k = 't1'),
+  ARRAY[(SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_a2'), (SELECT id FROM ids WHERE k = 'res_d')]::uuid[]);
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SELECT pg_temp.check((SELECT count(*) = 3 FROM stock_reservations r
+                       WHERE r.task_id = (SELECT id FROM ids WHERE k = 't1')
+                         AND r.status = 'issued' AND r.install_marked),
+  'отметка стоит на каждом резерве отдельно');
+SELECT pg_temp.check((SELECT tp.installed AND tp.quantity = 5
+                        AND tp.reservation_id IN ((SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_a2'))
+                      FROM task_parts tp
+                     WHERE tp.task_id = (SELECT id FROM ids WHERE k = 't1')
+                       AND tp.part_id = (SELECT id FROM ids WHERE k = 'part_a') AND tp.part_condition = 'N'),
+  'в карточке одна строка на оба резерва, количество просуммировано');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM task_parts tp
+                       WHERE tp.task_id = (SELECT id FROM ids WHERE k = 't1')
+                         AND tp.part_id = (SELECT id FROM ids WHERE k = 'part_a')),
+  'вторая строка по той же запчасти не заводится');
+SELECT pg_temp.check((SELECT tp.for_sale AND NOT tp.installed AND tp.quantity = 1
+                        AND tp.name_snapshot = 'Фильтр тест (продажа)' AND tp.reservation_id IS NULL
+                      FROM task_parts tp
+                     WHERE tp.task_id = (SELECT id FROM ids WHERE k = 't1')
+                       AND tp.part_id = (SELECT id FROM ids WHERE k = 'part_d')),
+  'ручная позиция «для продажи» не тронута: ни количество, ни наименование, ни связь');
+SELECT pg_temp.check((SELECT r.install_marked FROM stock_reservations r WHERE r.id = (SELECT id FROM ids WHERE k = 'res_d')),
+  'отметка резерва при этом сохранилась: по складу установка пройдёт');
+SELECT pg_temp.check((SELECT tp.reservation_id = (SELECT id FROM ids WHERE k = 'res_b2')
+                      FROM task_parts tp
+                     WHERE tp.task_id = (SELECT id FROM ids WHERE k = 't1')
+                       AND tp.part_id = (SELECT id FROM ids WHERE k = 'part_b')),
+  'строка возвращённой запчасти отметку пережила и новой отметке не помешала');
 
 -- ---------------------------------------------------------------- Закрытие задачи
 -- Акт и три фото: без них задачу не сдать и не закрыть (0023, 0014).
@@ -390,6 +482,54 @@ SELECT pg_temp.check((SELECT count(*) = 0 FROM stock_movements m
                        WHERE m.reservation_id = (SELECT id FROM ids WHERE k = 'res_b') AND m.movement_type = 'install'),
   'по неотмеченной запчасти установка не проводилась');
 
+-- Два резерва одной запчасти: два движения и два «установлено», строка в карточке одна.
+SELECT pg_temp.check((SELECT count(*) = 2 FROM stock_reservations r
+                       WHERE r.id IN ((SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_a2'))
+                         AND r.status = 'installed'),
+  'оба резерва одной запчасти стали «установлено»');
+SELECT pg_temp.check((SELECT count(*) = 2 FROM stock_movements m
+                       WHERE m.movement_type = 'install'
+                         AND m.reservation_id IN ((SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_a2'))),
+  'по каждому резерву своё движение «установка»');
+SELECT pg_temp.check((SELECT sum(m.quantity) = 5 FROM stock_movements m
+                       WHERE m.movement_type = 'install'
+                         AND m.reservation_id IN ((SELECT id FROM ids WHERE k = 'res_a'), (SELECT id FROM ids WHERE k = 'res_a2'))),
+  'в прибор проведено всё выданное количество, а не только одна строка карточки');
+SELECT pg_temp.check((SELECT count(*) = 2 FROM equipment_history_feed f
+                       WHERE f.equipment_id = (SELECT id FROM ids WHERE k = 'equipment')
+                         AND f.event_type = 'part_replacement' AND f.summary = 'ART-A · Клапан тест'),
+  'в истории прибора обе замены этой запчасти');
+-- Партия движения «установка» — та же, из которой выдали.
+SELECT pg_temp.check((SELECT install.lot_id = issue.lot_id
+                      FROM stock_movements install
+                      JOIN stock_movements issue
+                        ON issue.reservation_id = install.reservation_id AND issue.movement_type = 'issue'
+                     WHERE install.idempotency_key = 'install:' || (SELECT id FROM ids WHERE k = 'res_a')),
+  'установка проведена по той же партии, из которой выдали');
+-- Ручная позиция «для продажи» осталась нетронутой, а по складу установка прошла.
+SELECT pg_temp.check((SELECT r.status = 'installed' FROM stock_reservations r WHERE r.id = (SELECT id FROM ids WHERE k = 'res_d')),
+  'резерв с ручной позицией «для продажи» тоже установлен');
+SELECT pg_temp.check((SELECT tp.for_sale AND NOT tp.installed AND tp.quantity = 1 AND tp.reservation_id IS NULL
+                      FROM task_parts tp
+                     WHERE tp.task_id = (SELECT id FROM ids WHERE k = 't1')
+                       AND tp.part_id = (SELECT id FROM ids WHERE k = 'part_d')),
+  'после закрытия ручная позиция «для продажи» всё ещё не тронута');
+
+-- Закрытие освобождает заказанное и собранное: иначе оно вечно висит в «доступно».
+SELECT pg_temp.check((SELECT r.status = 'cancelled' FROM stock_reservations r WHERE r.id = (SELECT id FROM ids WHERE k = 'res_waiting')),
+  'закрытие задачи снимает незаказанный резерв');
+SELECT pg_temp.check((SELECT b.available_quantity = 1 FROM stock_balances b
+                       WHERE b.part_id = (SELECT id FROM ids WHERE k = 'part_c') AND b.part_condition = 'N'),
+  'снятый при закрытии резерв вернулся в доступный остаток');
+
+-- Закрытую задачу не правит и координатор: установка уже проведена по складу.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+SELECT pg_temp.expect_message(
+  format('SELECT public.set_task_parts_installed(%L, ARRAY[%L]::uuid[])', (SELECT id FROM ids WHERE k = 't1'), (SELECT id FROM ids WHERE k = 'res_b')),
+  'Задача сдана, закрыта или отменена: отметки об установке больше не меняются', 'координатор не меняет отметки у закрытой задачи');
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+
 -- Под закрытую задачу новый резерв не создать.
 SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
 SELECT pg_temp.expect_message(
@@ -410,6 +550,41 @@ SELECT pg_temp.check((SELECT r.status = 'returned' FROM stock_reservations r WHE
 SELECT pg_temp.check((SELECT b.on_hand_quantity = 10 FROM stock_balances b
                        WHERE b.part_id = (SELECT id FROM ids WHERE k = 'part_b') AND b.part_condition = 'N'),
   'после возврата остаток запчасти восстановлен');
+
+-- ---------------------------------------------------------------- Установка без времени окончания работ
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.check(pg_temp.make_reservation('res_t2', (SELECT id FROM ids WHERE k = 't2'), (SELECT id FROM ids WHERE k = 'part_b'), 'N', 1) IS NOT NULL,
+  'заказ запчасти под задачу второго инженера');
+UPDATE public.stock_reservations SET status = 'warehouse_notified' WHERE id = (SELECT id FROM ids WHERE k = 'res_t2');
+SELECT public.issue_stock_reservation((SELECT id FROM ids WHERE k = 'res_t2'));
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer2'));
+SELECT public.set_task_parts_installed((SELECT id FROM ids WHERE k = 't2'), ARRAY[(SELECT id FROM ids WHERE k = 'res_t2')]::uuid[]);
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't2'), 'act', 1);
+INSERT INTO task_closures (task_id, act_file_id, submitted_by)
+  SELECT (SELECT id FROM ids WHERE k = 't2'), f.id, (SELECT id FROM ids WHERE k = 'engineer2')
+    FROM files f WHERE f.task_id = (SELECT id FROM ids WHERE k = 't2') AND f.kind = 'act';
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't2'), 'photo', 1);
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't2'), 'photo', 2);
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't2'), 'photo', 3);
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer2'));
+UPDATE public.tasks SET status_code = 'under_review' WHERE id = (SELECT id FROM ids WHERE k = 't2');
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+SELECT public.accept_task_closure((SELECT id FROM ids WHERE k = 't2'), NULL, 'Принято', now());
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SET CONSTRAINTS ALL IMMEDIATE;
+SET CONSTRAINTS ALL DEFERRED;
+SELECT pg_temp.check((SELECT t.work_finished_at IS NULL FROM tasks t WHERE t.id = (SELECT id FROM ids WHERE k = 't2')),
+  'у задачи второго инженера времени окончания работ нет');
+SELECT pg_temp.check((SELECT m.occurred_at = now() AND m.performed_by = (SELECT id FROM ids WHERE k = 'engineer2')
+                      FROM stock_movements m WHERE m.idempotency_key = 'install:' || (SELECT id FROM ids WHERE k = 'res_t2')),
+  'без времени окончания работ установка проведена моментом закрытия');
 
 -- ---------------------------------------------------------------- Отмена задачи освобождает склад
 SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
@@ -439,7 +614,7 @@ SELECT pg_temp.check((SELECT r.status = 'cancelled' FROM stock_reservations r WH
   'отмена задачи снимает собранную запчасть');
 SELECT pg_temp.check((SELECT r.status = 'issued' FROM stock_reservations r WHERE r.id = (SELECT id FROM ids WHERE k = 'res_given')),
   'выданная запчасть при отмене задачи остаётся на инженере');
-SELECT pg_temp.check((SELECT b.available_quantity = 8 FROM stock_balances b
+SELECT pg_temp.check((SELECT b.available_quantity = 5 AND b.reserved_quantity = 0 FROM stock_balances b
                        WHERE b.part_id = (SELECT id FROM ids WHERE k = 'part_a') AND b.part_condition = 'N'),
   'снятые резервы вернули количество в доступный остаток');
 
