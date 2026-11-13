@@ -332,6 +332,8 @@ export interface StockReservationRecord {
   readonly engineerName?: string;
   /** Кому выдали на самом деле (после выдачи). */
   readonly issuedToName?: string;
+  /** Инженер отметил, что эта запчасть встала на прибор (stock_reservations.install_marked). */
+  readonly installMarked: boolean;
   /** Шаги резерва по порядку: от «Ждёт сборки» до последнего состояния. */
   readonly steps: readonly StockReservationStep[];
   readonly createdAt: string;
@@ -674,6 +676,7 @@ export function stockReservationRecord(row: Row): StockReservationRecord {
     ...(taskStatus ? { taskStatus } : {}),
     ...(engineerName ? { engineerName } : {}),
     ...(issuedToName ? { issuedToName } : {}),
+    installMarked: row.install_marked === true,
     steps: reservationSteps(row.stock_reservation_history ?? row.history),
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at")
@@ -763,8 +766,18 @@ function isMissingSchemaObject(
 const RESERVATION_SELECT = "id, number, status, part_id, part_condition, quantity, task_id, created_at, updated_at, "
   + "part:parts(article_number, name), task:tasks(number, title, status_code, engineer:users!engineer_id(full_name)), issued:users!issued_to(full_name)";
 
-/** Шаги резерва с автором: stock_reservation_history по FK changed_by → users (миграция 0028). */
-const RESERVATION_HISTORY_SELECT = "stock_reservation_history(from_status, to_status, changed_at, changed_by, changer:users!changed_by(full_name))";
+/** Отметка «установлена» живёт в самом резерве (миграция 0028), а не в запчастях задачи. */
+const RESERVATION_MARK_SELECT = "install_marked";
+
+/**
+ * Шаги резерва: сначала с автором по FK changed_by → users, затем без него, затем вовсе без
+ * истории (миграция 0028). Чем старее база, тем дальше по списку.
+ */
+const RESERVATION_HISTORY_SELECTS: readonly string[] = [
+  "stock_reservation_history(from_status, to_status, changed_at, changed_by, changer:users!changed_by(full_name))",
+  "stock_reservation_history(from_status, to_status, changed_at, changed_by)",
+  ""
+];
 
 const TASK_PART_SELECT = "id, article_number_snapshot, name_snapshot, quantity, part_condition";
 
@@ -1153,6 +1166,10 @@ export class M2ApiClient {
   private inventoryRegistryAvailable = true;
   private inventorySummaryAvailable = true;
   private equipmentSearchAvailable = true;
+
+  /** Отметка установки и история шагов из миграции 0028: пока их нет, резервы читаются без них. */
+  private reservationMarkAvailable = true;
+  private reservationHistoryLevel = 0;
 
   private db(): AppSupabaseClient {
     return this.client ?? getSupabase();
@@ -2894,18 +2911,19 @@ export class M2ApiClient {
 
   public async taskCard(id: string): Promise<TaskCardResponse> {
     // Шаг 1: всё, что зависит только от id задачи, одновременно.
-    // Столбцы резерва и отметки об установке появились в 0028, for_sale раньше: если их в базе
-    // ещё нет, читаем запчасти по-старому, а не роняем карточку.
+    // Столбец reservation_id появился в 0028, for_sale раньше: если их в базе ещё нет,
+    // читаем запчасти по-старому, а не роняем карточку. Сколько штук и из какого резерва
+    // встало на прибор, строка task_parts не говорит: это знают сами резервы.
     const loadParts = async (): Promise<{ data: unknown[] | null; error: { message?: string } | null }> => {
       const selects = [
-        `${TASK_PART_SELECT}, for_sale, reservation_id, installed, reservation:stock_reservations(number)`,
+        `${TASK_PART_SELECT}, for_sale, reservation_id`,
         `${TASK_PART_SELECT}, for_sale`,
         TASK_PART_SELECT
       ];
       for (const [index, select] of selects.entries()) {
         const result = await this.db().from("task_parts").select(select).eq("task_id", id).order("position");
         if (!result.error || index === selects.length - 1) return result;
-        if (!/for_sale|reservation_id|installed|stock_reservations/iu.test(result.error.message ?? "")) return result;
+        if (!/for_sale|reservation_id/iu.test(result.error.message ?? "")) return result;
       }
       return { data: null, error: null };
     };
@@ -3028,7 +3046,6 @@ export class M2ApiClient {
       parts: (parts.data ?? []).map((item) => {
         const row = asRow(item);
         const reservationId = optionalText(row, "reservation_id");
-        const reservationNumber = optionalText(related(row, "reservation"), "number");
         return {
           id: text(row, "id"),
           articleNumber: text(row, "article_number_snapshot"),
@@ -3036,9 +3053,7 @@ export class M2ApiClient {
           quantity: numberValue(row.quantity) ?? 0,
           condition: text(row, "part_condition") as TaskPartPosition["condition"],
           ...(row.for_sale === true ? { forSale: true } : {}),
-          ...(reservationId ? { reservationId } : {}),
-          ...(reservationNumber ? { reservationNumber } : {}),
-          ...(row.installed === true ? { installed: true } : {})
+          ...(reservationId ? { reservationId } : {})
         };
       }),
       canEditOverview: !terminal && canWrite,
@@ -3467,16 +3482,28 @@ export class M2ApiClient {
     request: (select: string) => PromiseLike<{ readonly data: unknown[] | null; readonly error: { readonly message?: string } | null }>,
     fallback: string
   ): Promise<readonly StockReservationRecord[]> {
-    const selects = [
-      `${RESERVATION_SELECT}, ${RESERVATION_HISTORY_SELECT}`,
-      `${RESERVATION_SELECT}, stock_reservation_history(from_status, to_status, changed_at, changed_by)`,
-      RESERVATION_SELECT
-    ];
-    for (const [index, select] of selects.entries()) {
+    // Отметка установки и история отваливаются по отдельности: каждая неудача убирает из
+    // запроса только своё, остальное продолжает работать.
+    for (let attempt = 0; attempt <= RESERVATION_HISTORY_SELECTS.length; attempt += 1) {
+      const select = [
+        RESERVATION_SELECT,
+        ...(this.reservationMarkAvailable ? [RESERVATION_MARK_SELECT] : []),
+        ...(RESERVATION_HISTORY_SELECTS[this.reservationHistoryLevel] ? [RESERVATION_HISTORY_SELECTS[this.reservationHistoryLevel] as string] : [])
+      ].join(", ");
       const { data, error } = await request(select);
       if (!error) return (data ?? []).map((item) => stockReservationRecord(asRow(item)));
-      if (index === selects.length - 1) throwIfError(error, fallback);
-      console.warn("Шаги резерва не встроились: читаем резервы без истории", error.message);
+      const message = error.message ?? "";
+      if (this.reservationMarkAvailable && /install_marked/iu.test(message)) {
+        this.reservationMarkAvailable = false;
+        console.warn("В базе нет install_marked: отметки об установке появятся после обновления базы", message);
+        continue;
+      }
+      if (this.reservationHistoryLevel < RESERVATION_HISTORY_SELECTS.length - 1 && /stock_reservation_history|changed_by|changer/iu.test(message)) {
+        this.reservationHistoryLevel += 1;
+        console.warn("Шаги резерва не встроились: читаем резервы без истории", message);
+        continue;
+      }
+      throwIfError(error, fallback);
     }
     return [];
   }

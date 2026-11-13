@@ -2,7 +2,7 @@ import React, { useState } from "react";
 import type { StockReservationRecord, TaskCardResponse } from "./m2-api.js";
 import { AutoTextarea, Button, StatusBadge } from "./ui.js";
 import { formatDisplayDate } from "./date-format.js";
-import { RESERVATION_CONDITION_LABELS } from "./reservations.js";
+import { RESERVATION_CONDITION_LABELS, reservationQuantityText } from "./reservations.js";
 import { partQuantityText } from "./TaskReservations.js";
 
 /** Вкладка карточки задачи, куда ведёт пункт сводки. */
@@ -47,12 +47,16 @@ export function uncheckedActMarks(card: Pick<TaskCardResponse, "closure" | "task
  * Выданные со склада запчасти, которые инженер не отметил установленными. Закрывать задачу
  * это не мешает: они останутся за инженером, пока склад не примет возврат.
  */
-export function unmarkedIssuedParts(
-  card: Pick<TaskCardResponse, "parts">,
-  reservations: readonly StockReservationRecord[]
-): readonly StockReservationRecord[] {
-  return reservations.filter((item) => item.status === "issued"
-    && !card.parts.some((part) => part.reservationId === item.id && part.installed === true));
+export function unmarkedIssuedParts(reservations: readonly StockReservationRecord[]): readonly StockReservationRecord[] {
+  return reservations.filter((item) => item.status === "issued" && !item.installMarked);
+}
+
+/**
+ * Что по задаче встаёт на прибор. Берём сами резервы, а не строки запчастей: в строке
+ * количество суммировано по резервам, а при позиции «для продажи» строки может не быть вовсе.
+ */
+export function installedTaskParts(reservations: readonly StockReservationRecord[]): readonly StockReservationRecord[] {
+  return reservations.filter((item) => item.installMarked && (item.status === "issued" || item.status === "installed"));
 }
 
 export function ClosureReview({ card, busy, canClose, canReturn, onClose, onReturn, onShow, reservations = [] }: {
@@ -92,8 +96,8 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
     },
     { label: card.parts.length ? `Запчасти: ${card.parts.length}` : "Запчасти не использовались", section: "parts" }
   ];
-  const installed = card.parts.filter((part) => part.installed === true);
-  const unmarked = unmarkedIssuedParts(card, reservations);
+  const installed = installedTaskParts(reservations);
+  const unmarked = unmarkedIssuedParts(reservations);
   // Закрыть нельзя, пока не хватает того, что проверяет база: объясняем сразу, а не ошибкой после нажатия.
   const blockers = closureBlockers(card);
   const unchecked = uncheckedActMarks(card);
@@ -112,9 +116,9 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
           </li>)}
         </ul>
         {installed.length ? <ul aria-label="Установленные запчасти" className="closure-review__parts">
-          {installed.map((part) => <li key={part.id}>
-            <strong>{part.articleNumber}</strong> {part.name} · {partQuantityText(part.quantity)} · {RESERVATION_CONDITION_LABELS[part.condition]}
-            {part.reservationNumber ? <small>{part.reservationNumber}</small> : null}
+          {installed.map((item) => <li key={item.id}>
+            <strong>{item.articleNumber}</strong> {item.partName} · {partQuantityText(item.quantity)} · {RESERVATION_CONDITION_LABELS[item.condition]}
+            <small>{item.number}</small>
           </li>)}
         </ul> : null}
       </div>

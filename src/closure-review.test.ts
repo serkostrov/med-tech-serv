@@ -101,21 +101,18 @@ describe("coordinator closure review", () => {
   });
 
   it("показывает установленные запчасти и предупреждает про выданное, но не отмеченное", () => {
-    const issued = (id: string, number: string): StockReservationRecord => ({
+    const issued = (id: string, number: string, installMarked: boolean): StockReservationRecord => ({
       id, number, status: "issued", partId: "p1", articleNumber: "TEST-PART-36", partName: "Учебная лампа",
-      condition: "G", quantity: 2, steps: [], createdAt: "2026-08-17T08:00:00.000Z", updatedAt: "2026-08-18T08:00:00.000Z"
+      condition: "G", quantity: 2, installMarked, steps: [], createdAt: "2026-08-17T08:00:00.000Z", updatedAt: "2026-08-18T08:00:00.000Z"
     });
-    const withParts = {
-      ...card,
-      parts: [
-        ...card.parts,
-        { id: "part-test-36", articleNumber: "TEST-PART-36", name: "Учебная лампа", quantity: 2, condition: "G" as const, reservationId: "r1", reservationNumber: "Р-000036", installed: true }
-      ]
-    };
-    const reservations = [issued("r1", "Р-000036"), issued("r2", "Р-000037")];
-    assert.deepEqual(unmarkedIssuedParts(withParts, reservations).map((item) => item.number), ["Р-000037"]);
+    // Строки запчастей у задачи нет совсем (позиция «для продажи»), но резерв отмечен:
+    // показываем именно резервы, а не строки task_parts.
+    const withParts = { ...card, parts: [{ ...card.parts[0]!, forSale: true }] };
+    const reservations = [issued("r1", "Р-000036", true), issued("r2", "Р-000037", false)];
+    assert.deepEqual(unmarkedIssuedParts(reservations).map((item) => item.number), ["Р-000037"]);
     const markup = render({ card: withParts, reservations });
     assert.ok(markup.includes("TEST-PART-36"), "установленная запчасть видна");
+    assert.ok(markup.includes("Р-000036"), "номер резерва");
     assert.ok(markup.includes("2 шт. · Г, гарантийная"), "количество и состояние");
     assert.ok(markup.includes("Выдано, но не отмечено установленным: 1. Останется за инженером, пока склад не примет возврат."), "предупреждение");
     // Это предупреждение, а не запрет: кнопка закрытия не блокируется им.

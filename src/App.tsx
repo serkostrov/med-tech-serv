@@ -63,6 +63,7 @@ import {
 } from "./OperationsPages.js";
 import { ReservationsPage } from "./ReservationsPage.js";
 import { EngineerPickupNote, ResultReservationChecks, TaskReservationsSection } from "./TaskReservations.js";
+import { installedReservationNumbers } from "./reservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
@@ -1168,7 +1169,11 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           </header>
           {card.parts.length > 0
             ? <div className="table-scroll"><table className="data-table task-parts-table"><thead><tr><th scope="col">Артикул</th><th scope="col">Наименование</th><th className="numeric" scope="col">Количество</th><th scope="col">Состояние</th></tr></thead><tbody>
-              {card.parts.map((part) => <tr key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}{part.forSale ? <small>для продажи</small> : null}{part.installed ? <small className="task-parts-table__installed">установлена{part.reservationNumber ? ` · ${part.reservationNumber}` : ""}</small> : null}</td><td className="numeric">{part.quantity}</td><td>{part.condition === "G" ? "Г, гарантийная" : part.condition === "N" ? "Н, новая" : "Б, б/у"}</td></tr>)}
+              {card.parts.map((part) => {
+                // Строку склад собирает из всех отмеченных резервов одной запчасти: номера берём у них.
+                const installed = installedReservationNumbers(part, reservations);
+                return <tr key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}{part.forSale ? <small>для продажи</small> : null}{installed.length ? <small className="task-parts-table__installed">установлена · {installed.join(", ")}</small> : null}</td><td className="numeric">{part.quantity}</td><td>{part.condition === "G" ? "Г, гарантийная" : part.condition === "N" ? "Н, новая" : "Б, б/у"}</td></tr>;
+              })}
             </tbody></table></div>
             : <div className="task-section__empty"><p>{canEditPartsNow ? "Запчасти не добавлены. Добавьте, если использовали детали на выезде." : "Запчасти на этой задаче не использовались."}</p></div>}
           </section>
@@ -1230,7 +1235,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       </div>
       {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
       {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
-      <ResultReservationChecks hasEquipment={Boolean(task.equipmentId)} parts={card.parts} reservations={reservations} />
+      <ResultReservationChecks hasEquipment={Boolean(task.equipmentId)} reservations={reservations} />
       <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
       <label className="field-check"><input defaultChecked={task.workCompleted ?? card.closure?.workCompleted === true} name="workCompleted" type="checkbox" /><span>Работы выполнены полностью</span></label>
       <label className="field-check"><input defaultChecked={task.apparatusApproved ?? card.closure?.apparatusApproved === true} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>

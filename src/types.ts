@@ -158,11 +158,12 @@ export interface TaskPartPosition {
   readonly quantity: number;
   readonly condition: "G" | "N" | "B";
   readonly forSale?: boolean;
-  /** Позиция пришла из резерва склада: её нельзя править руками в списке запчастей. */
+  /**
+   * Позиция собрана складом из резервов (миграция 0028): её нельзя править руками.
+   * Строка одна на запчасть и состояние, количество в ней — сумма отмеченных резервов,
+   * а reservationId — любой из них, поэтому за подробностями идём в сами резервы.
+   */
   readonly reservationId?: string;
-  readonly reservationNumber?: string;
-  /** Инженер отметил, что запчасть установлена на прибор. */
-  readonly installed?: boolean;
 }
 
 export interface TaskPartsResponse {

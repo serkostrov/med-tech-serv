@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient, type StockReservationRecord } from "./m2-api.js";
-import { daysWithEngineer, lastReservationStep, reservationStepText, reservationsByEngineer } from "./reservations.js";
+import { daysWithEngineer, installedReservationNumbers, lastReservationStep, reservationStepText, reservationsByEngineer } from "./reservations.js";
 import { engineerReservationsSheets } from "./reservation-export.js";
 
 type Answer = { data?: unknown; error?: { message: string; code?: string } | null; count?: number };
@@ -34,7 +34,7 @@ function fakeClient(answer: (table: string, calls: unknown[][]) => Answer = () =
 }
 
 const RESERVATION_ROW = {
-  id: "r1", number: "Р-000012", status: "issued", part_id: "p1", part_condition: "N", quantity: 2, task_id: "t1",
+  id: "r1", number: "Р-000012", status: "issued", part_id: "p1", part_condition: "N", quantity: 2, task_id: "t1", install_marked: true,
   created_at: "2026-11-10T06:00:00.000Z", updated_at: "2026-11-12T06:00:00.000Z",
   part: { article_number: "AU-LAMP", name: "Лампа галогеновая" },
   task: { number: "З-000123", title: "Замена лампы", status_code: "in_progress", engineer: { full_name: "Иванов Пётр Алексеевич" } },
@@ -51,7 +51,7 @@ const RESERVATION_ROW = {
 function record(input: Partial<StockReservationRecord> & Pick<StockReservationRecord, "id" | "number">): StockReservationRecord {
   return {
     status: "issued", partId: "p1", articleNumber: "AU-LAMP", partName: "Лампа", condition: "N", quantity: 1,
-    steps: [], createdAt: "2026-11-01T06:00:00.000Z", updatedAt: "2026-11-01T06:00:00.000Z", ...input
+    installMarked: false, steps: [], createdAt: "2026-11-01T06:00:00.000Z", updatedAt: "2026-11-01T06:00:00.000Z", ...input
   };
 }
 
@@ -102,6 +102,7 @@ describe("резерв запчастей под задачу", () => {
       ["warehouse_notified", "Никитина Ольга Павловна"],
       ["issued", "Никитина Ольга Павловна"]
     ]);
+    assert.equal(reservation?.installMarked, true);
     assert.equal(lastReservationStep(reservation!)?.status, "issued");
     assert.equal(reservationStepText(lastReservationStep(reservation!)!), "У инженера · Никитина Ольга Павловна · 12.11.2026 09:00");
   });
@@ -118,6 +119,27 @@ describe("резерв запчастей под задачу", () => {
     assert.deepEqual(reservation?.steps, []);
     assert.equal(reservation?.number, "Р-000012");
     assert.equal(log.length, 2);
+  });
+
+  it("пока в базе нет install_marked, резервы читаются без отметки, но с шагами", async () => {
+    let attempt = 0;
+    const { client, log } = fakeClient(() => {
+      attempt += 1;
+      return attempt === 1
+        ? { error: { message: 'column stock_reservations.install_marked does not exist' } }
+        : { data: [{ ...RESERVATION_ROW, install_marked: undefined }] };
+    });
+    const api = new M2ApiClient(client);
+    const [reservation] = await api.taskReservations("t1");
+    assert.equal(reservation?.installMarked, false);
+    // Отметку убрали, а историю оставили: шаги по-прежнему на месте.
+    assert.equal(reservation?.steps.length, 3);
+    assert.match(String(log[0]?.calls[0]?.[1]), /install_marked/u);
+    assert.doesNotMatch(String(log[1]?.calls[0]?.[1]), /install_marked/u);
+    assert.match(String(log[1]?.calls[0]?.[1]), /stock_reservation_history\(/u);
+    // Второй запрос уже знает, что колонки нет: лишней попытки не будет.
+    await api.taskReservations("t1");
+    assert.equal(log.length, 3);
   });
 
   it("список резервов склада тоже отдаёт шаги", async () => {
@@ -186,6 +208,23 @@ describe("запчасти у инженеров", () => {
     assert.deepEqual(groups[0]?.items.map((item) => item.reservation.number), ["Р-000002", "Р-000001"]);
     // Невыданные резервы в список не попадают: они ещё на складе или уже закрыты.
     assert.equal(groups.some((group) => group.items.some((item) => item.reservation.status !== "issued")), false);
+  });
+
+  it("подпись «установлена» собирает все отмеченные резервы одной запчасти и состояния", () => {
+    const marked = (id: string, number: string, extra: Partial<StockReservationRecord> = {}) => record({
+      id, number, articleNumber: "UNI-FUSE-5A", condition: "B", installMarked: true, ...extra
+    });
+    const reservations = [
+      marked("r1", "Р-000012"),
+      marked("r2", "Р-000013"),
+      // Та же запчасть, но другое состояние и без отметки: в подпись не попадают.
+      marked("r3", "Р-000014", { condition: "N" }),
+      record({ id: "r4", number: "Р-000015", articleNumber: "UNI-FUSE-5A", condition: "B" })
+    ];
+    const part = { articleNumber: "UNI-FUSE-5A", condition: "B" as const, reservationId: "r2" };
+    assert.deepEqual(installedReservationNumbers(part, reservations), ["Р-000012", "Р-000013"]);
+    // Позиция, которую завели руками, к резервам отношения не имеет.
+    assert.deepEqual(installedReservationNumbers({ ...part, reservationId: undefined }, reservations), []);
   });
 
   it("в Excel уходит строка на каждую выданную запчасть с днями у инженера", () => {
