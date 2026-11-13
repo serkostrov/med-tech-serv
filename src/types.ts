@@ -158,6 +158,11 @@ export interface TaskPartPosition {
   readonly quantity: number;
   readonly condition: "G" | "N" | "B";
   readonly forSale?: boolean;
+  /** Позиция пришла из резерва склада: её нельзя править руками в списке запчастей. */
+  readonly reservationId?: string;
+  readonly reservationNumber?: string;
+  /** Инженер отметил, что запчасть установлена на прибор. */
+  readonly installed?: boolean;
 }
 
 export interface TaskPartsResponse {

@@ -2,7 +2,7 @@ import type { Permission, WorkingRole } from "./domain/access.js";
 import { availableTaskActions, type AvailableTaskAction } from "./domain/task-actions.js";
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import { companyDay, companyDayEnd, companyDayStart, companyToday } from "./task-dates.js";
-import type { EquipmentHistoryEvent, EquipmentHistoryEventType } from "./domain/equipment-history.js";
+import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistoryPart } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
@@ -303,6 +303,17 @@ export type StockReservationStatus = "created" | "warehouse_notified" | "issued"
 export const ACTIVE_RESERVATION_STATUSES: readonly StockReservationStatus[] = ["created", "warehouse_notified", "issued"];
 export const CLOSED_RESERVATION_STATUSES: readonly StockReservationStatus[] = ["installed", "returned", "cancelled"];
 
+/**
+ * Шаг резерва из stock_reservation_history: в какой статус перевели, кто и когда.
+ * Пустой список означает, что истории ещё нет (или база её пока не отдаёт).
+ */
+export interface StockReservationStep {
+  readonly status: StockReservationStatus;
+  readonly fromStatus?: StockReservationStatus;
+  readonly changedAt: string;
+  readonly actorName?: string;
+}
+
 export interface StockReservationRecord {
   readonly id: string;
   readonly number: string;
@@ -321,6 +332,8 @@ export interface StockReservationRecord {
   readonly engineerName?: string;
   /** Кому выдали на самом деле (после выдачи). */
   readonly issuedToName?: string;
+  /** Шаги резерва по порядку: от «Ждёт сборки» до последнего состояния. */
+  readonly steps: readonly StockReservationStep[];
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -601,6 +614,34 @@ export function publicApiErrorMessage(message: string | undefined, fallback = "�
 
 const RESERVATION_STATUSES: readonly StockReservationStatus[] = [...ACTIVE_RESERVATION_STATUSES, ...CLOSED_RESERVATION_STATUSES];
 
+function reservationStatus(value: string | undefined): StockReservationStatus | undefined {
+  return value && (RESERVATION_STATUSES as readonly string[]).includes(value) ? value as StockReservationStatus : undefined;
+}
+
+/**
+ * Шаги резерва из встроенной stock_reservation_history по порядку времени.
+ * Имя автора приходит из users по changed_by; если его не встроили, остаётся только время.
+ */
+function reservationSteps(value: unknown): readonly StockReservationStep[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      const row = asRow(item);
+      const status = reservationStatus(optionalText(row, "to_status"));
+      if (!status) return undefined;
+      const fromStatus = reservationStatus(optionalText(row, "from_status"));
+      const actorName = optionalText(related(row, "changer"), "full_name");
+      return {
+        status,
+        ...(fromStatus ? { fromStatus } : {}),
+        changedAt: iso(row.changed_at),
+        ...(actorName ? { actorName } : {})
+      } satisfies StockReservationStep;
+    })
+    .filter((step): step is StockReservationStep => step !== undefined)
+    .sort((left, right) => left.changedAt.localeCompare(right.changedAt));
+}
+
 /**
  * Строка stock_reservations со встроенными запчастью, задачей и инженерами. Задачу кладовщик
  * видит, пока резерв действует: у закрытых резервов задача приходит пустой.
@@ -633,6 +674,7 @@ export function stockReservationRecord(row: Row): StockReservationRecord {
     ...(taskStatus ? { taskStatus } : {}),
     ...(engineerName ? { engineerName } : {}),
     ...(issuedToName ? { issuedToName } : {}),
+    steps: reservationSteps(row.stock_reservation_history ?? row.history),
     createdAt: text(row, "created_at"),
     updatedAt: text(row, "updated_at")
   };
@@ -682,6 +724,30 @@ export function searchTextPattern(token: string): string {
  * Ошибка из-за того, что представления или функции из новой миграции ещё нет в базе
  * (или PostgREST её ещё не видит). Тогда список работает по-старому, а не падает.
  */
+/**
+ * Запчасть из details события «Замена запчасти»: артикул, наименование, количество и Г/Н/Б.
+ * Старые события без этих полей остаются без запчасти.
+ */
+function historyPartDetails(details: Row): EquipmentHistoryPart | undefined {
+  const articleNumber = optionalText(details, "articleNumber");
+  const name = optionalText(details, "partName");
+  const quantity = numberValue(details.quantity);
+  const conditionText = optionalText(details, "condition");
+  const condition = conditionText === "G" || conditionText === "N" || conditionText === "B" ? conditionText : undefined;
+  if (!articleNumber && !name && quantity === undefined && !condition) return undefined;
+  return {
+    ...(articleNumber ? { articleNumber } : {}),
+    ...(name ? { name } : {}),
+    ...(quantity !== undefined ? { quantity } : {}),
+    ...(condition ? { condition } : {})
+  };
+}
+
+/** Функции из новой миграции в базе ещё нет: PostgREST отвечает PGRST202. */
+function isMissingDatabaseFunction(error: { readonly code?: string } | null): boolean {
+  return (error as { readonly code?: string } | null)?.code === "PGRST202";
+}
+
 function isMissingSchemaObject(
   error: { readonly message?: string; readonly code?: string; readonly details?: string; readonly hint?: string } | null,
   name: string
@@ -693,6 +759,14 @@ function isMissingSchemaObject(
   if (missing) console.warn(`В базе нет ${name}: работаем по-старому, пока не применена миграция 0025`);
   return missing;
 }
+
+const RESERVATION_SELECT = "id, number, status, part_id, part_condition, quantity, task_id, created_at, updated_at, "
+  + "part:parts(article_number, name), task:tasks(number, title, status_code, engineer:users!engineer_id(full_name)), issued:users!issued_to(full_name)";
+
+/** Шаги резерва с автором: stock_reservation_history по FK changed_by → users (миграция 0028). */
+const RESERVATION_HISTORY_SELECT = "stock_reservation_history(from_status, to_status, changed_at, changed_by, changer:users!changed_by(full_name))";
+
+const TASK_PART_SELECT = "id, article_number_snapshot, name_snapshot, quantity, part_condition";
 
 const PART_SELECT = "id, article_number, name, minimum_stock, notes, is_active";
 
@@ -1665,6 +1739,7 @@ export class M2ApiClient {
       const previousName = optionalText(details, "previousValue");
       const newName = optionalText(details, "newValue");
       const comment = optionalText(details, "comment");
+      const part = historyPartDetails(details);
       return {
         id: text(row, "event_id"),
         equipmentId: text(row, "equipment_id"),
@@ -1689,6 +1764,7 @@ export class M2ApiClient {
           }
         } : {}),
         ...(comment ? { comment } : {}),
+        ...(part ? { part } : {}),
         author: optionalText(row, "created_by_name") ? { id: optionalText(row, "created_by"), name: text(row, "created_by_name") } : undefined
       } satisfies EquipmentHistoryEvent;
     });
@@ -2818,20 +2894,20 @@ export class M2ApiClient {
 
   public async taskCard(id: string): Promise<TaskCardResponse> {
     // Шаг 1: всё, что зависит только от id задачи, одновременно.
+    // Столбцы резерва и отметки об установке появились в 0028, for_sale раньше: если их в базе
+    // ещё нет, читаем запчасти по-старому, а не роняем карточку.
     const loadParts = async (): Promise<{ data: unknown[] | null; error: { message?: string } | null }> => {
-      const withSale = await this.db()
-        .from("task_parts")
-        .select("id, article_number_snapshot, name_snapshot, quantity, part_condition, for_sale")
-        .eq("task_id", id)
-        .order("position");
-      if (withSale.error && /for_sale/iu.test(withSale.error.message ?? "")) {
-        return this.db()
-          .from("task_parts")
-          .select("id, article_number_snapshot, name_snapshot, quantity, part_condition")
-          .eq("task_id", id)
-          .order("position");
+      const selects = [
+        `${TASK_PART_SELECT}, for_sale, reservation_id, installed, reservation:stock_reservations(number)`,
+        `${TASK_PART_SELECT}, for_sale`,
+        TASK_PART_SELECT
+      ];
+      for (const [index, select] of selects.entries()) {
+        const result = await this.db().from("task_parts").select(select).eq("task_id", id).order("position");
+        if (!result.error || index === selects.length - 1) return result;
+        if (!/for_sale|reservation_id|installed|stock_reservations/iu.test(result.error.message ?? "")) return result;
       }
-      return withSale;
+      return { data: null, error: null };
     };
     // Вид работ, причина, этап и прибор приходят вместе с задачей, имена авторов вместе
     // с историей и закрытием: карточка открывается одной волной запросов. Ссылки на фото
@@ -2951,13 +3027,18 @@ export class M2ApiClient {
       } : undefined,
       parts: (parts.data ?? []).map((item) => {
         const row = asRow(item);
+        const reservationId = optionalText(row, "reservation_id");
+        const reservationNumber = optionalText(related(row, "reservation"), "number");
         return {
           id: text(row, "id"),
           articleNumber: text(row, "article_number_snapshot"),
           name: text(row, "name_snapshot"),
           quantity: numberValue(row.quantity) ?? 0,
           condition: text(row, "part_condition") as TaskPartPosition["condition"],
-          ...(row.for_sale === true ? { forSale: true } : {})
+          ...(row.for_sale === true ? { forSale: true } : {}),
+          ...(reservationId ? { reservationId } : {}),
+          ...(reservationNumber ? { reservationNumber } : {}),
+          ...(row.installed === true ? { installed: true } : {})
         };
       }),
       canEditOverview: !terminal && canWrite,
@@ -2990,8 +3071,14 @@ export class M2ApiClient {
     };
   }
 
+  /**
+   * Список запчастей задачи, которые ведут руками. Позиции из резерва склада (reservation_id)
+   * не трогаем: их создаёт и закрывает склад, а инженер только отмечает установку.
+   */
   public async replaceTaskParts(id: string, items: readonly Omit<TaskPartPosition, "id">[]): Promise<TaskPartsResponse> {
-    const { error: deleteError } = await this.db().from("task_parts").delete().eq("task_id", id);
+    const linked = await this.linkedTaskParts(id);
+    const deleteRequest = this.db().from("task_parts").delete().eq("task_id", id);
+    const { error: deleteError } = await (linked.supported ? deleteRequest.is("reservation_id", null) : deleteRequest);
     throwIfError(deleteError);
     if (items.length) {
       const articles = items.map((item) => item.articleNumber);
@@ -3009,7 +3096,8 @@ export class M2ApiClient {
           name_snapshot: item.name,
           quantity: item.quantity,
           for_sale: item.forSale === true,
-          position: index
+          // Позиции из резерва остаются на своих местах, ручные идут после них.
+          position: linked.nextPosition + index
         };
       });
       let { error } = await this.db().from("task_parts").insert(rowsWithSale);
@@ -3023,6 +3111,20 @@ export class M2ApiClient {
     }
     const card = await this.taskCard(id);
     return { items: card.parts };
+  }
+
+  /**
+   * Строки запчастей задачи, привязанные к резерву склада. Пока столбца reservation_id
+   * в базе нет (до миграции 0028), считаем, что таких строк нет, и работаем как раньше.
+   */
+  private async linkedTaskParts(taskId: string): Promise<{ readonly supported: boolean; readonly nextPosition: number }> {
+    const { data, error } = await this.db().from("task_parts").select("position").eq("task_id", taskId).not("reservation_id", "is", null);
+    if (error) {
+      if (/reservation_id/iu.test(error.message ?? "")) return { supported: false, nextPosition: 0 };
+      throwIfError(error, "Не получилось прочитать запчасти задачи");
+    }
+    const positions = (data ?? []).map((item) => numberValue(asRow(item).position) ?? 0);
+    return { supported: true, nextPosition: positions.length ? Math.max(...positions) + 1 : 0 };
   }
 
   public async listTaskEngineers(): Promise<readonly { readonly id: string; readonly fullName: string }[]> {
@@ -3341,15 +3443,42 @@ export class M2ApiClient {
    * closed: последние 100 закрытых.
    */
   public async stockReservations(state: "active" | "closed" = "active"): Promise<readonly StockReservationRecord[]> {
-    const select = "id, number, status, part_id, part_condition, quantity, task_id, created_at, updated_at, "
-      + "part:parts(article_number, name), task:tasks(number, title, status_code, engineer:users!engineer_id(full_name)), issued:users!issued_to(full_name)";
-    let request = this.db().from("stock_reservations").select(select);
-    request = state === "active"
-      ? request.in("status", [...ACTIVE_RESERVATION_STATUSES]).order("created_at").order("number").limit(500)
-      : request.in("status", [...CLOSED_RESERVATION_STATUSES]).order("updated_at", { ascending: false }).limit(100);
-    const { data, error } = await request;
-    throwIfError(error, "Не получилось загрузить резервы");
-    return (data ?? []).map((item) => stockReservationRecord(asRow(item)));
+    return this.loadReservations((select) => {
+      const request = this.db().from("stock_reservations").select(select);
+      return state === "active"
+        ? request.in("status", [...ACTIVE_RESERVATION_STATUSES]).order("created_at").order("number").limit(500)
+        : request.in("status", [...CLOSED_RESERVATION_STATUSES]).order("updated_at", { ascending: false }).limit(100);
+    }, "Не получилось загрузить резервы");
+  }
+
+  /** Резервы одной задачи с шагами истории: карточка задачи и форма результата инженера. */
+  public async taskReservations(taskId: string): Promise<readonly StockReservationRecord[]> {
+    return this.loadReservations(
+      (select) => this.db().from("stock_reservations").select(select).eq("task_id", taskId).order("created_at").order("number"),
+      "Не получилось загрузить резервы задачи"
+    );
+  }
+
+  /**
+   * Резервы с шагами истории. Если встроить историю (или имена авторов) не удалось — например,
+   * миграции 0028 в базе ещё нет, — читаем резервы как раньше, без шагов, а не падаем.
+   */
+  private async loadReservations(
+    request: (select: string) => PromiseLike<{ readonly data: unknown[] | null; readonly error: { readonly message?: string } | null }>,
+    fallback: string
+  ): Promise<readonly StockReservationRecord[]> {
+    const selects = [
+      `${RESERVATION_SELECT}, ${RESERVATION_HISTORY_SELECT}`,
+      `${RESERVATION_SELECT}, stock_reservation_history(from_status, to_status, changed_at, changed_by)`,
+      RESERVATION_SELECT
+    ];
+    for (const [index, select] of selects.entries()) {
+      const { data, error } = await request(select);
+      if (!error) return (data ?? []).map((item) => stockReservationRecord(asRow(item)));
+      if (index === selects.length - 1) throwIfError(error, fallback);
+      console.warn("Шаги резерва не встроились: читаем резервы без истории", error.message);
+    }
+    return [];
   }
 
   /** Склад собрал запчасть, её можно выдавать инженеру. */
@@ -3372,6 +3501,38 @@ export class M2ApiClient {
     await this.stockReservationRpc("return_stock_reservation", id, "Не получилось принять запчасть на склад");
   }
 
+  /**
+   * Зарезервировать запчасть под задачу (функция базы 0028). Права, этап задачи и остаток
+   * проверяет база: её сообщение («На складе доступно 1 шт. …») показываем как есть.
+   */
+  public async createTaskPartReservation(
+    taskId: string,
+    input: { readonly partId: string; readonly condition: "G" | "N" | "B"; readonly quantity: number }
+  ): Promise<{ readonly id: string; readonly number: string }> {
+    const quantity = Number(input.quantity);
+    if (!Number.isFinite(quantity) || quantity <= 0) throw new M2ApiError(400, "Укажите количество больше нуля");
+    const { data, error } = await this.db().rpc("create_task_part_reservation", {
+      p_task_id: taskId,
+      p_part_id: input.partId,
+      p_condition: input.condition,
+      p_quantity: quantity
+    });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Резерв запчастей заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось зарезервировать запчасть");
+    const row = Array.isArray(data) ? asRow(data[0]) : asRow(data);
+    return { id: text(row, "id"), number: text(row, "number") };
+  }
+
+  /**
+   * Отметки «установлена» по выданным на задачу резервам (функция базы 0028): перечисленные
+   * резервы получают строку в запчастях задачи с installed=true, остальные выданные — false.
+   */
+  public async setTaskPartsInstalled(taskId: string, reservationIds: readonly string[]): Promise<void> {
+    const { error } = await this.db().rpc("set_task_parts_installed", { p_task_id: taskId, p_reservation_ids: [...reservationIds] });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Отметки об установке заработают после обновления базы на сервере");
+    throwIfError(error, "Не получилось отметить установленные запчасти");
+  }
+
   private async changeStockReservationStatus(id: string, status: StockReservationStatus, from: readonly StockReservationStatus[], fallback: string): Promise<void> {
     const { data, error } = await this.db().from("stock_reservations").update({ status }).eq("id", id).in("status", [...from]).select("id");
     throwIfError(error, fallback);
@@ -3380,7 +3541,7 @@ export class M2ApiClient {
 
   private async stockReservationRpc(fn: "issue_stock_reservation" | "return_stock_reservation", id: string, fallback: string): Promise<void> {
     const { error } = await this.db().rpc(fn, { p_reservation_id: id });
-    if (error && (error as { readonly code?: string }).code === "PGRST202") {
+    if (isMissingDatabaseFunction(error)) {
       throw new M2ApiError(501, "Выдача и возврат заработают после обновления базы на сервере");
     }
     throwIfError(error, fallback);
