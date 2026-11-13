@@ -38,6 +38,7 @@ import {
   LogOut,
   Mail,
   MapPin,
+  Menu,
   Monitor,
   Package,
   Pencil,
@@ -82,7 +83,7 @@ export type IconName =
   | "plus" | "bell" | "check" | "search" | "filter" | "arrow" | "back" | "clock"
   | "info" | "close" | "users" | "shield" | "mail" | "logout"
   | "edit" | "hide" | "show" | "disable" | "enable" | "open" | "relocate" | "ignore" | "restore"
-  | "moveUp" | "moveDown" | "trash";
+  | "moveUp" | "moveDown" | "trash" | "menu";
 
 const icons: Readonly<Record<IconName, LucideIcon>> = {
   tasks: ClipboardList,
@@ -123,7 +124,8 @@ const icons: Readonly<Record<IconName, LucideIcon>> = {
   restore: RotateCcw,
   moveUp: ArrowUp,
   moveDown: ArrowDown,
-  trash: Trash2
+  trash: Trash2,
+  menu: Menu
 };
 
 export function Icon({ name, size = 16 }: { readonly name: IconName; readonly size?: number }) {
@@ -677,11 +679,15 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
   );
 }
 
-export function Sheet({ open, onOpenChange, title, description, children }: Pick<DialogProps, "open" | "onOpenChange" | "title" | "description" | "children">) {
+export function Sheet({ open, onOpenChange, title, description, children, onCloseAutoFocus }: Pick<DialogProps, "open" | "onOpenChange" | "title" | "description" | "children"> & {
+  /** Куда вернуть фокус после закрытия, если панель открыта не своей кнопкой-триггером (меню на телефоне). */
+  readonly onCloseAutoFocus?: (event: Event) => void;
+}) {
   return (
     <UiSheet onOpenChange={onOpenChange} open={open}>
       <SheetContent
         className="sheet-content"
+        {...(onCloseAutoFocus ? { onCloseAutoFocus } : {})}
         onFocusOutside={(event) => { if (isDatePickerSurface(event.target) || isSelectSurface(event.target)) event.preventDefault(); }}
         onInteractOutside={(event) => { if (isDatePickerSurface(event.target) || isSelectSurface(event.target)) event.preventDefault(); }}
         onPointerDownOutside={(event) => { if (isDatePickerSurface(event.target) || isSelectSurface(event.target)) event.preventDefault(); }}

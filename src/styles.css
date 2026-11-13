@@ -5950,10 +5950,6 @@ td .resource-state {
     display: none;
   }
 
-  .app-mobile-bar {
-    display: flex;
-  }
-
   .page-intro__row {
     flex-direction: column;
     align-items: stretch;
@@ -7092,11 +7088,20 @@ td .resource-state {
 }
 
 .app-mobile-bar strong {
-  overflow: hidden;
+  min-width: 0;
   font-size: 14px;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+}
+
+/* Узкий экран: боковое меню скрыто, вместо него полоса с кнопкой «Меню». Правило стоит
+   после базового: раньше базовое display: none перебивало его, и меню на телефоне не было. */
+@media (max-width: 900px) {
+  .app-mobile-bar { display: flex; }
+  /* Прилипшая полоса не закрывает поле или кнопку, на которую перешли с клавиатуры. */
+  .main-shell { scroll-padding-top: 64px; }
+  /* После выбора раздела в меню фокус переходит на страницу: рамку вокруг всей страницы не рисуем. */
+  #main-content:focus { outline: none; }
 }
 
 .sidebar--sheet {

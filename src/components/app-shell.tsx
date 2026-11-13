@@ -1,5 +1,4 @@
-import { Menu } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { subscribeActivity } from "../lib/activity.js";
 import type { NavigationId, NavigationItem } from "../navigation.js";
 import { Button, Icon, Sheet } from "../ui.js";
@@ -29,10 +28,21 @@ export function AppShell({
   readonly children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
+  // Меню на телефоне: куда вернуть фокус после закрытия (выбран раздел, открыт профиль или просто закрыли).
+  const mobileCloseTarget = useRef<"page" | "dialog" | "button">("button");
   const initials = userName.split(" ").map((part) => part[0]).join("").slice(0, 2);
   const navigate = (id: NavigationId) => {
+    mobileCloseTarget.current = "page";
     onNavigate(id);
     setMobileOpen(false);
+  };
+  const returnFocusAfterMobileMenu = (event: Event) => {
+    event.preventDefault();
+    const target = mobileCloseTarget.current;
+    mobileCloseTarget.current = "button";
+    // Профиль открывает своё окно, фокус в нём ставит само окно.
+    if (target === "dialog") return;
+    document.getElementById(target === "page" ? "main-content" : "app-mobile-menu-button")?.focus();
   };
 
   const navigation = (
@@ -95,13 +105,12 @@ export function AppShell({
 
       <div className="main-shell">
         <header className="app-mobile-bar">
-          <Button aria-label="Открыть меню разделов" onClick={() => setMobileOpen(true)} variant="secondary">
-            <Menu aria-hidden="true" size={16} />
+          <Button aria-label="Открыть меню разделов" icon="menu" id="app-mobile-menu-button" onClick={() => { mobileCloseTarget.current = "button"; setMobileOpen(true); }} variant="secondary">
             Меню
           </Button>
           <strong>{currentPageLabel ?? "МедТехСервис"}</strong>
         </header>
-        <Sheet description="Выберите раздел, чтобы продолжить работу." onOpenChange={setMobileOpen} open={mobileOpen} title="Разделы">
+        <Sheet description="Выберите раздел, чтобы продолжить работу." onCloseAutoFocus={returnFocusAfterMobileMenu} onOpenChange={setMobileOpen} open={mobileOpen} title="Разделы">
           <div className="sidebar sidebar--sheet">
             {navigation}
             {userBlock}
