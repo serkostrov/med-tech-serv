@@ -27,9 +27,10 @@ it("builds kanban columns from the editable status catalog and keeps task cards 
   assert.match(html, /SN-1/u);
   assert.match(html, /draggable="true"/u);
   assert.doesNotMatch(html, /Перетащите задачу сюда/u);
-  // Галочка на карточке: несколько отмеченных задач переносятся вместе.
-  assert.match(html, /aria-label="Отметить задачу З-1"/u);
-  assert.match(html, /type="checkbox"/u);
+  // Галочек на карточке нет: задачи переносятся по одной.
+  assert.doesNotMatch(html, /type="checkbox"/u);
+  assert.doesNotMatch(html, /Отметить задачу/u);
+  assert.doesNotMatch(html, /task-board-selection/u);
 });
 
 it("moves on the board only to the next step, checks review readiness and explains steps that need the card", () => {

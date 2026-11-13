@@ -8370,60 +8370,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .notification-table__toggle:hover strong { color: var(--color-accent-dark); text-decoration: underline; }
 .notification-table__toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
 
-/* ===== Доска: несколько задач сразу, ошибки вместо перехода в карточку ===== */
-.task-board-card { position: relative; }
-/* Место под галочку справа сверху, чтобы она не наезжала на «Срочно». */
-.task-board-card__open > .task-board-card__top { padding-right: 26px; }
-.task-board-card__select {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  z-index: 1;
-  display: inline-grid;
-  width: 22px;
-  height: 22px;
-  place-items: center;
-  border-radius: 6px;
-  cursor: pointer;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-.task-board-card__select input { width: 17px; height: 17px; margin: 0; accent-color: var(--color-accent); cursor: pointer; }
-/* Галочка видна при наведении, с клавиатуры и когда уже что-то отмечено. */
-.task-board-card:hover .task-board-card__select,
-.task-board-card:focus-within .task-board-card__select,
-.task-board-card--selecting .task-board-card__select,
-.task-board-card--selected .task-board-card__select { opacity: 1; }
-.task-board-card--selected { border-color: var(--color-accent); background: #f2f9fd; box-shadow: 0 0 0 2px rgb(35 142 190 / 22%); }
-.task-board-card--selected:hover { border-color: var(--color-accent); }
-.task-board-selection {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px 14px;
-  margin-bottom: 10px;
-  padding: 9px 14px;
-  border: 1px solid #bfe0ef;
-  border-radius: 10px;
-  background: #f2f9fd;
-  color: var(--color-ink-soft);
-  font-size: 13.5px;
-}
-.task-board-selection strong { color: var(--color-ink); font-weight: 650; }
-.task-board-selection .text-button { margin-left: auto; }
-/* Значок под курсором при переносе нескольких задач. */
-.task-board-drag-ghost {
-  position: fixed;
-  top: -200px;
-  left: -200px;
-  padding: 7px 12px;
-  border-radius: 999px;
-  background: var(--color-accent-dark);
-  color: #fff;
-  font-size: 13px;
-  font-weight: 650;
-  box-shadow: 0 6px 16px rgb(16 42 58 / 25%);
-}
+/* ===== Доска: ошибки вместо перехода в карточку ===== */
 .toast__action {
   margin-top: 6px;
   padding: 0;
@@ -8444,11 +8391,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .registry-pagination__range { font-variant-numeric: tabular-nums; white-space: nowrap; }
 /* Много карточек в колонке: каждая своей высоты, колонка прокручивается (раньше карточки сплющивались). */
 .task-board__cards { grid-auto-rows: max-content; }
-/* Сенсорный экран: перетаскивания нет, галочку не показываем, чтобы нажатие в угол открывало задачу. */
-@media (hover: none) {
-  .task-board-card__select { display: none; }
-  .task-board-card__open > .task-board-card__top { padding-right: 0; }
-}
 
 /* ===== Паспорт прибора открывается: каркас вместо пустого ожидания ===== */
 .equipment-card-loading__block { height: 120px; margin-bottom: 16px; border-radius: 12px; }
@@ -8457,15 +8399,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* Место, куда встанет перетаскиваемая карточка (как в Trello): колонка раздвигается под неё. */
 .task-board__slot {
-  display: grid;
-  place-items: center;
   box-sizing: border-box;
   min-height: 44px;
   border: 1.5px dashed rgb(35 142 190 / 55%);
   border-radius: 9px;
   background: rgb(35 142 190 / 7%);
-  color: var(--color-accent-dark);
-  font-size: 12.5px;
-  font-weight: 600;
   pointer-events: none;
 }

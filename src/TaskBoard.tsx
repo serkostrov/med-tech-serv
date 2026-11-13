@@ -211,7 +211,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   const loadColumnRef = useRef(loadColumn);
   loadColumnRef.current = loadColumn;
   const touchColumn = (code: string) => { columnVersions.current[code] = (columnVersions.current[code] ?? 0) + 1; };
-  // Задачи, которые сейчас перетаскивают (одну или все отмеченные).
+  // Задача, которую сейчас перетаскивают.
   const [draggedIds, setDraggedIds] = useState<readonly string[]>([]);
   const [dropTarget, setDropTarget] = useState<string | null>(null);
   // Куда встанут карточки, если отпустить сейчас: колонка и номер места среди остальных карточек.
@@ -226,25 +226,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   // Высота перетаскиваемой карточки: место под неё в колонке такой же высоты.
   const [dragHeight, setDragHeight] = useState(0);
   const [moving, setMoving] = useState<ReadonlySet<string>>(new Set());
-  // Отмеченные задачи: их можно перетащить в колонку все вместе.
-  const [selected, setSelected] = useState<ReadonlySet<string>>(new Set());
   const columnSignature = columns.map((status) => status.code ?? status.id).join("|");
-
-  // Другие фильтры или обновление доски: прежний выбор больше не относится к тому, что на экране.
-  useEffect(() => { setSelected(new Set()); }, [queryKey, columnSignature]);
-  // Esc снимает выбор, если он не закрывает окно и не сбрасывает поле ввода.
-  useEffect(() => {
-    if (selected.size === 0) return undefined;
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return;
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.closest("input, textarea, select, [contenteditable='true'], [role='dialog'], [role='listbox']")) return;
-      if (document.querySelector("[role='dialog']")) return;
-      setSelected(new Set());
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [selected.size]);
 
   useEffect(() => {
     if (!loadColumn || columns.length === 0) return undefined;
@@ -379,12 +361,6 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   const boardOrder = (left: BoardEntry, right: BoardEntry) => (columnCodes.indexOf(left.source) - columnCodes.indexOf(right.source))
     || (itemsFor(left.source).findIndex((task) => task.id === left.task.id) - itemsFor(right.source).findIndex((task) => task.id === right.task.id));
 
-  const toggleSelected = (taskId: string) => setSelected((current) => {
-    const next = new Set(current);
-    if (next.has(taskId)) next.delete(taskId); else next.add(taskId);
-    return next;
-  });
-
   /**
    * После переноса перечитываем уже загруженную часть колонок: сервер сортирует задачи по-своему,
    * и без этого догрузка со смещением пропустила бы карточки. Пока в колонке идёт другой перенос,
@@ -447,7 +423,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   };
 
   /**
-   * Переносит одну или несколько задач в колонку. Каждая задача проверяется отдельно.
+   * Переносит задачи в колонку (с доски приходит одна). Каждая проверяется отдельно.
    * slot: место среди остальных карточек колонки, как в Trello. Без него задача встаёт наверх,
    * а после обновления колонки по сортировке доски.
    */
@@ -457,14 +433,10 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     updateSlot(null);
     const found = taskIds.map(findEntry).filter((entry): entry is BoardEntry => Boolean(entry));
     const reorder = slot !== undefined && canReorder(targetStatus);
-    // Уже лежат в этой колонке: без места переносить нечего, с выбора снимаем.
-    const alreadyThere = new Set(found.filter((entry) => entry.source === targetStatus).map((entry) => entry.task.id));
     const staying = reorder ? found.filter((entry) => entry.source === targetStatus && !moving.has(entry.task.id)) : [];
     const entries = found.filter((entry) => entry.source !== targetStatus && !moving.has(entry.task.id));
-    if (entries.length === 0 && staying.length === 0) {
-      if (alreadyThere.size) setSelected((current) => new Set([...current].filter((id) => !alreadyThere.has(id))));
-      return;
-    }
+    // Уже лежит в этой колонке, а места нет: переносить нечего.
+    if (entries.length === 0 && staying.length === 0) return;
     const problems: DropProblem[] = [];
     const direct: BoardEntry[] = [];
     const checked: BoardEntry[] = [];
@@ -568,27 +540,14 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     }
     // Порядок и счётчики колонок как на сервере: перенесённые и возвращённые задачи на своих местах.
     void refreshColumns(touched);
-    // С выбора снимаем перенесённые и те, что уже лежали в колонке; не перенесённые и другие остаются.
-    setSelected((current) => new Set([...current].filter((id) => !moved.has(id) && !alreadyThere.has(id))));
     if (entries.length > 0) report(problems, moved.size, entries.length, targetStatus);
   };
 
   const startDrag = (event: DragEvent<HTMLElement>, taskId: string) => {
-    // Тянем отмеченную задачу: переносим все отмеченные. Иначе только эту.
-    const ids = selected.has(taskId) ? [...selected].filter((id) => findEntry(id)) : [taskId];
-    setDraggedIds(ids);
+    setDraggedIds([taskId]);
     setDragHeight(event.currentTarget.getBoundingClientRect().height);
     event.dataTransfer.effectAllowed = "move";
-    event.dataTransfer.setData("text/plain", ids.join(","));
-    if (ids.length > 1 && typeof document !== "undefined") {
-      // Под курсором видно, сколько задач переносим.
-      const ghost = document.createElement("div");
-      ghost.className = "task-board-drag-ghost";
-      ghost.textContent = `${ids.length} ${tasksWord(ids.length)}`;
-      document.body.appendChild(ghost);
-      event.dataTransfer.setDragImage(ghost, 18, 18);
-      window.setTimeout(() => ghost.remove(), 0);
-    }
+    event.dataTransfer.setData("text/plain", taskId);
   };
 
   const draggedEntries = draggedIds.map(findEntry).filter((entry): entry is BoardEntry => Boolean(entry));
@@ -629,16 +588,8 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     const device = equipment.find((item) => item.id === task.equipmentId);
     const engineer = engineers.find((item) => item.id === task.engineerId);
     const isMoving = moving.has(task.id);
-    const isSelected = selected.has(task.id);
-    return <article aria-busy={isMoving} className={`task-board-card${task.isOverdue ? " task-board-card--overdue" : ""}${draggedIds.includes(task.id) ? " task-board-card--dragging" : ""}${isSelected ? " task-board-card--selected" : ""}${selected.size > 0 ? " task-board-card--selecting" : ""}`} data-board-card={task.id} draggable={!isMoving} key={task.id} onDragEnd={() => { setDraggedIds([]); setDropTarget(null); updateSlot(null); }} onDragStart={(event) => startDrag(event, task.id)}>
-      <label className="task-board-card__select" title="Отметьте несколько задач и перетащите их вместе">
-        <input aria-label={`Отметить задачу ${task.number}`} checked={isSelected} onChange={() => toggleSelected(task.id)} type="checkbox" />
-      </label>
-      <button className="task-board-card__open" onClick={(event) => {
-        // Cmd, Ctrl или Shift + клик отмечает задачу, не открывая её.
-        if (event.metaKey || event.ctrlKey || event.shiftKey) { event.preventDefault(); toggleSelected(task.id); return; }
-        onOpen(task.id);
-      }} type="button">
+    return <article aria-busy={isMoving} className={`task-board-card${task.isOverdue ? " task-board-card--overdue" : ""}${draggedIds.includes(task.id) ? " task-board-card--dragging" : ""}`} data-board-card={task.id} draggable={!isMoving} key={task.id} onDragEnd={() => { setDraggedIds([]); setDropTarget(null); updateSlot(null); }} onDragStart={(event) => startDrag(event, task.id)}>
+      <button className="task-board-card__open" onClick={() => onOpen(task.id)} type="button">
         <span className="task-board-card__top">{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>
         <strong>{task.title}</strong>
         <small>{[task.customer?.siteName ?? "Площадка не выбрана", task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : null].filter(Boolean).join(" · ")}</small>
@@ -653,13 +604,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     </article>;
   };
 
-  return <>
-    {selected.size > 0 ? <div className="task-board-selection" role="status">
-      <strong>Выбрано: {selected.size} {tasksWord(selected.size)}</strong>
-      <span>Перетащите любую из них в нужную колонку или на нужное место, перенесутся все</span>
-      <button className="text-button" onClick={() => setSelected(new Set())} type="button">Снять выбор</button>
-    </div> : null}
-    <div className="task-board" aria-label="Доска задач">{columns.map((status) => {
+  return <div className="task-board" aria-label="Доска задач">{columns.map((status) => {
     const code = status.code ?? status.id;
     const items = itemsFor(code);
     const total = totalFor(code);
@@ -669,7 +614,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     const incoming = draggedEntries.filter((entry) => entry.source !== code);
     const blocked = incoming.length > 0 && incoming.every((entry) => boardDropDecision(entry.task, entry.source, code, engineerMode).kind === "no");
     const slotIndex = dropSlot?.code === code && !blocked ? dropSlot.index : -1;
-    const slotNode = <div aria-hidden="true" className="task-board__slot" key="drop-slot" style={draggedIds.length === 1 && dragHeight > 0 ? { height: `${Math.round(dragHeight)}px` } : undefined}>{draggedIds.length > 1 ? `${draggedIds.length} ${tasksWord(draggedIds.length)}` : null}</div>;
+    const slotNode = <div aria-hidden="true" className="task-board__slot" key="drop-slot" style={dragHeight > 0 ? { height: `${Math.round(dragHeight)}px` } : undefined} />;
     // Карточки и место, куда встанут перетаскиваемые (как в Trello). Перетаскиваемые остаются
     // бледными на старом месте и в счёт мест не входят.
     const nodes: ReactNode[] = [];
@@ -689,7 +634,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
       if (event.clientX > box.left && event.clientX < box.right && event.clientY > box.top && event.clientY < box.bottom) return;
       setDropTarget(null);
       if (dropSlotRef.current?.code === code) updateSlot(null);
-    }} onDrop={(event) => { event.preventDefault(); const ids = draggedIds.length > 0 ? draggedIds : (event.dataTransfer.getData("text/plain") || "").split(",").filter(Boolean); const place = dropSlotRef.current?.code === code ? dropSlotRef.current.index : undefined; if (ids.length > 0) void moveTasks(ids, code, place); }}>
+    }} onDrop={(event) => { event.preventDefault(); const ids = draggedIds.length > 0 ? draggedIds : [event.dataTransfer.getData("text/plain")].filter(Boolean); const place = dropSlotRef.current?.code === code ? dropSlotRef.current.index : undefined; if (ids.length > 0) void moveTasks(ids, code, place); }}>
       <header><div><span className="task-board__title"><span aria-hidden="true" className={`task-board__dot task-board__dot--${tone(code, terminal)}`} />{status.name}</span><strong>{total}</strong></div></header>
       <div className="task-board__cards" onScroll={(event) => handleScroll(code, event)}>
         {page?.loading ? <p className="task-board__empty">Загружаем задачи…</p> : null}
@@ -700,6 +645,5 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
         {!page?.loading && items.length < total ? <button className="task-board__more" onClick={() => void loadMore(code)} type="button">Показать ещё {Math.min(COLUMN_PAGE_SIZE, total - items.length)}</button> : null}
       </div>
     </section>;
-  })}</div>
-  </>;
+  })}</div>;
 }

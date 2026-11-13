@@ -1305,7 +1305,7 @@ async function saveBoardPositions(status: string, positions: readonly BoardPosit
 /**
  * Перенос задачи на доске. На проверку задача уходит, только если результат заполнен,
  * как и по кнопке «Передать на проверку» в карточке; иначе ошибка с тем, что заполнить.
- * Ошибки показывает сама доска (одним сообщением, если переносили несколько задач).
+ * Ошибки показывает сама доска.
  */
 async function moveTaskOnBoard(id: string, status: string): Promise<void> {
   if (status === "under_review") {
