@@ -144,6 +144,15 @@ export function channelDeliveryIdempotencyKey(
 }
 
 /**
+ * Резерв из события склада: доставка в журнале ссылается и на резерв, а не только
+ * на задачу. У задачных событий такого поля в payload нет.
+ */
+export function reservationIdFromEvent(event: Pick<BusinessEvent, "payload">): string | undefined {
+  const value = event.payload.reservationId;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+/**
  * Глубокий модуль обработки: claim, повторы и изоляция ошибок скрыты за одним
  * вызовом. Ошибка одного adapter-а переводит только его доставку и событие в
  * retry; доставленные и неоднозначные SMTP-попытки повторно не возвращаются.

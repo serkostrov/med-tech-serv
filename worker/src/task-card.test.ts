@@ -2,7 +2,10 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ChannelDeliveryCommand, OutboxSqlExecutor } from "./outbox.js";
 import { PostgresEmailTaskCardSource } from "./smtp.js";
-import { formatTaskPeriod, loadTaskCardFromPlan, taskCardFromVariables, taskStageLook } from "./task-card.js";
+import {
+  cardNumber, cardRows, cardTitle, formatTaskPeriod, loadTaskCardFromPlan,
+  taskCardFromVariables, taskStageLook, type TaskCardData
+} from "./task-card.js";
 import { PostgresTelegramTaskCardSource } from "./telegram.js";
 
 const variables = {
@@ -15,6 +18,21 @@ const variables = {
   periodTo: "2026-11-13",
   reworkComment: "Нет фото акта",
   taskId: "00000000-0000-4000-8000-000000000139"
+};
+
+/** Резерв из примера ТЗ: клапан 115-107131-00, 1 шт., новая, задача З-000041. */
+const stock: TaskCardData = {
+  eventCode: "stock_reservation_created",
+  recipientName: "Кладовщик один",
+  reservationNumber: "Р-000012",
+  partArticle: "115-107131-00",
+  partName: "клапан",
+  quantity: "1",
+  condition: "новая",
+  taskNumber: "З-000041",
+  taskTitle: "Ремонт BS-620",
+  siteName: "ГКБ № 1",
+  engineerName: "Иванов П. А."
 };
 
 function planDatabase(rows: readonly Record<string, unknown>[]): OutboxSqlExecutor & { readonly queries: Array<{ readonly text: string; readonly values?: readonly unknown[] }> } {
@@ -101,8 +119,63 @@ describe("данные карточки задачи при отправке", (
 
   it("этап по событию: неизвестное событие и служебные имена получают общий вид", () => {
     assert.equal(taskStageLook("task_overdue").light, "#bf3434");
-    assert.equal(taskStageLook("stock_reservation_ready").event, "Изменения по задаче");
+    assert.equal(taskStageLook("equipment_moved").event, "Изменения по задаче");
     assert.equal(taskStageLook("toString").event, "Изменения по задаче");
     assert.equal(taskStageLook("__proto__").event, "Изменения по задаче");
+  });
+
+  it("события резерва: свой вид и свой заголовок, номер карточки — номер резерва", () => {
+    assert.equal(taskStageLook("stock_reservation_created").event, "Новый резерв запчастей");
+    assert.equal(taskStageLook("stock_reservation_ready").event, "Запчасти можно забрать");
+    assert.equal(cardTitle({ ...stock, eventCode: "stock_reservation_ready" }, 120), "клапан");
+    assert.equal(cardNumber({ ...stock, eventCode: "stock_reservation_ready" }, 24), "Р-000012");
+    // У задачи заголовок и номер прежние.
+    assert.equal(cardTitle({ eventCode: "task_overdue", taskTitle: "Замена датчика давления" }, 120), "Замена датчика давления");
+    assert.equal(cardNumber({ eventCode: "task_overdue", taskNumber: "З-000007" }, 24), "З-000007");
+    // Без данных карточка всё равно рисуется.
+    assert.equal(cardTitle({ eventCode: "stock_reservation_created" }, 120), "Запчасть");
+    assert.equal(cardTitle({ eventCode: "task_overdue" }, 120), "Без названия");
+  });
+
+  it("строки карточки резерва: что собрать, сколько и для какой задачи", () => {
+    const limits = { site: 100, person: 60, part: 80, task: 120 };
+    const created = cardRows({ ...stock, eventCode: "stock_reservation_created" }, limits, undefined);
+    assert.deepEqual(created.map((row) => [row.label, row.value]), [
+      ["Артикул", "115-107131-00"],
+      ["Количество", "1 шт., новая"],
+      ["Задача", "З-000041 «Ремонт BS-620»"],
+      ["Площадка", "ГКБ № 1"],
+      ["Инженер", "Иванов П. А."]
+    ]);
+    // Инженеру, который сам пришёл за запчастью, строка про него самого не нужна.
+    const ready = cardRows({ ...stock, eventCode: "stock_reservation_ready" }, limits, undefined);
+    assert.deepEqual(ready.map((row) => row.label), ["Артикул", "Количество", "Задача", "Площадка"]);
+    // Карточка задачи не изменилась: площадка, инженер, срок.
+    const task = cardRows({ eventCode: "task_engineer_assigned", siteName: "ГКБ №1", engineerName: "не назначен" }, limits, "12 нояб");
+    assert.deepEqual(task.map((row) => [row.label, row.value, row.dim]), [
+      ["Площадка", "ГКБ №1", false],
+      ["Инженер", "не назначен", true],
+      ["Срок", "12 нояб", false]
+    ]);
+  });
+
+  it("переменные резерва попадают в карточку из плана рассылки", () => {
+    const card = taskCardFromVariables("stock_reservation_created", {
+      recipientName: "Кладовщик один",
+      reservationNumber: "Р-000012",
+      partArticle: "115-107131-00",
+      partName: "клапан",
+      quantity: "1",
+      condition: "новая",
+      taskNumber: "З-000041",
+      taskTitle: "Ремонт BS-620",
+      siteName: "ГКБ № 1",
+      engineerName: "Иванов П. А."
+    });
+    assert.equal(card?.reservationNumber, "Р-000012");
+    assert.equal(card?.partArticle, "115-107131-00");
+    assert.equal(card?.partName, "клапан");
+    assert.equal(card?.quantity, "1");
+    assert.equal(card?.condition, "новая");
   });
 });

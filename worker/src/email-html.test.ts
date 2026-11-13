@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { taskEmailHtml } from "./email-html.js";
 import type { TaskCardData } from "./task-card.js";
-import { taskWidgetHtml } from "./telegram-widget.js";
+import { taskWidgetHtml, widgetFitsLimits } from "./telegram-widget.js";
 
 const taskUrl = "https://crm.example.test/tasks/00000000-0000-4000-8000-000000000139";
 const card: TaskCardData = {
@@ -14,6 +14,21 @@ const card: TaskCardData = {
   engineerName: "Иванов П. А.",
   periodFrom: "2026-11-12",
   periodTo: "2026-11-13"
+};
+
+/** Резерв из примера ТЗ: клапан 115-107131-00, 1 шт., новая, задача З-000041. */
+const stock: TaskCardData = {
+  eventCode: "stock_reservation_created",
+  recipientName: "Кладовщик один",
+  reservationNumber: "Р-000012",
+  partArticle: "115-107131-00",
+  partName: "клапан",
+  quantity: "1",
+  condition: "новая",
+  taskNumber: "З-000041",
+  taskTitle: "Ремонт BS-620",
+  siteName: "ГКБ № 1",
+  engineerName: "Иванов П. А."
 };
 
 function count(html: string, pattern: RegExp): number {
@@ -50,7 +65,7 @@ describe("HTML-письмо о задаче", () => {
       ["task_work_completed", "Работы завершены", "#1c66b8"],
       ["task_rework_requested", "Возвращена на доработку", "#b9570c"],
       ["task_overdue", "Задача просрочена", "#bf3434"],
-      ["stock_reservation_ready", "Изменения по задаче", "#52627a"]
+      ["equipment_moved", "Изменения по задаче", "#52627a"]
     ] as const;
     for (const [eventCode, event, color] of looks) {
       const html = taskEmailHtml({ ...card, eventCode }, { taskUrl });
@@ -135,5 +150,58 @@ describe("HTML-письмо о задаче", () => {
     const html = taskEmailHtml({ ...card, eventCode: "task_rework_requested", taskTitle: long, siteName: long, engineerName: long, recipientName: long, reworkComment: long }, { taskUrl });
     assert.ok(Buffer.byteLength(html, "utf8") < 40_000);
     assert.match(html, /…<\/h1>/u);
+  });
+
+  it("карточка резерва: запчасть в заголовке, номер резерва рядом с событием", () => {
+    const html = taskEmailHtml(stock, { taskUrl });
+    assert.match(html, /color:#946300;font-weight:700;[^"]*">клапан<\/h1>/u);
+    assert.match(html, />Новый резерв запчастей <span style="color:#445863;">· Р-000012<\/span><\/p>/u);
+    assert.match(html, />Артикул<\/td><td[^>]*>115-107131-00<\/td>/u);
+    assert.match(html, />Количество<\/td><td[^>]*>1 шт\., новая<\/td>/u);
+    assert.match(html, />Задача<\/td><td[^>]*>З-000041 «Ремонт BS-620»<\/td>/u);
+    assert.match(html, />Площадка<\/td><td[^>]*>ГКБ № 1<\/td>/u);
+    assert.match(html, />Инженер<\/td><td[^>]*>Иванов П\. А\.<\/td>/u);
+    // Скрытая строка для списка писем: по артикулу и количеству письмо понятно без открытия.
+    assert.match(html, /mso-hide:all;[^>]*>клапан · 115-107131-00 · 1 шт\., новая&zwnj;/u);
+    // Ссылка ведёт на задачу резерва: кнопка та же, что в задачных письмах.
+    assert.match(html, />Открыть задачу<\/a>/u);
+
+    // «Можно забрать»: цвет собранного резерва, про инженера строки нет — он и есть получатель.
+    const ready = taskEmailHtml({ ...stock, eventCode: "stock_reservation_ready" }, { taskUrl });
+    assert.match(ready, /color:#1c66b8;font-weight:700;[^"]*">клапан<\/h1>/u);
+    assert.match(ready, />Запчасти можно забрать <span style="color:#445863;">· Р-000012<\/span><\/p>/u);
+    assert.doesNotMatch(ready, />Инженер</u);
+  });
+
+  it("карточка резерва в Telegram повторяет письмо", () => {
+    const widget = taskWidgetHtml(stock);
+    assert.match(widget, /--k:#946300/u);
+    assert.match(widget, /<p class="t">клапан<\/p>/u);
+    assert.match(widget, /<p class="e">Новый резерв запчастей <span>· Р-000012<\/span><\/p>/u);
+    assert.match(widget, /<dt>Артикул<\/dt><dd>115-107131-00<\/dd>/u);
+    assert.match(widget, /<dt>Количество<\/dt><dd>1 шт\., новая<\/dd>/u);
+    assert.match(widget, /<dt>Задача<\/dt><dd>З-000041 «Ремонт BS-620»<\/dd>/u);
+    assert.ok(widgetFitsLimits(widget));
+
+    const ready = taskWidgetHtml({ ...stock, eventCode: "stock_reservation_ready" });
+    assert.match(ready, /--k:#1c66b8/u);
+    assert.doesNotMatch(ready, /<dt>Инженер<\/dt>/u);
+  });
+
+  it("данные резерва экранируются: артикул и название запчасти не становятся разметкой", () => {
+    const html = taskEmailHtml({
+      eventCode: "stock_reservation_created",
+      reservationNumber: "Р-1<script>",
+      partArticle: "<img src=x onerror=alert(1)>",
+      partName: "<b>клапан</b>",
+      quantity: "1\"",
+      condition: "новая' & 'б/у",
+      taskNumber: "З-1",
+      taskTitle: "<script>alert(1)</script>"
+    }, { taskUrl });
+    assert.doesNotMatch(html, /<img|<script|<b>клапан/u);
+    assert.match(html, /&lt;b&gt;клапан&lt;\/b&gt;<\/h1>/u);
+    const widget = taskWidgetHtml({ eventCode: "stock_reservation_ready", partName: "<b>клапан</b>", partArticle: "<img src=x>" });
+    assert.doesNotMatch(widget, /<img|<b>клапан/u);
   });
 });

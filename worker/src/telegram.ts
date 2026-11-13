@@ -4,6 +4,7 @@ import { chatIdWidgetHtml, clipUtf16, taskWidgetHtml, widgetFitsLimits } from ".
 import {
   ChannelDeliveryError,
   channelDeliveryIdempotencyKey,
+  reservationIdFromEvent,
   type ChannelDeliveryCommand,
   type ChannelDeliveryReceipt,
   type DeliveryChannel,
@@ -233,6 +234,7 @@ export class PostgresTelegramEventDeliveryPlanner implements EventDeliveryPlanne
       [String(event.id)]
     );
     const commands: ChannelDeliveryCommand[] = [];
+    const reservationId = reservationIdFromEvent(event);
     for (const row of result.rows) {
       const chatId = requiredText(row, "recipient_address").trim();
       // Неверный номер чата не должен блокировать остальные доставки события.
@@ -259,7 +261,8 @@ export class PostgresTelegramEventDeliveryPlanner implements EventDeliveryPlanne
         recipientAddress: chatId,
         subject: rendered.subject,
         body: rendered.body,
-        taskId
+        taskId,
+        ...(reservationId ? { reservationId } : {})
       });
     }
     return commands;

@@ -1,5 +1,8 @@
 import { deflateSync } from "node:zlib";
-import { clipMultiline, clipText, escapeHtml, formatTaskPeriod, isReworkEvent, taskStageLook, type TaskCardData } from "./task-card.js";
+import {
+  cardNumber, cardRows, cardTitle, clipMultiline, escapeHtml, formatTaskPeriod, isReworkEvent,
+  taskStageLook, type TaskCardData
+} from "./task-card.js";
 
 /**
  * Карточки для Telegram в виде HTML-виджетов (Bot API 10.4, метод sendWidget).
@@ -56,21 +59,18 @@ const TASK_STYLE = BASE_STYLE
 /**
  * HTML карточки задачи для sendWidget: название цветом этапа, под ним что случилось и номер,
  * затем площадка, инженер, срок и «Что доработать». Подписи над карточкой нет.
+ * У событий резерва тот же вид, но про запчасть: название запчасти, номер резерва и что собрать.
  */
 export function taskWidgetHtml(data: TaskCardData, timeZone = "Europe/Moscow"): string {
   const look = taskStageLook(data.eventCode);
-  const number = clipText(data.taskNumber, 24);
+  const number = cardNumber(data, 24);
   // Высота пузыря не больше 600 px, лишнее обрезается: поля держим короткими.
-  const title = clipText(data.taskTitle, 120) ?? "Без названия";
-  const site = clipText(data.siteName, 100);
-  const engineer = clipText(data.engineerName, 60);
+  const title = cardTitle(data, 120);
   const period = formatTaskPeriod(data.periodFrom, data.periodTo, timeZone);
   const comment = isReworkEvent(data.eventCode) ? clipMultiline(data.reworkComment, 240) : undefined;
-  const rows = [
-    site ? `<dt>Площадка</dt><dd>${escapeHtml(site)}</dd>` : "",
-    `<dt>Инженер</dt><dd${engineer && engineer !== "не назначен" ? "" : " class=\"x\""}>${escapeHtml(engineer ?? "не назначен")}</dd>`,
-    period ? `<dt>Срок</dt><dd>${escapeHtml(period)}</dd>` : ""
-  ].join("");
+  const rows = cardRows(data, { site: 100, person: 60, part: 80, task: 120 }, period)
+    .map((row) => `<dt>${row.label}</dt><dd${row.dim ? " class=\"x\"" : ""}>${escapeHtml(row.value)}</dd>`)
+    .join("");
   // Цвет этапа: в светлой теме темнее, в тёмной светлее.
   const colors = `.c{--k:${look.light};--kb:${tint(look.light, 0.1)}}`
     // В тёмной теме тонировка на синем фоне выходит грязной: там родной фон блока Telegram,
