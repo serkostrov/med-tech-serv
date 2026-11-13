@@ -25,6 +25,22 @@ function companyParts(value: string | undefined): Readonly<Record<string, string
   return Object.fromEntries(parts.map((part) => [part.type, part.value]));
 }
 
+/** «2026-11-13»: календарный день момента по часам компании (для отчётов «вовремя» и по месяцам). */
+export function companyDay(value: string | undefined): string | undefined {
+  const parts = companyParts(value);
+  return parts ? `${parts.year}-${parts.month}-${parts.day}` : undefined;
+}
+
+/** Год, месяц, день, часы, минуты, секунды момента по часам компании (для дат в Excel). */
+export function companyClock(value: string): readonly number[] | undefined {
+  const moment = new Date(value);
+  if (Number.isNaN(moment.getTime())) return undefined;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-GB", {
+    timeZone: COMPANY_TIME_ZONE, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23"
+  }).formatToParts(moment).map((part) => [part.type, part.value]));
+  return [parts.year, parts.month, parts.day, parts.hour, parts.minute, parts.second].map(Number);
+}
+
 /** «09:30» по часам компании. Пусто, если времени нет. */
 export function companyTime(value: string | undefined): string {
   const parts = companyParts(value);

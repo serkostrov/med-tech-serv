@@ -191,4 +191,13 @@ UPDATE public.tasks SET work_finished_at = '2026-11-13 15:45:00+03' WHERE id = (
 RESET ROLE;
 SELECT pg_temp.check((SELECT completed_at = '2026-11-13 15:45:00+03'::timestamptz FROM tasks WHERE id = (SELECT id FROM ids WHERE k = 't5')), 'координатор поправил время окончания на проверке: дата окончания работ пересчитана');
 
+-- Уход с проверки не в «Закрыта» стирает дату окончания; пересчёт работает от владельца схемы.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+UPDATE public.tasks SET status_code = 'cancelled', cancellation_reason = 'Клиент отказался' WHERE id = (SELECT id FROM ids WHERE k = 't5');
+RESET ROLE;
+SELECT pg_temp.check((SELECT completed_at IS NULL FROM tasks WHERE id = (SELECT id FROM ids WHERE k = 't5')), 'отмена задачи на проверке стирает дату окончания работ');
+SELECT pg_temp.check(has_function_privilege('authenticated', 'public.task_work_completed_at(timestamptz, date, timestamptz)', 'EXECUTE'), 'расчёт даты окончания доступен вошедшим явно');
+SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'sync_task_completed_at'), 'пересчёт даты окончания работает от владельца схемы');
+SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.task_work_completed_at(timestamptz, date, timestamptz)', 'EXECUTE'), 'без входа расчёт даты окончания не вызвать');
+
 ROLLBACK;

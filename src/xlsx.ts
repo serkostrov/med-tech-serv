@@ -4,6 +4,7 @@
  * прямо в ячейках (inlineStr), даты настоящими датами Excel, чтобы по ним работали
  * сортировка и фильтры. Excel, LibreOffice, Numbers и Google Таблицы такие файлы открывают.
  */
+import { companyClock } from "./task-dates.js";
 
 export type XlsxCell =
   | string
@@ -58,9 +59,10 @@ export function excelDate(value: string, withTime = false): number | undefined {
   if (dateOnly) {
     parts = [Number(dateOnly[1]), Number(dateOnly[2]), Number(dateOnly[3]), 0, 0, 0];
   } else {
-    const moment = new Date(value);
-    if (Number.isNaN(moment.getTime())) return undefined;
-    parts = [moment.getFullYear(), moment.getMonth() + 1, moment.getDate(), moment.getHours(), moment.getMinutes(), moment.getSeconds()];
+    // Время в Excel по часам компании, как в акте, а не по поясу устройства.
+    const clock = companyClock(value);
+    if (!clock) return undefined;
+    parts = clock;
   }
   const [year = 0, month = 1, day = 1, hours = 0, minutes = 0, seconds = 0] = parts;
   const days = (Date.UTC(year, month - 1, day) - Date.UTC(1899, 11, 30)) / 86_400_000;

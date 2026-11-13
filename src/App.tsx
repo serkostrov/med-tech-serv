@@ -49,7 +49,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
-import { companyDateTimeText, companyDateTimeToIso, companyTime, taskCalendarDate } from "./task-dates.js";
+import { companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
@@ -792,6 +792,15 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       const periodTo = taskCalendarDate(String(data.get("periodTo") ?? ""));
       const callDate = taskCalendarDate(String(data.get("callDate") ?? ""));
       const visitValue = String(data.get("visitDate") ?? "").trim();
+      const visitDate = visitValue ? taskCalendarDate(visitValue) : undefined;
+      if (visitDate && visitDate < callDate) throw new Error("Дата выезда не может быть раньше даты вызова");
+      // Время работ из акта относится к дню выезда: при смене даты переносим его на новый день.
+      const hasActTimes = Boolean(task.workStartedAt || task.workFinishedAt);
+      if (!visitDate && hasActTimes) throw new Error("В результате работ указано время работ, поэтому дату выезда нельзя очистить");
+      const movedTimes = visitDate && visitDate !== task.visitDate && hasActTimes ? {
+        ...(task.workStartedAt ? { workStartedAt: companyDateTimeToIso(visitDate, companyTime(task.workStartedAt)) } : {}),
+        ...(task.workFinishedAt ? { workFinishedAt: companyDateTimeToIso(visitDate, companyTime(task.workFinishedAt)) } : {})
+      } : {};
       await m2Api.updateTaskOverview(task.id, {
         title: String(data.get("title") ?? "").trim(),
         workTypeCode: String(data.get("workTypeCode") ?? "").trim(),
@@ -799,7 +808,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         periodFrom,
         periodTo,
         callDate,
-        ...(visitValue ? { visitDate: taskCalendarDate(visitValue) } : {})
+        ...(visitDate ? { visitDate } : {}),
+        ...movedTimes
       });
       setOverviewEditing(false);
       await onChanged();
@@ -1123,7 +1133,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             {task.callDate ? <div><dt>Дата вызова</dt><dd>{formatTaskDate(task.callDate)}</dd></div> : null}
             {task.visitDate ? <div><dt>Дата выезда</dt><dd>{formatTaskDate(task.visitDate)}</dd></div> : null}
             {task.workStartedAt || task.workFinishedAt ? <div><dt>Время работ</dt><dd>{task.workStartedAt && task.workFinishedAt ? `${companyDateTimeText(task.workStartedAt)} — ${companyDateTimeText(task.workFinishedAt)}` : task.workStartedAt ? `с ${companyDateTimeText(task.workStartedAt)}` : `до ${companyDateTimeText(task.workFinishedAt)}`}</dd></div> : null}
-            {task.completedAt ? <div><dt>Окончание</dt><dd>{companyDateTimeText(task.completedAt)}</dd></div> : null}
+            {task.completedAt ? <div><dt>Окончание работ</dt><dd>{task.workFinishedAt ? companyDateTimeText(task.completedAt) : companyDateText(task.completedAt)}</dd></div> : null}
           </dl>
           <dl>
             <div><dt>Прибор</dt><dd>{card.equipment ? <>{card.equipment.manufacturer} {card.equipment.model}<small>S/N {card.equipment.serialNumber}{card.equipment.statusName || card.equipment.status ? ` · ${card.equipment.statusName ?? card.equipment.status}` : ""}</small></> : <span className="is-empty">Не выбран</span>}</dd></div>

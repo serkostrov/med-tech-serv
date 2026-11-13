@@ -45,7 +45,7 @@ export function reportWorkbookSheets(report: OperationsReportRecord, tasks: read
     [{ bold: "По месяцам" }, { bold: "Заявок" }, { bold: "Доля" }],
     ...report.tasksByMonth.map((item) => [item.name, item.value, share(item.value)])
   ];
-  const header = ["Номер", "Создана", "Название", "Этап", "Срочность", "Вид работ", "Площадка", "Прибор", "Заводской номер", "Инженер", "Срок с", "Срок по", "Закрыта", "Закрыта вовремя", "Просрочена"];
+  const header = ["Номер", "Создана", "Название", "Этап", "Срочность", "Вид работ", "Площадка", "Прибор", "Заводской номер", "Инженер", "Срок с", "Срок по", "Окончание работ", "Закрыта вовремя", "Просрочена"];
   const taskRows: XlsxCell[][] = tasks.map((task) => [
     task.number,
     { date: task.createdAt, withTime: true },

@@ -1,6 +1,7 @@
 import type { Permission, WorkingRole } from "./domain/access.js";
 import { availableTaskActions, type AvailableTaskAction } from "./domain/task-actions.js";
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
+import { companyDay } from "./task-dates.js";
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
@@ -835,12 +836,11 @@ export async function allPages(
 }
 
 /** День по местному времени («2026-11-12») для момента ISO; строка без времени возвращается как есть. */
+/** День момента по часам компании (Москва), а не по поясу устройства того, кто смотрит отчёт. */
 export function localDay(value: string | undefined): string | undefined {
   if (!value) return undefined;
   if (/^\d{4}-\d{2}-\d{2}$/u.test(value)) return value;
-  const moment = new Date(value);
-  if (Number.isNaN(moment.getTime())) return value.slice(0, 10);
-  return `${moment.getFullYear()}-${String(moment.getMonth() + 1).padStart(2, "0")}-${String(moment.getDate()).padStart(2, "0")}`;
+  return companyDay(value) ?? value.slice(0, 10);
 }
 
 /**
@@ -2391,6 +2391,9 @@ export class M2ApiClient {
     readonly periodTo: string;
     readonly callDate: string;
     readonly visitDate?: string;
+    /** Время работ, перенесённое на новую дату выезда (только если дату сменили). */
+    readonly workStartedAt?: string;
+    readonly workFinishedAt?: string;
   }): Promise<TaskApiRecord> {
     const { error } = await this.db().from("tasks").update({
       title: input.title,
@@ -2399,7 +2402,9 @@ export class M2ApiClient {
       deadline_from: input.periodFrom,
       deadline_to: input.periodTo,
       call_date: input.callDate,
-      visit_date: input.visitDate ?? null
+      visit_date: input.visitDate ?? null,
+      ...(input.workStartedAt ? { work_started_at: input.workStartedAt } : {}),
+      ...(input.workFinishedAt ? { work_finished_at: input.workFinishedAt } : {})
     }).eq("id", id);
     throwIfError(error);
     return this.loadTask(id);

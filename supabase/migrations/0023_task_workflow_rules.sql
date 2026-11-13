@@ -15,7 +15,7 @@
 -- Сдать на проверку можно, только когда к задаче приложено минимум три фото с выезда:
 -- без них координатор всё равно не закроет задачу (проверка при закрытии в 0014).
 -- При сдаче записывается дата окончания работ: время окончания из акта, иначе полдень дня
--- выезда по Москве, иначе момент сдачи. При возврате на доработку она стирается, а если
+-- выезда по Москве, иначе момент сдачи. При уходе с проверки не в «Закрыта» она стирается, а если
 -- координатор поправит время окончания или дату выезда на проверке, пересчитывается.
 --
 -- Функция, как все служебные триггеры (0009), работает от владельца схемы.
@@ -70,8 +70,8 @@ BEGIN
         USING ERRCODE = '23514';
     END IF;
     NEW.completed_at := public.task_work_completed_at(NEW.work_finished_at, NEW.visit_date, now());
-  ELSIF OLD.status_code = 'under_review' AND NEW.status_code = 'in_progress' THEN
-    -- Вернули на доработку: работа ещё не окончена.
+  ELSIF OLD.status_code = 'under_review' AND NEW.status_code <> 'closed' THEN
+    -- Вернули на доработку, отменили или перевели в свой этап: работа не сдана, даты окончания нет.
     NEW.completed_at := NULL;
   END IF;
   RETURN NEW;
@@ -88,6 +88,7 @@ COMMENT ON FUNCTION public.enforce_task_status_transition() IS
 CREATE OR REPLACE FUNCTION public.sync_task_completed_at()
 RETURNS trigger
 LANGUAGE plpgsql
+SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 BEGIN
@@ -106,3 +107,4 @@ CREATE TRIGGER tasks_completed_at_sync
 
 REVOKE EXECUTE ON FUNCTION public.sync_task_completed_at() FROM PUBLIC, anon, authenticated;
 REVOKE EXECUTE ON FUNCTION public.task_work_completed_at(timestamptz, date, timestamptz) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.task_work_completed_at(timestamptz, date, timestamptz) TO authenticated, medtech_api;

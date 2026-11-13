@@ -63,8 +63,8 @@ describe("Excel file", () => {
     assert.equal(excelDate("1900-03-01"), 61);
     assert.equal(excelDate("2026-11-12"), 46338);
     assert.equal(excelDate("не дата"), undefined);
-    const moment = new Date(2026, 10, 12, 18, 0, 0);
-    assert.equal(excelDate(moment.toISOString(), true), 46338.75);
+    // 15:00 UTC это 18:00 по Москве: время в Excel по часам компании, где бы ни открыли отчёт.
+    assert.equal(excelDate("2026-11-12T15:00:00.000Z", true), 46338.75);
   });
 
   it("freezes and filters the header row of the tasks sheet", () => {
@@ -203,11 +203,12 @@ describe("large reports, edge cases", () => {
   });
 
   it("uses one rule for closed on time and local days", () => {
-    const lateNight = new Date(2026, 10, 13, 2, 30).toISOString();
+    // 23:30 UTC 12.11 это 02:30 13.11 по Москве: день считаем по часам компании.
+    const lateNight = "2026-11-12T23:30:00.000Z";
     assert.equal(localDay(lateNight), "2026-11-13");
     assert.equal(localDay("2026-11-12"), "2026-11-12");
     assert.equal(closedOnTime(lateNight, "2026-11-12"), false);
-    assert.equal(closedOnTime(new Date(2026, 10, 12, 23, 0).toISOString(), "2026-11-12"), true);
+    assert.equal(closedOnTime("2026-11-12T20:00:00.000Z", "2026-11-12"), true);
     assert.equal(closedOnTime(undefined, "2026-11-12"), undefined);
     const bounds = reportPeriodBounds("2026-11-01", "2026-11-30");
     assert.equal(new Date(bounds.start).getDate(), 1);
