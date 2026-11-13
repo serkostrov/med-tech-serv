@@ -220,6 +220,40 @@ SELECT pg_temp.expect_forbidden('SELECT count(*) FROM public.activate_due_mainte
 SELECT pg_temp.expect_forbidden('SELECT setval(''task_number_seq'', 1)', 'без входа нельзя сбить нумерацию задач');
 RESET ROLE;
 
+-- ---------------------------------------------------------------- Свой номер Telegram (0021)
+-- Своя роль на базе «инженер» с правом назначать: политика UPDATE пускает к своей строке.
+-- Проверка идёт до первого вызова set_my_telegram_chat_id в сессии: метки app.own_telegram_chat ещё нет (NULL).
+DO $$
+DECLARE uid uuid := gen_random_uuid();
+BEGIN
+  INSERT INTO public.access_roles (key, name, base_role) VALUES ('lead_engineer', 'Старший инженер', 'engineer');
+  INSERT INTO public.access_role_permissions (role_key, permission_code)
+    SELECT 'lead_engineer', permission_code FROM public.access_role_permissions WHERE role_key = 'engineer'
+    UNION SELECT 'lead_engineer', 'tasks.assign';
+  INSERT INTO auth.users (id, email, aud, role) VALUES (uid, 'lead@test.local', 'authenticated', 'authenticated');
+  INSERT INTO public.users (id, full_name, role, email, is_active, access_role_key) VALUES (uid, 'Тест lead', 'engineer', 'lead@test.local', true, 'lead_engineer');
+  INSERT INTO ids VALUES ('lead', uid);
+END $$;
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'lead'));
+SELECT pg_temp.check(current_setting('app.own_telegram_chat', true) IS NULL, 'метки ещё нет: проверяем свежее соединение');
+SELECT pg_temp.expect_denied(format('UPDATE public.users SET telegram_chat_id = %L WHERE id = %L', '-1001234567890', (SELECT id FROM ids WHERE k = 'lead')), 'свой номер напрямую (минуя функцию) не поменять, даже если строка своя доступна на запись');
+RESET ROLE;
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT pg_temp.check((SELECT public.set_my_telegram_chat_id(' 123456789 ')) = '123456789', 'инженер сохраняет свой номер чата через функцию');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE public.users SET telegram_chat_id = %L WHERE id = %L', '555', (SELECT id FROM ids WHERE k = 'engineer'))) = 0, 'свой номер напрямую инженер не меняет');
+DO $$ BEGIN
+  PERFORM public.set_my_telegram_chat_id('-1001234567890');
+  RAISE EXCEPTION 'ПРОВАЛ: номер группы сам себе не вписать — команда прошла';
+EXCEPTION WHEN invalid_parameter_value THEN
+  RAISE NOTICE 'ok: номер группы сам себе не вписать (запрещено)';
+END $$;
+RESET ROLE;
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+SELECT pg_temp.expect_denied(format('UPDATE public.users SET telegram_chat_id = %L WHERE id = %L', '777', (SELECT id FROM ids WHERE k = 'engineer')), 'координатор не меняет номер чата инженера');
+SELECT pg_temp.check((SELECT public.set_my_telegram_chat_id('987654321')) = '987654321', 'координатор сохраняет свой номер');
+RESET ROLE;
+SELECT pg_temp.check((SELECT telegram_chat_id FROM public.users WHERE id = (SELECT id FROM ids WHERE k = 'engineer')) = '123456789', 'номер инженера остался его собственным');
+
 -- ---------------------------------------------------------------- Служебные функции закрыты
 SELECT pg_temp.check(NOT EXISTS (
   SELECT 1 FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
@@ -234,7 +268,7 @@ SELECT pg_temp.check(NOT EXISTS (
        'app_can_read_equipment', 'app_can_write_equipment', 'app_storage_object_access', 'app_is_staff',
        'app_current_role_key', 'app_customer_organization_ids', 'app_task_is_open', 'app_is_task_engineer',
        'app_task_accepts_reservations', 'is_app_user', 'create_access_user', 'accept_task_closure',
-       'change_equipment_site', 'change_equipment_payer')
+       'change_equipment_site', 'change_equipment_payer', 'set_my_telegram_chat_id')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');

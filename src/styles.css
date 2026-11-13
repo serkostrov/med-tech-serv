@@ -693,6 +693,21 @@ h3 {
   min-width: 0;
 }
 
+/* Имя сотрудника внизу меню открывает «Мой профиль». */
+.sidebar-user__identity.sidebar-user__profile {
+  margin: -4px -6px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.sidebar-user__identity.sidebar-user__profile:hover { background: rgb(255 255 255 / 8%); }
+.sidebar-user__identity.sidebar-user__profile:focus-visible { outline: 2px solid rgb(255 255 255 / 55%); outline-offset: 2px; }
+
 .sidebar-user__identity .profile-button__copy {
   display: grid;
   gap: 2px;
@@ -7149,6 +7164,9 @@ td .resource-state {
   color: rgb(255 255 255 / 85%);
 }
 
+/* Выезжающее меню на телефоне светлое: подсветка и рамка фокуса имени цветом акцента. */
+.sidebar--sheet .sidebar-user__identity.sidebar-user__profile:hover { background: var(--color-accent-soft); }
+.sidebar--sheet .sidebar-user__identity.sidebar-user__profile:focus-visible { outline-color: var(--color-accent); }
 .sidebar--sheet .sidebar-user {
   border-top-color: var(--color-border);
 }
@@ -8438,3 +8456,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   background: rgb(35 142 190 / 7%);
   pointer-events: none;
 }
+
+/* «Мой профиль». */
+.profile-summary { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 16px; margin: 0; font-size: 14px; }
+.profile-summary dt { color: var(--color-muted); }
+.profile-summary dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
+.profile-hint { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
+.profile-retry { display: grid; justify-items: start; gap: 8px; }

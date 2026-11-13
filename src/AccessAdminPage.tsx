@@ -125,7 +125,12 @@ export function AccessAdminPage() {
         fullName: String(data.get("fullName") ?? "").trim(),
         email: String(data.get("email") ?? "").trim(),
         accessRoleKey: userRoleKey,
-        telegramChatId: String(data.get("telegramChatId") ?? "").trim(),
+        // Номер чата отправляем, только если его поменяли в форме: сотрудник мог вписать свой
+        // в «Моём профиле» после того, как форма открылась, старое значение его бы затёрло.
+        ...((): { telegramChatId?: string } => {
+          const telegramChatId = String(data.get("telegramChatId") ?? "").trim();
+          return userEditor.mode === "create" || telegramChatId !== (editedUser?.telegramChatId ?? "") ? { telegramChatId } : {};
+        })(),
         ...(selectedUserRole ? { role: selectedUserRole.baseRole } : {}),
         ...(selectedUserRole?.baseRole === "customer" ? { organizationIds } : {})
       };

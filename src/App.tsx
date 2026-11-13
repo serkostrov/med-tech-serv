@@ -47,6 +47,7 @@ import { WorkAct } from "./WorkAct.js";
 import { buildWorkAct, type WorkActEquipmentRow, type WorkActWorkRow } from "./work-act.js";
 import { ClosureReview } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
+import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
@@ -3198,6 +3199,7 @@ function resetRouteOnReload(): void {
 
 function App() {
   const [sessionUser, setSessionUser] = useState<ApiSessionUser | null | undefined>(undefined);
+  const [profileOpen, setProfileOpen] = useState(false);
   const [role, setRole] = useState<AppRole>("coordinator");
   const [activeView, setActiveView] = useState<NavigationId>(getDefaultView("coordinator"));
   const [taskRouteId, setTaskRouteId] = useState<string | undefined>(() => {
@@ -3360,9 +3362,11 @@ function App() {
       groups={groups}
       onLogout={() => { void m2Api.logout().finally(() => { resetRoute(); setSessionUser(null); }); }}
       onNavigate={navigate}
+      onOpenProfile={() => setProfileOpen(true)}
       userMeta={sessionUser.accessRoleName ?? roleLabels[role]}
       userName={sessionUser.fullName}
     >
+      <ProfileDialog fullName={sessionUser.fullName} onOpenChange={setProfileOpen} open={profileOpen} roleName={sessionUser.accessRoleName ?? roleLabels[role]} />
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
       {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
       {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}

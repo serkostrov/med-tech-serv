@@ -49,6 +49,16 @@ export function normalizeTelegramChatId(value: unknown): string | null {
   return normalized;
 }
 
+/** Свой номер чата из «Моего профиля»: пробелы убираем, принимаем только номер личного чата (без минуса). */
+export function ownTelegramChatId(value: unknown): string | null {
+  // Номер копируют из ответа бота: пробелы внутри и по краям не мешают.
+  const chat = normalizeTelegramChatId(String(value ?? "").replace(/\s+/gu, ""));
+  if (chat?.startsWith("-")) {
+    throw new M2ApiError(400, "Впишите номер личного чата с ботом: он без минуса. Номер группы вписывает администратор");
+  }
+  return chat;
+}
+
 export interface EquipmentApiRecord {
   readonly id: string;
   readonly serialNumber: string;
@@ -1072,6 +1082,31 @@ export class M2ApiClient {
   private sessionCache: { readonly userId: string; readonly at: number; readonly value: Promise<ApiSessionUser> } | undefined;
   /** Справочники меняются редко: держим 5 минут, сбрасываем при правке справочника, входе и выходе. */
   private readonly catalogCache = new Map<string, { readonly at: number; readonly value: Promise<readonly ReferenceCatalogValue[]> }>();
+
+  /** Мой профиль: почта и номер чата Telegram вошедшего сотрудника. */
+  public async myProfile(): Promise<{ readonly email?: string; readonly telegramChatId?: string }> {
+    const session = await this.cachedSession();
+    const { data, error } = await this.db().from("users").select("email, telegram_chat_id").eq("id", session.id).maybeSingle();
+    throwIfError(error, "Не получилось загрузить профиль");
+    const row = asRow(data);
+    const email = optionalText(row, "email");
+    const telegramChatId = optionalText(row, "telegram_chat_id");
+    return { ...(email ? { email } : {}), ...(telegramChatId ? { telegramChatId } : {}) };
+  }
+
+  /**
+   * Свой номер чата Telegram сотрудник вписывает сам (миграция 0021): бот отвечает номером на /start.
+   * Пусто убирает Telegram. Менять так можно только свой номер, чужие меняет администратор.
+   */
+  public async setMyTelegramChatId(value: string): Promise<string | undefined> {
+    const chat = ownTelegramChatId(value);
+    const { data, error } = await this.db().rpc("set_my_telegram_chat_id", { p_chat_id: chat ?? "" });
+    if (error && (error as { readonly code?: string }).code === "PGRST202") {
+      throw new M2ApiError(501, "Сохранение номера заработает после обновления базы. Пока номер вписывает администратор в разделе «Сотрудники»");
+    }
+    throwIfError(error, "Не получилось сохранить номер чата");
+    return typeof data === "string" && data ? data : undefined;
+  }
 
   /** Есть ли у текущего пользователя право (из памяти, без лишнего запроса). */
   public async hasPermission(permission: string): Promise<boolean> {

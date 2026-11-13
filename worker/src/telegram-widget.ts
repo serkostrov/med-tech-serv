@@ -102,7 +102,7 @@ export function chatIdWidgetHtml(chatId: string): string {
     + "<div class=\"c\">"
     + "<p class=\"l\">Номер вашего чата</p>"
     + `<p class="n">${id}</p>`
-    + "<p class=\"t\">Передайте его администратору МедТехСервиса, чтобы получать уведомления о задачах здесь.</p>"
+    + "<p class=\"t\">Вставьте его в CRM: нажмите на своё имя внизу меню, откроется «Мой профиль». Тогда уведомления CRM будут приходить сюда.</p>"
     + `<button onclick="TelegramWidget.copyText('${id}')">Скопировать номер</button>`
     + "</div>";
 }

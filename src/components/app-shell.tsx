@@ -16,6 +16,7 @@ export function AppShell({
   userName,
   userMeta,
   onLogout,
+  onOpenProfile,
   children
 }: {
   readonly groups: readonly AppShellNavGroup[];
@@ -25,6 +26,8 @@ export function AppShell({
   readonly userName: string;
   readonly userMeta: string;
   readonly onLogout: () => void;
+  /** «Мой профиль»: номер чата Telegram сотрудник вписывает сам. */
+  readonly onOpenProfile?: () => void;
   readonly children: ReactNode;
 }) {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -76,13 +79,29 @@ export function AppShell({
 
   const userBlock = (
     <div className="sidebar-user">
-      <div className="sidebar-user__identity">
-        <span className="avatar">{initials}</span>
-        <span className="profile-button__copy">
-          <strong>{userName}</strong>
-          <small>{userMeta}</small>
-        </span>
-      </div>
+      {onOpenProfile ? (
+        <button
+          aria-label={`Мой профиль: ${userName}`}
+          className="sidebar-user__identity sidebar-user__profile"
+          onClick={() => { mobileCloseTarget.current = "dialog"; setMobileOpen(false); onOpenProfile(); }}
+          title="Мой профиль: номер чата Telegram"
+          type="button"
+        >
+          <span className="avatar">{initials}</span>
+          <span className="profile-button__copy">
+            <strong>{userName}</strong>
+            <small>{userMeta}</small>
+          </span>
+        </button>
+      ) : (
+        <div className="sidebar-user__identity">
+          <span className="avatar">{initials}</span>
+          <span className="profile-button__copy">
+            <strong>{userName}</strong>
+            <small>{userMeta}</small>
+          </span>
+        </div>
+      )}
       <Button aria-label="Выйти" className="sidebar-user__logout button--compact" icon="logout" onClick={onLogout} title="Выйти" variant="ghost" children={null} />
     </div>
   );

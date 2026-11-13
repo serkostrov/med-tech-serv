@@ -267,8 +267,9 @@ export class PostgresTelegramEventDeliveryPlanner implements EventDeliveryPlanne
 }
 
 /**
- * Помощник привязки: сотрудник пишет боту /start, бот отвечает номером чата,
- * администратор вписывает его в карточку сотрудника. Данных из базы бот не выдаёт.
+ * Помощник привязки: сотрудник пишет боту /start, бот отвечает номером чата, сотрудник
+ * вписывает его в CRM в «Моём профиле» (или администратор в карточку сотрудника).
+ * Данных из базы бот не выдаёт.
  */
 export class TelegramChatIdResponder {
   private offset: number | undefined;
@@ -306,7 +307,7 @@ export class TelegramChatIdResponder {
       if (widget.status !== 400) continue;
       const text = await this.client.call("sendMessage", {
         chat_id: chatId,
-        text: `Номер вашего чата: ${chatId}\n\nПередайте его администратору МедТехСервиса, чтобы получать уведомления о задачах здесь.`
+        text: `Номер вашего чата: ${chatId}\n\nВставьте его в CRM: нажмите на своё имя внизу меню, откроется «Мой профиль». Тогда уведомления CRM будут приходить сюда.`
       });
       if (isOk(text.status, text.body)) replied += 1;
     }
