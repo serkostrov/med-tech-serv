@@ -4,6 +4,7 @@ import {
 } from "./domain.js";
 import {
   channelDeliveryIdempotencyKey,
+  reservationIdFromEvent,
   type ChannelDeliveryCommand,
   type EventDeliveryPlanner,
   type OutboxSqlExecutor
@@ -61,6 +62,7 @@ export class PostgresEmailEventDeliveryPlanner implements EventDeliveryPlanner {
          FROM public.load_email_event_plan($1::uuid)`,
       [String(event.id)]
     );
+    const reservationId = reservationIdFromEvent(event);
     // Неверный адрес (например, с пробелом) не пропускаем молча: доставка
     // попадёт в журнал с ошибкой smtp_invalid_address и не будет повторяться.
     return result.rows.map((row) => {
@@ -88,7 +90,8 @@ export class PostgresEmailEventDeliveryPlanner implements EventDeliveryPlanner {
         recipientAddress,
         subject: rendered.subject,
         body: rendered.body,
-        taskId
+        taskId,
+        ...(reservationId ? { reservationId } : {})
       };
     });
   }

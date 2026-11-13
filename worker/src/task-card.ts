@@ -17,6 +17,12 @@ export interface TaskCardData {
   readonly periodFrom?: string;
   readonly periodTo?: string;
   readonly reworkComment?: string;
+  /** Резерв запчасти под задачу: складская цепочка «собрать — забрать». */
+  readonly reservationNumber?: string;
+  readonly partArticle?: string;
+  readonly partName?: string;
+  readonly quantity?: string;
+  readonly condition?: string;
 }
 
 export interface TaskStageLook {
@@ -36,7 +42,10 @@ const EVENT_LOOK: Readonly<Record<string, TaskStageLook>> = {
   task_engineer_accepted: { label: "В работе", event: "Инженер принял задачу", light: "#1d7f47", dark: "#4fc47e" },
   task_work_completed: { label: "На проверке", event: "Работы завершены", light: "#1c66b8", dark: "#5ea9f2" },
   task_rework_requested: { label: "На доработке", event: "Возвращена на доработку", light: "#b9570c", dark: "#f59d4f" },
-  task_overdue: { label: "Просрочена", event: "Задача просрочена", light: "#bf3434", dark: "#f27373" }
+  task_overdue: { label: "Просрочена", event: "Задача просрочена", light: "#bf3434", dark: "#f27373" },
+  // Резерв запчасти: цвета статусов резерва в CRM — «ждёт сборки» жёлтый, «собрана» синий.
+  stock_reservation_created: { label: "Ждёт сборки", event: "Новый резерв запчастей", light: "#946300", dark: "#f2b630" },
+  stock_reservation_ready: { label: "Собрана", event: "Запчасти можно забрать", light: "#1c66b8", dark: "#5ea9f2" }
 };
 const DEFAULT_LOOK: TaskStageLook = { label: "Задача", event: "Изменения по задаче", light: "#52627a", dark: "#a3b1c6" };
 
@@ -47,6 +56,11 @@ export function taskStageLook(eventCode: string): TaskStageLook {
 /** Комментарий «Что доработать» показываем только при возврате на доработку. */
 export function isReworkEvent(eventCode: string): boolean {
   return eventCode === "task_rework_requested";
+}
+
+/** Складская цепочка: карточка рассказывает про запчасть, а задача в ней — повод. */
+export function isStockEvent(eventCode: string): boolean {
+  return eventCode === "stock_reservation_created" || eventCode === "stock_reservation_ready";
 }
 
 export function escapeHtml(value: string): string {
@@ -105,6 +119,71 @@ export function formatTaskPeriod(
   return `${start.day} ${start.month} – ${end.day} ${end.month}`;
 }
 
+/** Заголовок карточки: у задачи её название, у резерва — запчасть, которую собирают. */
+export function cardTitle(card: TaskCardData, limit: number): string {
+  return isStockEvent(card.eventCode)
+    ? clipText(card.partName, limit) ?? "Запчасть"
+    : clipText(card.taskTitle, limit) ?? "Без названия";
+}
+
+/** Номер рядом с событием: у задачи её номер, у резерва — номер резерва. */
+export function cardNumber(card: TaskCardData, limit: number): string | undefined {
+  return clipText(isStockEvent(card.eventCode) ? card.reservationNumber : card.taskNumber, limit);
+}
+
+/** Сколько и в каком состоянии запчасть: «1 шт., новая». */
+export function stockAmount(card: TaskCardData): string | undefined {
+  const quantity = clipText(card.quantity, 20);
+  const parts = [quantity === undefined ? undefined : `${quantity} шт.`, clipText(card.condition, 40)];
+  const text = parts.filter((part): part is string => part !== undefined).join(", ");
+  return text || undefined;
+}
+
+export interface CardRow {
+  readonly label: string;
+  readonly value: string;
+  /** Значение-заглушка («не назначен»): показываем серым. */
+  readonly dim: boolean;
+}
+
+/** Длина значений: в письме строка шире, в пузыре Telegram уже. */
+export interface CardRowLimits {
+  readonly site: number;
+  readonly person: number;
+  readonly part: number;
+  readonly task: number;
+}
+
+/**
+ * Строки карточки, общие для письма и Telegram. У задачи это площадка, инженер и срок.
+ * У резерва — что собрать, сколько и для какой задачи; инженера показываем только
+ * кладовщику при новом резерве: во втором уведомлении инженер читал бы про себя.
+ */
+export function cardRows(card: TaskCardData, limits: CardRowLimits, period: string | undefined): readonly CardRow[] {
+  const site = clipText(card.siteName, limits.site);
+  const engineer = clipText(card.engineerName, limits.person);
+  const assigned = engineer !== undefined && engineer !== "не назначен";
+  const engineerRow: CardRow = { label: "Инженер", value: assigned ? engineer : "не назначен", dim: !assigned };
+  const rows: CardRow[] = [];
+  if (isStockEvent(card.eventCode)) {
+    const article = clipText(card.partArticle, limits.part);
+    const amount = stockAmount(card);
+    const title = clipText(card.taskTitle, limits.task);
+    const task = [clipText(card.taskNumber, 40), title === undefined ? undefined : `«${title}»`]
+      .filter((part): part is string => part !== undefined).join(" ");
+    if (article) rows.push({ label: "Артикул", value: article, dim: false });
+    if (amount) rows.push({ label: "Количество", value: amount, dim: false });
+    if (task) rows.push({ label: "Задача", value: task, dim: false });
+    if (site) rows.push({ label: "Площадка", value: site, dim: false });
+    if (card.eventCode === "stock_reservation_created") rows.push(engineerRow);
+    return rows;
+  }
+  if (site) rows.push({ label: "Площадка", value: site, dim: false });
+  rows.push(engineerRow);
+  if (period) rows.push({ label: "Срок", value: period, dim: false });
+  return rows;
+}
+
 function optional<K extends string>(key: K, value: string | undefined): { readonly [P in K]?: string } {
   return (value === undefined ? {} : { [key]: value }) as { readonly [P in K]?: string };
 }
@@ -125,7 +204,12 @@ export function taskCardFromVariables(eventCode: string, variables: unknown): Ta
     ...optional("engineerName", text("engineerName")),
     ...optional("periodFrom", text("periodFrom")),
     ...optional("periodTo", text("periodTo")),
-    ...optional("reworkComment", text("reworkComment"))
+    ...optional("reworkComment", text("reworkComment")),
+    ...optional("reservationNumber", text("reservationNumber")),
+    ...optional("partArticle", text("partArticle")),
+    ...optional("partName", text("partName")),
+    ...optional("quantity", text("quantity")),
+    ...optional("condition", text("condition"))
   };
 }
 

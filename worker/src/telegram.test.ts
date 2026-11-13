@@ -39,6 +39,18 @@ const event: BusinessEvent = {
   payload: {}
 };
 
+/** Событие склада: в payload есть сам резерв (0001), задачи в нём нет. */
+const stockEvent: BusinessEvent = {
+  id: toDomainId("00000000-0000-4000-8000-000000000011"),
+  idempotencyKey: "stock_reservation_created:r1:1",
+  eventCode: "stock_reservation_created",
+  eventVersion: 1,
+  aggregateType: "stock_reservation",
+  aggregateId: toDomainId("00000000-0000-4000-8000-000000000003"),
+  occurredAt: toIsoDateTime("2026-11-11T10:00:00.000Z"),
+  payload: { reservationId: "00000000-0000-4000-8000-000000000003", reservationNumber: "Р-000012" }
+};
+
 function fakeFetch(status: number, body: unknown, calls: Array<{ url: string; body: unknown }> = []): FetchLike {
   return async (url, init) => {
     calls.push({ url, body: JSON.parse(init.body) });
@@ -255,6 +267,34 @@ describe("Telegram", () => {
     assert.equal(commands[0]?.subject, "По задаче MTS-1 назначен инженер");
     assert.equal(commands[0]?.body, "Иван, ссылка https://crm.example.ru/tasks/t1");
     assert.equal(commands[0]?.idempotencyKey, "task_engineer_assigned:t1:1:telegram:u1");
+    // У задачного события резерва нет: поле остаётся пустым.
+    assert.equal(commands[0]?.reservationId, undefined);
+  });
+
+  it("планировщик берёт событие резерва и ставит в доставку сам резерв", async () => {
+    const planner = new PostgresTelegramEventDeliveryPlanner({
+      executeSql: async () => ({
+        rows: [{
+          recipient_user_id: "u1", recipient_address: "123456789", recipient_name: "Кладовщик один",
+          subject_template: "Новый резерв {{reservationNumber}}",
+          body_template: "{{partName}} {{partArticle}}, {{quantity}} шт., {{condition}}. Задача {{taskNumber}}.",
+          allowed_variables: ["reservationNumber", "partName", "partArticle", "quantity", "condition", "taskNumber", "taskUrl"],
+          task_id: "t1",
+          variables: {
+            reservationNumber: "Р-000012", partName: "клапан", partArticle: "115-107131-00",
+            quantity: "1", condition: "новая", taskNumber: "З-000041"
+          }
+        }]
+      })
+    }, "https://crm.example.ru/");
+    const commands = await planner.plan(stockEvent);
+    assert.equal(commands.length, 1);
+    assert.equal(commands[0]?.subject, "Новый резерв Р-000012");
+    assert.equal(commands[0]?.body, "клапан 115-107131-00, 1 шт., новая. Задача З-000041.");
+    assert.equal(commands[0]?.taskId, "t1");
+    // Доставка в журнале ссылается на резерв: номер берётся из payload события.
+    assert.equal(commands[0]?.reservationId, "00000000-0000-4000-8000-000000000003");
+    assert.equal(commands[0]?.idempotencyKey, "stock_reservation_created:r1:1:telegram:u1");
   });
 
   it("бот отвечает номером чата только на /start в личке", async () => {

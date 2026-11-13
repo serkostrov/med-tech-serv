@@ -1,9 +1,13 @@
-import { clipMultiline, clipText, escapeHtml, formatTaskPeriod, isReworkEvent, taskStageLook, type TaskCardData } from "./task-card.js";
+import {
+  cardNumber, cardRows, clipMultiline, clipText, escapeHtml, formatTaskPeriod, isReworkEvent,
+  isStockEvent, cardTitle, stockAmount, taskStageLook, type TaskCardData
+} from "./task-card.js";
 
 /**
  * HTML-письмо о задаче: узкая шапка «МедТехСервис», приветствие, карточка задачи как в Telegram
  * (название цветом этапа, событие и номер, площадка, инженер, срок, «Что доработать»), кнопка
- * «Открыть задачу» и мелкая подпись со ссылкой текстом.
+ * «Открыть задачу» и мелкая подпись со ссылкой текстом. У событий резерва в карточке запчасть
+ * и номер резерва, но вёрстка та же.
  * Вёрстка таблицами с инлайн-стилями, ширина до 600 px, системные шрифты, без внешних картинок
  * и шрифтов: так письмо открывается в Gmail, Яндекс Почте, Mail.ru и Outlook. Все данные экранируются.
  */
@@ -57,21 +61,16 @@ export function taskEmailHtml(card: TaskCardData, options: TaskEmailOptions = {}
   const look = taskStageLook(card.eventCode);
   const stage = look.light;
   const name = clipText(card.recipientName, 120);
-  const number = clipText(card.taskNumber, 40);
-  const title = clipText(card.taskTitle, 300) ?? "Без названия";
+  const number = cardNumber(card, 40);
+  const title = cardTitle(card, 300);
   const site = clipText(card.siteName, 200);
-  const engineer = clipText(card.engineerName, 120);
-  const assigned = engineer !== undefined && engineer !== "не назначен";
   const period = formatTaskPeriod(card.periodFrom, card.periodTo, options.timeZone ?? "Europe/Moscow", "long");
   const comment = isReworkEvent(card.eventCode) ? clipMultiline(card.reworkComment, 2_000) : undefined;
   const url = safeUrl(options.taskUrl);
   const href = url ? escapeHtml(url) : undefined;
 
   // Строки карточки: подпись серым, значение; над первой строкой тонкая линия, как в карточке на доске.
-  const rows: Array<{ readonly label: string; readonly value: string; readonly dim: boolean }> = [];
-  if (site) rows.push({ label: "Площадка", value: site, dim: false });
-  rows.push({ label: "Инженер", value: assigned ? engineer : "не назначен", dim: !assigned });
-  if (period) rows.push({ label: "Срок", value: period, dim: false });
+  const rows = cardRows(card, { site: 200, person: 120, part: 120, task: 320 }, period);
   const rowsHtml = rows.map((row, index) => {
     const edge = index === 0 ? `padding-top:12px;border-top:1px solid ${COLOR.borderSoft};` : "padding-top:6px;";
     return "<tr>"
@@ -117,7 +116,12 @@ export function taskEmailHtml(card: TaskCardData, options: TaskEmailOptions = {}
   ] : [];
 
   // Скрытая первая строка: её почта показывает в списке писем рядом с темой.
-  const preview = comment ? [title, `Что доработать: ${clipText(comment, 120) ?? ""}`] : [title, site, period];
+  // У резерва там артикул и количество: по ним кладовщик понимает письмо не открывая.
+  const preview = comment
+    ? [title, `Что доработать: ${clipText(comment, 120) ?? ""}`]
+    : isStockEvent(card.eventCode)
+      ? [title, clipText(card.partArticle, 120), stockAmount(card)]
+      : [title, site, period];
   const preheader = `<div style="display:none;max-height:0;max-width:0;overflow:hidden;opacity:0;mso-hide:all;font-size:1px;line-height:1px;color:${COLOR.canvas};">`
     + escapeHtml(clipText(preview.filter((part) => part).join(" · "), 200) ?? "")
     + "&zwnj;&nbsp;".repeat(80)
