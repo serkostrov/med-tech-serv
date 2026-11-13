@@ -24,6 +24,7 @@ import {
 import {
   equipmentHistoryDescription,
   equipmentHistoryEventLabel,
+  equipmentHistoryPartText,
   type ManualEquipmentHistoryDraft
 } from "./equipment-history.js";
 import {
@@ -40,6 +41,7 @@ import {
   type InvoiceApiRecord,
   type ReferenceCatalogDescriptor,
   type ReferenceCatalogValue,
+  type StockReservationRecord,
   type TaskCardResponse,
   type TaskApiRecord
 } from "./m2-api.js";
@@ -60,6 +62,7 @@ import {
   WarehousePage as OperationsWarehousePage
 } from "./OperationsPages.js";
 import { ReservationsPage } from "./ReservationsPage.js";
+import { EngineerPickupNote, ResultReservationChecks, TaskReservationsSection } from "./TaskReservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
@@ -656,8 +659,14 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     quantity: String(part.quantity),
     condition: part.condition
   }));
-  const [partDrafts, setPartDrafts] = useState<readonly PartDraft[]>(() => toPartDrafts(card.parts));
+  // Руками правят только позиции, которые не пришли из резерва склада.
+  const manualParts = card.parts.filter((part) => !part.reservationId);
+  const [partDrafts, setPartDrafts] = useState<readonly PartDraft[]>(() => toPartDrafts(manualParts));
   const [partsEditing, setPartsEditing] = useState(false);
+  const [reservations, setReservations] = useState<readonly StockReservationRecord[]>([]);
+  const [reservationsLoading, setReservationsLoading] = useState(true);
+  const [reservationsError, setReservationsError] = useState<string | null>(null);
+  const [canReserveParts, setCanReserveParts] = useState(false);
   const initialAct = buildWorkAct(card);
   const [actEquipmentRows, setActEquipmentRows] = useState<readonly WorkActEquipmentRow[]>(initialAct.equipment);
   const [actWorkRows, setActWorkRows] = useState<readonly WorkActWorkRow[]>(initialAct.works);
@@ -668,8 +677,26 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const canReturnReview = card.availableActions.some((action) => action.code === "return_for_rework");
 
   useEffect(() => {
-    if (!partsEditing) setPartDrafts(toPartDrafts(card.parts));
+    if (!partsEditing) setPartDrafts(toPartDrafts(card.parts.filter((part) => !part.reservationId)));
   }, [card.parts, task.id, partsEditing]);
+
+  // Резервы задачи грузим отдельно: они нужны и во вкладке «Запчасти», и в форме результата.
+  const loadReservations = async () => {
+    setReservationsLoading(true);
+    try {
+      setReservations(await m2Api.taskReservations(task.id));
+      setReservationsError(null);
+    } catch (loadError) {
+      setReservations([]);
+      setReservationsError(loadError instanceof Error ? loadError.message : "Не получилось загрузить резервы задачи");
+    } finally {
+      setReservationsLoading(false);
+    }
+  };
+  useEffect(() => { void loadReservations(); }, [task.id]);
+  useEffect(() => {
+    void m2Api.hasPermission("warehouse.write").then(setCanReserveParts).catch(() => setCanReserveParts(false));
+  }, []);
 
   useEffect(() => {
     const next = buildWorkAct(card);
@@ -888,6 +915,16 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       };
       // Сначала текст: если база его не примет, файлы не загрузятся зря.
       await m2Api.updateTaskResult(task.id, { ...payload, ...(existingActId ? { actFileId: existingActId } : {}) });
+      // Отметки «установлена» по выданным со склада запчастям: результат уже сохранён,
+      // поэтому неудачу показываем предупреждением, а не теряем весь ввод.
+      if (task.equipmentId && reservations.some((item) => item.status === "issued")) {
+        try {
+          await m2Api.setTaskPartsInstalled(task.id, data.getAll("installedReservation").map(String));
+          await loadReservations();
+        } catch (markError) {
+          toast.warning(markError instanceof Error ? `Результат сохранён, но отметки об установке не записались: ${markError.message}` : "Результат сохранён, отметки об установке не записались");
+        }
+      }
       try {
         if (actFiles.length) {
           const uploaded = await m2Api.uploadTaskFiles(task.id, actFiles, "act");
@@ -1050,11 +1087,13 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         {workflowActions.filter((action) => action.code !== "submit_for_review" || readyForReview).map((action) => <Button busy={busy} disabled={busy} key={action.code} onClick={() => void perform(action.code)}>{action.label}</Button>)}
       </div>
     </section> : null}
+    {card.isTaskEngineer && !["closed", "cancelled"].includes(task.status) ? <EngineerPickupNote reservations={reservations} /> : null}
     {task.status === "under_review" && (canCloseReview || canReturnReview) ? <ClosureReview
       busy={busy}
       canClose={canCloseReview}
       canReturn={canReturnReview}
       card={card}
+      reservations={reservations}
       onClose={async () => { await perform(card.availableActions.some((action) => action.code === "verify_closure") ? "verify_closure" : "close"); }}
       onReturn={async (comment) => { await perform("return_for_rework", comment); }}
       onShow={(section) => {
@@ -1109,20 +1148,31 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             </div>
           </section>
         </div> : null}
-        {detailTab === "parts" ? <section className="task-section" aria-labelledby={`task-parts-${task.id}`}>
+        {detailTab === "parts" ? <>
+          <TaskReservationsSection
+            canWrite={canReserveParts}
+            loadError={reservationsError}
+            loading={reservationsLoading}
+            onChanged={async () => { await loadReservations(); await onChanged(); }}
+            reservations={reservations}
+            taskId={task.id}
+            taskInWork={!["closed", "cancelled"].includes(task.status)}
+          />
+          <section className="task-section" aria-labelledby={`task-parts-${task.id}`}>
           <header className="task-section__head">
             <h3 id={`task-parts-${task.id}`}>Запчасти</h3>
             {canEditPartsNow ? <div className="task-section__actions">
-              {card.parts.length > 0 ? <Button onClick={() => setPartsEditing(true)} variant="secondary">Изменить список</Button> : null}
+              {manualParts.length > 0 ? <Button onClick={() => setPartsEditing(true)} variant="secondary">Изменить список</Button> : null}
               <Button icon="plus" onClick={addPartDraft}>Добавить запчасть</Button>
             </div> : null}
           </header>
           {card.parts.length > 0
             ? <div className="table-scroll"><table className="data-table task-parts-table"><thead><tr><th scope="col">Артикул</th><th scope="col">Наименование</th><th className="numeric" scope="col">Количество</th><th scope="col">Состояние</th></tr></thead><tbody>
-              {card.parts.map((part) => <tr key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}{part.forSale ? <small>для продажи</small> : null}</td><td className="numeric">{part.quantity}</td><td>{part.condition === "G" ? "Г, гарантийная" : part.condition === "N" ? "Н, новая" : "Б, б/у"}</td></tr>)}
+              {card.parts.map((part) => <tr key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}{part.forSale ? <small>для продажи</small> : null}{part.installed ? <small className="task-parts-table__installed">установлена{part.reservationNumber ? ` · ${part.reservationNumber}` : ""}</small> : null}</td><td className="numeric">{part.quantity}</td><td>{part.condition === "G" ? "Г, гарантийная" : part.condition === "N" ? "Н, новая" : "Б, б/у"}</td></tr>)}
             </tbody></table></div>
             : <div className="task-section__empty"><p>{canEditPartsNow ? "Запчасти не добавлены. Добавьте, если использовали детали на выезде." : "Запчасти на этой задаче не использовались."}</p></div>}
-        </section> : null}
+          </section>
+        </> : null}
         {detailTab === "history" ? <section className="task-section" aria-label="История задачи"><TaskHistory journal={card.journal} /></section> : null}
       </div>
       <aside className="task-layout__aside" aria-label="Свойства задачи">
@@ -1180,6 +1230,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       </div>
       {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
       {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
+      <ResultReservationChecks hasEquipment={Boolean(task.equipmentId)} parts={card.parts} reservations={reservations} />
       <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
       <label className="field-check"><input defaultChecked={task.workCompleted ?? card.closure?.workCompleted === true} name="workCompleted" type="checkbox" /><span>Работы выполнены полностью</span></label>
       <label className="field-check"><input defaultChecked={task.apparatusApproved ?? card.closure?.apparatusApproved === true} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>
@@ -2101,7 +2152,7 @@ function EquipmentCard({
               <div className="task-history__body">
                 <div className="task-history__line">
                   <span className={`equipment-history__kind equipment-history__kind--${event.eventType}`}>{equipmentHistoryEventLabel(event.eventType)}</span>
-                  <strong>{event.summary}</strong>
+                  <strong>{equipmentHistoryPartText(event) ?? event.summary}</strong>
                   <time dateTime={event.occurredAt}>{formatEquipmentAssignmentDate(event.occurredAt)}</time>
                 </div>
                 <span className="task-history__actor">{[event.author?.name ?? "Система", event.client].filter(Boolean).join(" · ")}</span>
@@ -2552,7 +2603,8 @@ function NotificationsPage() {
   const eventLabel: Readonly<Record<string, string>> = {
     task_application_accepted: "Заявка принята", task_engineer_assigned: "Инженер назначен",
     task_engineer_accepted: "Инженер принял", task_work_completed: "Работы завершены",
-    task_rework_requested: "Возврат на доработку", task_overdue: "Просрочка"
+    task_rework_requested: "Возврат на доработку", task_overdue: "Просрочка",
+    stock_reservation_created: "Новый резерв запчастей", stock_reservation_ready: "Запчасти можно забрать"
   };
   const tone = (status: string): StatusTone => status === "failed" ? "danger" : status === "delivered" || status === "sent" ? "success" : "warning";
   const channelLabel: Readonly<Record<string, string>> = { email: "E-mail", telegram: "Telegram", max: "MAX", sms: "СМС" };
@@ -2924,6 +2976,7 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
     case "equipment": return <EquipmentPage initialEquipmentId={equipmentRouteId} />;
     case "engineers": return <OperationsEngineersPage />;
     case "warehouse": return <OperationsWarehousePage />;
+    case "reservations": return <ReservationsPage />;
     case "notifications": return <NotificationsPage />;
     case "reports": return <OperationsReportsPage />;
     case "customers": return <CustomersPage />;

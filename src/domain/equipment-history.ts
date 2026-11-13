@@ -33,6 +33,14 @@ export interface EquipmentHistoryAttachment {
   readonly contentType?: string;
 }
 
+/** Запчасть из события «Замена запчасти»: снимок артикула, наименования, количества и состояния. */
+export interface EquipmentHistoryPart {
+  readonly articleNumber?: string;
+  readonly name?: string;
+  readonly quantity?: number;
+  readonly condition?: "G" | "N" | "B";
+}
+
 /**
  * Единый формат записи ленты прибора. `description` намеренно обязателен:
  * пустая строка означает пустое исходное описание и не подменяется служебным
@@ -54,6 +62,8 @@ export interface EquipmentHistoryEvent {
   readonly comment?: string;
   readonly author?: EquipmentHistoryAuthor;
   readonly attachment?: EquipmentHistoryAttachment;
+  /** Только у «Замены запчасти»: что именно поставили на прибор. */
+  readonly part?: EquipmentHistoryPart;
 }
 
 export interface NewManualEquipmentHistoryEvent {

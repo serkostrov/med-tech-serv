@@ -41,4 +41,39 @@ describe("task part card", () => {
       assert.ok(markup.includes(expected), expected);
     }
   });
+
+  it("помечает позицию из резерва установленной и называет её резерв", () => {
+    const card: TaskCardResponse = {
+      task: {
+        id: "task-test-34",
+        number: "З-ТЕСТ-034",
+        title: "Учебная замена по резерву",
+        status: "under_review",
+        createdAt: "2026-11-10T09:00:00.000Z",
+        updatedAt: "2026-11-12T10:00:00.000Z"
+      },
+      status: { code: "under_review", name: "На проверке" },
+      parts: [
+        { id: "part-test-c", articleNumber: "TEST-PART-C", name: "Учебная лампа", quantity: 1, condition: "N", reservationId: "r1", reservationNumber: "Р-000012", installed: true },
+        { id: "part-test-d", articleNumber: "TEST-PART-D", name: "Учебный предохранитель", quantity: 1, condition: "N", reservationId: "r2", reservationNumber: "Р-000013" }
+      ],
+      canEditParts: false,
+      files: [],
+      journal: [],
+      availableActions: []
+    };
+    const markup = renderToStaticMarkup(createElement(TaskCard, {
+      card,
+      initialTab: "parts",
+      onBack: () => undefined,
+      onChanged: async () => undefined,
+      onOpenRelated: async () => undefined
+    }));
+
+    assert.ok(markup.includes("Резерв со склада"), "раздел резерва");
+    assert.ok(markup.includes("установлена · Р-000012"), "установленная позиция");
+    assert.equal(markup.includes("Р-000013"), false);
+    // Позиции из резерва руками не правят: кнопки изменения списка у них нет.
+    assert.equal(markup.includes("Изменить список"), false);
+  });
 });

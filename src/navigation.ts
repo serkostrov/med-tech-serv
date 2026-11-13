@@ -65,6 +65,7 @@ const coordinatorNavigation: readonly NavigationItem[] = [
   { id: "maintenance", label: "План ТО", description: "Когда обслуживать приборы", group: "Работа", icon: "maintenance" },
   { id: "engineers", label: "Инженеры", description: "Кто свободен и у кого просрочки", group: "Работа", icon: "engineers" },
   { id: "warehouse", label: "Склад", description: "Запчасти и остатки", group: "Работа", icon: "warehouse" },
+  { id: "reservations", label: "Резервы", description: "Запчасти под задачи и что у инженеров", group: "Работа", icon: "reservations" },
   { id: "customers", label: "Клиенты", description: "Площадки и люди в них", group: "Контроль", icon: "customers" },
   { id: "finance", label: "Счета", description: "Выставить счёт по закрытым задачам", group: "Контроль", icon: "finance" },
   { id: "reports", label: "Отчёты", description: "Сводка по задачам за период", group: "Контроль", icon: "reports" },

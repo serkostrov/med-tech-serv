@@ -2,18 +2,26 @@ import React, { useEffect, useRef, useState, type ReactNode } from "react";
 import { m2Api, type StockReservationRecord } from "./m2-api.js";
 import { Button, ConfirmationDialog, DataTableShell, MetricCard, PageIntro, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
 import { formatDisplayDate } from "./date-format.js";
+import { formatRussianCount } from "./equipment-changes.js";
+import { companyDateTimeText } from "./task-dates.js";
+import { ReservationSteps } from "./TaskReservations.js";
+import { engineerReservationsFileName, engineerReservationsWorkbook } from "./reservation-export.js";
+import { XLSX_MIME } from "./xlsx.js";
 import {
+  RESERVATION_CONDITION_LABELS,
   RESERVATION_STATUS_LABELS,
   RESERVATION_STATUS_TONES,
   availableReservationActions,
   issueBlockReason,
+  reservationIssuedAt,
   reservationQuantityText,
   reservationSummary,
   reservationTaskNote,
+  reservationsByEngineer,
   type ReservationAction
 } from "./reservations.js";
 
-type ReservationsTab = "active" | "closed";
+type ReservationsTab = "active" | "closed" | "engineers";
 type ConfirmedAction = Exclude<ReservationAction, "ready">;
 
 const ACTION_LABELS: Readonly<Record<ReservationAction, string>> = {
@@ -50,6 +58,7 @@ export function ReservationsPage() {
   const [canWrite, setCanWrite] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<{ readonly reservation: StockReservationRecord; readonly action: ConfirmedAction } | null>(null);
+  const [exporting, setExporting] = useState(false);
   // Пока окно подтверждения закрывается, в нём остаётся прежний текст, а не пустой заголовок.
   const lastConfirming = useRef(confirming);
   if (confirming) lastConfirming.current = confirming;
@@ -62,7 +71,7 @@ export function ReservationsPage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const next = await m2Api.stockReservations(nextTab);
+      const next = await m2Api.stockReservations(nextTab === "closed" ? "closed" : "active");
       if (turn === loadTurn.current) setItems(next);
     } catch (error) {
       if (turn === loadTurn.current) setLoadError(error instanceof Error ? error.message : "Не получилось загрузить резервы");
@@ -109,6 +118,28 @@ export function ReservationsPage() {
   const summary = reservationSummary(tab === "active" ? items : []);
   const showActions = canWrite && tab === "active";
   const counting = loading && items.length === 0;
+  const groups = tab === "engineers" ? reservationsByEngineer(items) : [];
+  const issuedCount = groups.reduce((total, group) => total + group.items.length, 0);
+
+  // Выгрузка того, что сейчас на вкладке: по строке на каждую выданную запчасть.
+  const exportEngineers = async () => {
+    setExporting(true);
+    try {
+      const url = URL.createObjectURL(new Blob([(await engineerReservationsWorkbook(items)) as BlobPart], { type: XLSX_MIME }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = engineerReservationsFileName();
+      document.body.append(link);
+      link.click();
+      link.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
+      toast.success(`В файле ${formatRussianCount(issuedCount, ["запчасть", "запчасти", "запчастей"])} у ${formatRussianCount(groups.length, ["инженера", "инженеров", "инженеров"])}`, { title: "Файл выгружен" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить файл", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return <>
     <PageIntro description="Запчасти под задачи: собрать, выдать инженеру, принять обратно." title="Резервы" />
@@ -117,8 +148,34 @@ export function ReservationsPage() {
       <MetricCard icon="reservations" label="Собраны, можно выдавать" value={counting ? "…" : String(summary.ready)} />
       <MetricCard icon="engineers" label="У инженеров" tone="purple" value={counting ? "…" : String(summary.withEngineers)} />
     </div> : null}
-    <PageTabs items={[{ value: "active", label: "Действующие" }, { value: "closed", label: "Закрытые" }]} label="Резервы" onValueChange={changeTab} value={tab} />
-    <DataTableShell meta={loading ? undefined : `${items.length} ${tab === "active" ? "в работе" : "последних"}`} title={tab === "active" ? "Резервы в работе" : "Закрытые резервы"}>
+    <PageTabs items={[{ value: "active", label: "Действующие" }, { value: "engineers", label: "У инженеров" }, { value: "closed", label: "Закрытые" }]} label="Резервы" onValueChange={changeTab} value={tab} />
+    {tab === "engineers" ? <DataTableShell
+      action={items.length ? <Button busy={exporting} busyLabel="Готовим файл…" disabled={issuedCount === 0} onClick={() => void exportEngineers()} variant="secondary">Скачать в Excel</Button> : undefined}
+      meta={loading ? undefined : `${formatRussianCount(issuedCount, ["запчасть", "запчасти", "запчастей"])} у ${formatRussianCount(groups.length, ["инженера", "инженеров", "инженеров"])}`}
+      title="Запчасти у инженеров"
+    >
+      {loadError ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Резервы не загрузились" />
+        : loading && items.length === 0 ? <ResourceState description="Подождите, резервы сейчас появятся." status="loading" title="Загружаем резервы" />
+        : groups.length === 0 ? <ResourceState description="Как только кладовщик выдаст запчасть инженеру, она появится здесь." status="empty" title="На руках у инженеров ничего нет" />
+        : <div className="engineer-reservations">{groups.map((group) => <section className="engineer-reservations__group" key={group.engineerName}>
+          <header className="engineer-reservations__head">
+            <h3>{group.engineerName}</h3>
+            <span>{formatRussianCount(group.items.length, ["запчасть", "запчасти", "запчастей"])} · дольше всех {formatRussianCount(group.oldestDays, ["день", "дня", "дней"])}</span>
+          </header>
+          <ul className="engineer-reservations__list">{group.items.map(({ reservation, days }) => <li key={reservation.id}>
+            <div className="engineer-reservations__part">
+              <strong>{reservation.articleNumber}</strong>
+              <span>{reservation.partName}</span>
+              <small>{reservation.number} · {reservationQuantityText(reservation)} · {RESERVATION_CONDITION_LABELS[reservation.condition]}{reservation.taskNumber ? ` · задача ${reservation.taskNumber}` : ""}</small>
+            </div>
+            <div className="engineer-reservations__when">
+              <small className="reservation-steps__last">Выдана {companyDateTimeText(reservationIssuedAt(reservation))}</small>
+              <ReservationSteps reservation={reservation} />
+            </div>
+            <span className={`engineer-reservations__days${days >= 14 ? " engineer-reservations__days--long" : ""}`}>{formatRussianCount(days, ["день", "дня", "дней"])}</span>
+          </li>)}</ul>
+        </section>)}</div>}
+    </DataTableShell> : <DataTableShell meta={loading ? undefined : `${items.length} ${tab === "active" ? "в работе" : "последних"}`} title={tab === "active" ? "Резервы в работе" : "Закрытые резервы"}>
       {loadError ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Резервы не загрузились" />
         : loading && items.length === 0 ? <ResourceState description="Подождите, резервы сейчас появятся." status="loading" title="Загружаем резервы" />
         : items.length === 0 ? <ResourceState description={tab === "active" ? "Когда под задачу зарезервируют запчасть, она появится здесь." : "Выданные, возвращённые и снятые резервы появятся здесь."} status="empty" title={tab === "active" ? "Резервов в работе нет" : "Закрытых резервов пока нет"} />
@@ -138,7 +195,7 @@ export function ReservationsPage() {
               <td className="reservations-table__nowrap" data-label="Количество">{reservationQuantityText(reservation)}</td>
               <td data-label="Задача">{reservation.taskNumber ? <><strong className="reservations-table__nowrap">{reservation.taskNumber}</strong>{reservation.taskTitle ? <span className="reservations-table__name">{reservation.taskTitle}</span> : null}{note ? <span className="reservations-table__note">{note}</span> : null}</> : "—"}</td>
               <td data-label="Инженер">{reservation.issuedToName ?? reservation.engineerName ?? (reservation.taskNumber ? <span className="reservations-table__none">Не назначен</span> : "—")}</td>
-              <td data-label="Состояние"><StatusBadge tone={RESERVATION_STATUS_TONES[reservation.status]}>{RESERVATION_STATUS_LABELS[reservation.status]}</StatusBadge></td>
+              <td className="reservations-table__wide" data-label="Состояние"><StatusBadge tone={RESERVATION_STATUS_TONES[reservation.status]}>{RESERVATION_STATUS_LABELS[reservation.status]}</StatusBadge><ReservationSteps reservation={reservation} /></td>
               {showActions ? <td className="reservations-table__wide"><div className="table-actions reservations-table__actions">{actions.map((action) => <Button
                 busy={busy && action !== "cancel"}
                 busyLabel="Сохраняем…"
@@ -152,7 +209,7 @@ export function ReservationsPage() {
             </tr>;
           })}</tbody>
         </table></div></div>}
-    </DataTableShell>
+    </DataTableShell>}
     <ConfirmationDialog
       confirmLabel={shown ? CONFIRM_TEXT[shown.action].confirm : ""}
       description={shown ? confirmDescription(shown.reservation, shown.action) : null}
