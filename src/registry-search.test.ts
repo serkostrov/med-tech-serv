@@ -221,7 +221,6 @@ describe("реестр приборов: поиск по любой сущнос
   it("пока миграции 0025 нет, ищет по S/N и примечанию, как раньше, и больше не спрашивает представление", async () => {
     for (const error of [
       { code: "PGRST205", message: "Could not find the table 'public.equipment_search' in the schema cache" },
-      { code: "PGRST200", message: "Could not find a relationship between 'equipment_search' and 'manufacturers' in the schema cache" },
       { code: "42P01", message: "relation \"public.equipment_search\" does not exist" }
     ]) {
       const fake = fakeSupabase({ equipment_search: { error }, equipment: { data: [EQUIPMENT_ROW], count: 1 } });
@@ -235,6 +234,23 @@ describe("реестр приборов: поиск по любой сущнос
       assert.equal(fake.of("equipment_search").length, 1, error.code);
       assert.equal(fake.of("equipment").length, 2, error.code);
     }
+  });
+
+  it("ошибка связи или столбца после миграции показывается, а не прячется за старый поиск", async () => {
+    for (const error of [
+      { code: "PGRST200", message: "Could not find a relationship between 'equipment_search' and 'manufacturers' in the schema cache" },
+      { code: "42703", message: "column equipment_search.search_text does not exist" }
+    ]) {
+      const fake = fakeSupabase({ equipment_search: { error } });
+      await assert.rejects(new M2ApiClient(fake.client).equipmentPage({ search: "BE" }), Error, error.code);
+      assert.equal(fake.of("equipment").length, 0, error.code);
+    }
+  });
+
+  it("звёздочка в поиске не значит «любые символы»", async () => {
+    const { searchTokens } = await import("./m2-api.js");
+    assert.deepEqual(searchTokens("*"), []);
+    assert.deepEqual(searchTokens("AU*480"), ["AU", "480"]);
   });
 
   it("ошибка прав в поиске показывается, а не подменяется старым поиском", async () => {

@@ -111,7 +111,9 @@ SELECT
     regexp_replace(model.name, '[^[:alnum:]]+', '', 'g'),
     site.name,
     organization.name,
-    payer.name,
+    -- Плательщика ищут только те, кому его показывают (финансы, координация, правка приборов),
+    -- иначе инженер находил бы приборы по скрытому от него плательщику.
+    CASE WHEN (SELECT public.app_has_any_permission(ARRAY['finance.read', 'tasks.write', 'equipment.write'])) THEN payer.name END,
     e.notes
   ), 'Ёё', 'Ее') AS search_text
 FROM public.equipment AS e
@@ -126,5 +128,8 @@ COMMENT ON VIEW public.equipment_search IS
 
 REVOKE ALL ON public.equipment_search FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.equipment_search TO authenticated;
+
+-- Остатки без входа не читаются и без опоры на security_invoker (Supabase по умолчанию даёт anon SELECT).
+REVOKE ALL ON public.stock_balances FROM anon;
 
 NOTIFY pgrst, 'reload schema';

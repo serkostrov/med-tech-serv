@@ -341,6 +341,7 @@ RESET ROLE;
 -- ------------------------------------------------------------- Поиск приборов: права
 SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
 SELECT pg_temp.check_eq(pg_temp.equipment_found('beckman'), 'R25-BE49081,R25-SN-3', 'инженер ищет приборы');
+SELECT pg_temp.check_eq(pg_temp.equipment_found('альфа-плательщик'), '', 'инженер не находит приборы по плательщику, которого ему не показывают');
 RESET ROLE;
 
 SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));

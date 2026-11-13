@@ -651,7 +651,8 @@ function escapePostgrestSearchTerm(value: string): string {
  * «ё» ищем как «е»: так записан текст для поиска в базе (миграция 0025). Больше 10 слов не берём.
  */
 export function searchTokens(value: string | undefined): readonly string[] {
-  return (value ?? "").replace(/[Ёё]/gu, "е").split(/\s+/u).filter(Boolean).slice(0, 10);
+  // «*» PostgREST в ilike читает как «любые символы»: убираем, иначе «*» находит всё.
+  return (value ?? "").replace(/[Ёё]/gu, "е").replace(/\*/gu, " ").split(/\s+/u).filter(Boolean).slice(0, 10);
 }
 
 /**
@@ -672,7 +673,10 @@ function isMissingSchemaObject(
 ): boolean {
   if (!error) return false;
   const blob = [error.message, error.code, error.details, error.hint].filter(Boolean).join(" ");
-  return blob.includes(name) && /PGRST20[025]|42P01|42883|42703|schema cache|does not exist/iu.test(blob);
+  // Только «объекта нет» (представления или функции): ошибки столбцов и связей не прячем за старый путь.
+  const missing = blob.includes(name) && /PGRST20[25]|42P01|42883|could not find the (table|function)|relation .* does not exist|function .* does not exist/iu.test(blob);
+  if (missing) console.warn(`В базе нет ${name}: работаем по-старому, пока не применена миграция 0025`);
+  return missing;
 }
 
 const PART_SELECT = "id, article_number, name, minimum_stock, notes, is_active";
@@ -3007,7 +3011,11 @@ export class M2ApiClient {
       this.inventorySummaryAvailable = false;
       return undefined;
     }
-    throwIfError(error, "Не получилось посчитать склад");
+    if (error) {
+      // Сводка не должна ронять весь склад: карточки посчитаем по странице, как раньше.
+      console.warn("Сводка склада не посчиталась", error.message);
+      return undefined;
+    }
     const row = Array.isArray(data) ? asRow(data[0]) : asRow(data);
     return {
       active: numberValue(row.active) ?? 0,
