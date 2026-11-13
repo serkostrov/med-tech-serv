@@ -118,7 +118,7 @@ SELECT pg_temp.expect_denied(format('UPDATE tasks SET payer_requisites = %L::jso
 SELECT pg_temp.expect_denied(format('UPDATE tasks SET deadline_to = deadline_to + 30 WHERE id = %L', (SELECT id FROM ids WHERE k = 't1')), 'инженер не переносит сроки');
 SELECT pg_temp.expect_denied('INSERT INTO invoices (payer_id, payer_name) SELECT id, ''x'' FROM payers LIMIT 1', 'инженер не создаёт счёт');
 SELECT pg_temp.expect_denied('INSERT INTO parts (article_number, name) VALUES (''X'', ''Y'')', 'инженер не создаёт запчасти');
-SELECT pg_temp.check(pg_temp.rows_affected('DELETE FROM tasks') = 0, 'инженер не удаляет задачи');
+SELECT pg_temp.expect_forbidden('DELETE FROM tasks', 'инженер не удаляет задачи');
 SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE users SET access_role_key = %L WHERE id = auth.uid()', 'admin')) = 0, 'инженер не повышает себе роль');
 SELECT pg_temp.check((SELECT count(*) FROM audit_log) = 0, 'инженер не читает журнал аудита');
 SELECT pg_temp.expect_forbidden(format('UPDATE tasks SET status_code = %L, cancellation_reason = %L WHERE id = %L', 'cancelled', 'сам отменил', (SELECT id FROM ids WHERE k = 't1')), 'инженер не отменяет задачу');
@@ -253,6 +253,151 @@ SELECT pg_temp.expect_denied(format('UPDATE public.users SET telegram_chat_id = 
 SELECT pg_temp.check((SELECT public.set_my_telegram_chat_id('987654321')) = '987654321', 'координатор сохраняет свой номер');
 RESET ROLE;
 SELECT pg_temp.check((SELECT telegram_chat_id FROM public.users WHERE id = (SELECT id FROM ids WHERE k = 'engineer')) = '123456789', 'номер инженера остался его собственным');
+
+-- ---------------------------------------------------------------- Удаление деловых записей (0024)
+-- Задачи, приборы, счета и справочники клиентов через API не удаляются: задачу отменяют,
+-- прибор списывают, площадку, контакт и плательщика отключают, счёт отменяют.
+-- Замена строк (запчасти задачи, план ТО, плательщики площадки, права роли) работает.
+CREATE TEMP TABLE protected_tables (name text PRIMARY KEY, label text NOT NULL);
+INSERT INTO protected_tables VALUES
+  ('tasks', 'задачи'), ('task_closures', 'акты задач'), ('equipment', 'приборы'),
+  ('equipment_history', 'историю прибора'), ('invoices', 'счета'), ('invoice_adjustments', 'корректировки счетов'),
+  ('contracts', 'договоры'), ('quotes', 'КП'), ('organizations', 'организации'), ('sites', 'площадки'),
+  ('site_contacts', 'контакты площадок'), ('payers', 'плательщиков'), ('users', 'сотрудников');
+GRANT SELECT ON protected_tables TO authenticated;
+
+DO $$
+DECLARE
+  org uuid; site uuid; payer uuid; contact uuid; eq uuid; task uuid; draft uuid; issued uuid; wt text;
+BEGIN
+  SELECT code INTO wt FROM work_types WHERE is_active AND NOT coalesce(requires_hours, false) ORDER BY code LIMIT 1;
+  INSERT INTO organizations (name) VALUES ('Удаление: организация') RETURNING id INTO org;
+  INSERT INTO sites (name, organization_id) VALUES ('Удаление: площадка', org) RETURNING id INTO site;
+  INSERT INTO payers (name) VALUES ('Удаление: плательщик') RETURNING id INTO payer;
+  INSERT INTO site_contacts (site_id, full_name) VALUES (site, 'Удаление: контакт') RETURNING id INTO contact;
+  INSERT INTO equipment (serial_number, manufacturer_id, model_id, current_site_id, current_payer_id)
+    SELECT 'SN-DEL-1', manufacturer_id, model_id, site, payer FROM equipment WHERE id = (SELECT id FROM ids WHERE k = 'equipment')
+    RETURNING id INTO eq;
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, deadline_from, deadline_to)
+  VALUES ('Удаление: задача', wt, eq, site, payer, (SELECT id FROM ids WHERE k = 'coordinator'), current_date, current_date + 3)
+  RETURNING id INTO task;
+  INSERT INTO invoices (payer_id, payer_name) VALUES (payer, 'Удаление: плательщик') RETURNING id INTO draft;
+  INSERT INTO invoices (payer_id, payer_name) VALUES (payer, 'Удаление: плательщик') RETURNING id INTO issued;
+  INSERT INTO invoice_tasks (invoice_id, task_id) VALUES (issued, task);
+  INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price)
+  VALUES (issued, 'work', wt, 'Работа по задаче', 1, 1000);
+  UPDATE invoices SET status = 'issued' WHERE id = issued;
+  INSERT INTO ids VALUES ('del_org', org), ('del_site', site), ('del_payer', payer), ('del_contact', contact),
+    ('del_equipment', eq), ('del_task', task), ('del_draft', draft), ('del_issued', issued);
+END $$;
+
+SELECT pg_temp.check(NOT EXISTS (
+  SELECT 1 FROM protected_tables AS p
+   WHERE has_table_privilege('authenticated', format('public.%I', p.name), 'DELETE')
+      OR has_table_privilege('anon', format('public.%I', p.name), 'DELETE')
+      OR EXISTS (SELECT 1 FROM pg_policies AS pol
+                  WHERE pol.schemaname = 'public' AND pol.tablename = p.name AND pol.cmd IN ('DELETE', 'ALL'))
+), 'у ролей API нет права и правил удалять задачи, приборы, счета, площадки, плательщиков, сотрудников');
+SELECT pg_temp.check(NOT has_table_privilege('authenticated', 'public.invoice_adjustments', 'INSERT')
+  AND NOT has_table_privilege('authenticated', 'public.invoice_adjustments', 'UPDATE'),
+  'журнал корректировок счёта через API не пишется и не правится');
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT * FROM protected_tables ORDER BY name LOOP
+    PERFORM pg_temp.expect_forbidden(format('DELETE FROM public.%I', r.name), 'координатор не удаляет ' || r.label);
+  END LOOP;
+END $$;
+-- Законные удаления строк при сохранении остались.
+SELECT pg_temp.check(pg_temp.rows_affected(format(
+  'INSERT INTO task_parts (task_id, part_id, part_condition, article_number_snapshot, name_snapshot, quantity) VALUES (%L, %L, %L, %L, %L, 1)',
+  (SELECT id FROM ids WHERE k = 'del_task'), (SELECT id FROM ids WHERE k = 'part'), 'N', 'ART-1', 'Клапан тест')) = 1, 'координатор добавляет запчасть в задачу');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM task_parts WHERE task_id = %L', (SELECT id FROM ids WHERE k = 'del_task'))) = 1,
+  'координатор пересохраняет запчасти задачи (старые строки удаляются)');
+SELECT pg_temp.check(pg_temp.rows_affected(format(
+  'INSERT INTO maintenance_plans (equipment_id, plan_year, period_no, period_from, period_to, work_type_code) VALUES (%L, 2099, 1, %L, %L, %L)',
+  (SELECT id FROM ids WHERE k = 'del_equipment'), '2099-03-01', '2099-03-31', 'maintenance')) = 1, 'координатор планирует ТО');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM maintenance_plans WHERE equipment_id = %L AND plan_year = 2099', (SELECT id FROM ids WHERE k = 'del_equipment'))) = 1,
+  'координатор пересохраняет план ТО (старые периоды удаляются)');
+SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO site_payers (site_id, payer_id) VALUES (%L, %L)',
+  (SELECT id FROM ids WHERE k = 'del_site'), (SELECT id FROM ids WHERE k = 'del_payer'))) = 1, 'координатор привязывает плательщика к площадке');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM site_payers WHERE site_id = %L AND payer_id = %L',
+  (SELECT id FROM ids WHERE k = 'del_site'), (SELECT id FROM ids WHERE k = 'del_payer'))) = 1, 'координатор отвязывает плательщика от площадки');
+-- Черновик счёта собирается и правится, выставленный — нет. Здесь проверяются только права:
+-- отложенные проверки (задача закрыта, снимок плательщика) срабатывают при COMMIT, а файл
+-- откатывается. Их проверяет invoice_create.sql через create_invoice.
+SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 500 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
+  (SELECT id FROM ids WHERE k = 'del_draft'), 'work', 'Строка черновика')) = 1, 'координатор добавляет строку в черновик счёта');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_items WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_draft'))) = 1,
+  'координатор убирает строку из черновика счёта');
+SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO invoice_tasks (invoice_id, task_id) VALUES (%L, %L)',
+  (SELECT id FROM ids WHERE k = 'del_draft'), (SELECT id FROM ids WHERE k = 't1'))) = 1, 'координатор добавляет задачу в черновик счёта');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_tasks WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_draft'))) = 1,
+  'координатор убирает задачу из черновика счёта');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_tasks WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_issued'))) = 0,
+  'задачу из выставленного счёта не убрать');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE invoice_tasks SET invoice_id = %L WHERE invoice_id = %L',
+  (SELECT id FROM ids WHERE k = 'del_draft'), (SELECT id FROM ids WHERE k = 'del_issued'))) = 0, 'задачу из выставленного счёта не перенести в другой');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_items WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_issued'))) = 0,
+  'строку выставленного счёта не удалить');
+SELECT pg_temp.expect_forbidden(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 1 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
+  (SELECT id FROM ids WHERE k = 'del_issued'), 'work', 'Дописать'), 'в выставленный счёт строку не дописать');
+SELECT pg_temp.expect_forbidden(format('INSERT INTO invoice_adjustments (invoice_id, author_id, before_value, after_value, reason) VALUES (%L, %L, %L, %L, %L)',
+  (SELECT id FROM ids WHERE k = 'del_issued'), (SELECT id FROM ids WHERE k = 'admin'), '{}', '{}', 'подделка'), 'корректировку счёта с чужим автором не вписать');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE invoices SET adjustment_amount = -100, correction_reason = %L WHERE id = %L',
+  'Скидка за задержку', (SELECT id FROM ids WHERE k = 'del_issued'))) = 1, 'координатор корректирует сумму счёта с причиной');
+SELECT pg_temp.check((SELECT count(*) FROM invoice_adjustments WHERE invoice_id = (SELECT id FROM ids WHERE k = 'del_issued') AND author_id = auth.uid()) = 1,
+  'корректировка в журнале, автор — сам координатор');
+-- Вместо удаления: отменить, списать, отключить.
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE tasks SET status_code = %L, cancellation_reason = %L WHERE id = %L',
+  'cancelled', 'Создана по ошибке', (SELECT id FROM ids WHERE k = 'del_task'))) = 1, 'координатор отменяет задачу вместо удаления');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE invoices SET status = %L WHERE id = %L', 'cancelled', (SELECT id FROM ids WHERE k = 'del_draft'))) = 1,
+  'координатор отменяет черновик счёта вместо удаления');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE equipment SET status_code = %L WHERE id = %L', 'written_off', (SELECT id FROM ids WHERE k = 'del_equipment'))) = 1,
+  'координатор списывает прибор вместо удаления');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE site_contacts SET is_active = false WHERE id = %L', (SELECT id FROM ids WHERE k = 'del_contact'))) = 1,
+  'координатор отключает контакт площадки');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE sites SET is_active = false WHERE id = %L', (SELECT id FROM ids WHERE k = 'del_site'))) = 1,
+  'координатор отключает площадку');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE payers SET is_active = false WHERE id = %L', (SELECT id FROM ids WHERE k = 'del_payer'))) = 1,
+  'координатор отключает плательщика');
+RESET ROLE;
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'admin'));
+DO $$
+DECLARE r record;
+BEGIN
+  FOR r IN SELECT * FROM protected_tables ORDER BY name LOOP
+    PERFORM pg_temp.expect_forbidden(format('DELETE FROM public.%I', r.name), 'администратор не удаляет ' || r.label);
+  END LOOP;
+END $$;
+SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO access_roles (key, name, base_role) VALUES (%L, %L, %L)', 'del_check_role', 'Проверка прав', 'engineer')) = 1,
+  'администратор создаёт роль');
+SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO access_role_permissions (role_key, permission_code) VALUES (%L, %L)', 'del_check_role', 'tasks.read')) = 1,
+  'администратор выдаёт роли право');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM access_role_permissions WHERE role_key = %L', 'del_check_role')) = 1,
+  'администратор пересохраняет права роли (старые строки удаляются)');
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE payers SET is_active = true WHERE id = %L', (SELECT id FROM ids WHERE k = 'del_payer'))) = 1,
+  'администратор включает плательщика обратно');
+RESET ROLE;
+
+SET LOCAL ROLE anon;
+SELECT pg_temp.expect_forbidden('DELETE FROM public.tasks', 'без входа задачи не удалить');
+RESET ROLE;
+
+SELECT pg_temp.check(
+  (SELECT count(*) FROM organizations WHERE id = (SELECT id FROM ids WHERE k = 'del_org')) = 1
+  AND (SELECT count(*) FROM sites WHERE id = (SELECT id FROM ids WHERE k = 'del_site')) = 1
+  AND (SELECT count(*) FROM payers WHERE id = (SELECT id FROM ids WHERE k = 'del_payer')) = 1
+  AND (SELECT count(*) FROM site_contacts WHERE id = (SELECT id FROM ids WHERE k = 'del_contact')) = 1
+  AND (SELECT count(*) FROM equipment WHERE id = (SELECT id FROM ids WHERE k = 'del_equipment')) = 1
+  AND (SELECT count(*) FROM tasks WHERE id = (SELECT id FROM ids WHERE k = 'del_task')) = 1
+  AND (SELECT count(*) FROM invoices WHERE id IN (SELECT id FROM ids WHERE k IN ('del_draft', 'del_issued'))) = 2
+  AND (SELECT count(*) FROM invoice_tasks WHERE invoice_id = (SELECT id FROM ids WHERE k = 'del_issued')) = 1
+  AND (SELECT count(*) FROM invoice_items WHERE invoice_id = (SELECT id FROM ids WHERE k = 'del_issued')) = 1,
+  'после попыток удаления все записи на месте');
 
 -- ---------------------------------------------------------------- Служебные функции закрыты
 SELECT pg_temp.check(NOT EXISTS (

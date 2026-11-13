@@ -98,3 +98,21 @@ export function aiMailParserFromEnv(environment: NodeJS.ProcessEnv, fetchImpl: F
   }
   throw new Error("AI_PROVIDER должен быть none, yandex или openai");
 }
+
+/**
+ * Нейросеть для разбора писем при запуске службы. Ошибка в настройках AI_* не должна
+ * останавливать службу, а с ней все уведомления: пишем предупреждение и разбираем
+ * письма по правилам, как без нейросети.
+ */
+export function aiMailParserOrRules(
+  environment: NodeJS.ProcessEnv,
+  warn: (message: string) => void = console.warn,
+  fetchImpl?: FetchLike
+): AiMailParser | undefined {
+  try {
+    return aiMailParserFromEnv(environment, fetchImpl);
+  } catch (error) {
+    warn(`Разбор писем нейросетью выключен, ошибка в настройках AI: ${error instanceof Error ? error.message : String(error)}. Письма разбираются по правилам, уведомления работают.`);
+    return undefined;
+  }
+}

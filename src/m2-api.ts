@@ -3520,6 +3520,13 @@ export class M2ApiClient {
     return created;
   }
 
+  /** Отмена счёта вместо удаления (миграция 0024): счёт остаётся в списке, его задачи можно выставить снова. */
+  public async cancelInvoice(id: string): Promise<void> {
+    const { data, error } = await this.db().from("invoices").update({ status: "cancelled" }).eq("id", id).in("status", ["draft", "issued"]).select("id");
+    throwIfError(error, "Не получилось отменить счёт");
+    if (!Array.isArray(data) || data.length === 0) throw new M2ApiError(409, "Счёт не отменён: его уже отменили или передали в 1С. Обновите страницу.");
+  }
+
   public async listCatalogs(): Promise<readonly ReferenceCatalogDescriptor[]> {
     return CATALOGS;
   }

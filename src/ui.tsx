@@ -761,6 +761,7 @@ export function ConfirmationDialog({
   title,
   description,
   confirmLabel,
+  cancelLabel = "Отмена",
   onConfirm,
   tone = "danger"
 }: {
@@ -769,6 +770,8 @@ export function ConfirmationDialog({
   readonly title: string;
   readonly description: ReactNode;
   readonly confirmLabel: string;
+  /** Подпись кнопки «закрыть без действия»: если само действие — «Отменить…», пишите «Не отменять». */
+  readonly cancelLabel?: string;
   readonly onConfirm: () => void | Promise<void>;
   readonly tone?: "danger" | "primary";
 }) {
@@ -786,7 +789,7 @@ export function ConfirmationDialog({
       {...(description ? { description } : {})}
       footer={
         <>
-          <Button disabled={busy} onClick={() => onOpenChange(false)} variant="secondary">Отмена</Button>
+          <Button disabled={busy} onClick={() => onOpenChange(false)} variant="secondary">{cancelLabel}</Button>
           <Button busy={busy} busyLabel="Подождите…" onClick={() => void confirm()} variant={tone}>{confirmLabel}</Button>
         </>
       }
