@@ -57,6 +57,7 @@ import {
   ReportsPage as OperationsReportsPage,
   WarehousePage as OperationsWarehousePage
 } from "./OperationsPages.js";
+import { ReservationsPage } from "./ReservationsPage.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
@@ -3093,6 +3094,7 @@ function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onReturn
 function WarehouseWorkspace({ view }: { readonly view: NavigationId }) {
   switch (view) {
     case "warehouse": return <OperationsWarehousePage />;
+    case "reservations": return <ReservationsPage />;
     case "notifications": return <NotificationsPage />;
     default: return <OperationsWarehousePage />;
   }

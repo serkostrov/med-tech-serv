@@ -36,7 +36,7 @@ describe("web process navigation", () => {
   it("shows the warehouse workflow without office-only sections", () => {
     assert.deepEqual(
       getRoleNavigation("warehouse").map((item) => item.id),
-      ["warehouse", "notifications"]
+      ["warehouse", "reservations", "notifications"]
     );
     assert.equal(hasNavigationItem("warehouse", "reports"), false);
   });

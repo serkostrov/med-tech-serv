@@ -285,6 +285,34 @@ export interface InventoryPartPage extends ApiPage<InventoryPartRecord> {
   readonly nextOffset?: number;
 }
 
+/** Резерв запчасти под задачу: создан, собран на складе, выдан инженеру, установлен, возвращён или отменён. */
+export type StockReservationStatus = "created" | "warehouse_notified" | "issued" | "installed" | "returned" | "cancelled";
+
+export const ACTIVE_RESERVATION_STATUSES: readonly StockReservationStatus[] = ["created", "warehouse_notified", "issued"];
+export const CLOSED_RESERVATION_STATUSES: readonly StockReservationStatus[] = ["installed", "returned", "cancelled"];
+
+export interface StockReservationRecord {
+  readonly id: string;
+  readonly number: string;
+  readonly status: StockReservationStatus;
+  readonly partId: string;
+  readonly articleNumber: string;
+  readonly partName: string;
+  readonly condition: "G" | "N" | "B";
+  readonly quantity: number;
+  readonly taskId?: string;
+  readonly taskNumber?: string;
+  readonly taskTitle?: string;
+  /** Этап задачи (status_code): по отменённой или закрытой задаче выдавать не нужно. */
+  readonly taskStatus?: string;
+  /** Инженер задачи: ему выдаётся запчасть. */
+  readonly engineerName?: string;
+  /** Кому выдали на самом деле (после выдачи). */
+  readonly issuedToName?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
 export interface OperationsReportRecord {
   readonly period: { readonly from: string; readonly to: string };
   readonly metrics: {
@@ -502,6 +530,9 @@ export function publicApiErrorMessage(message: string | undefined, fallback = "�
       ? `Перевести задачу из «${from}» в «${to}» может только координатор.`
       : `Задачу нельзя перевести из «${from}» сразу в «${to}». Двигайте её по этапам по порядку.`;
   }
+  if (/Недопустимый переход резерва/u.test(text)) {
+    return "Резерв уже в другом состоянии. Обновите список резервов.";
+  }
   if (/invalid input syntax for type uuid|22P02/iu.test(text)) {
     return "Некорректное значение фильтра. Сбросьте фильтры и выберите значение из списка.";
   }
@@ -540,6 +571,45 @@ export function publicApiErrorMessage(message: string | undefined, fallback = "�
     return "Пароль не подходит. Задайте другой, не короче 8 символов.";
   }
   return fallback;
+}
+
+const RESERVATION_STATUSES: readonly StockReservationStatus[] = [...ACTIVE_RESERVATION_STATUSES, ...CLOSED_RESERVATION_STATUSES];
+
+/**
+ * Строка stock_reservations со встроенными запчастью, задачей и инженерами. Задачу кладовщик
+ * видит, пока резерв действует: у закрытых резервов задача приходит пустой.
+ */
+export function stockReservationRecord(row: Row): StockReservationRecord {
+  const part = asRow(row.part);
+  const task = asRow(row.task);
+  const statusText = text(row, "status");
+  const status = (RESERVATION_STATUSES as readonly string[]).includes(statusText) ? statusText as StockReservationStatus : "created";
+  const conditionText = text(row, "part_condition");
+  const condition = conditionText === "G" || conditionText === "B" ? conditionText : "N";
+  const taskId = optionalText(row, "task_id");
+  const taskNumber = optionalText(task, "number");
+  const taskTitle = optionalText(task, "title");
+  const taskStatus = optionalText(task, "status_code");
+  const engineerName = optionalText(asRow(task.engineer), "full_name");
+  const issuedToName = optionalText(asRow(row.issued), "full_name");
+  return {
+    id: text(row, "id"),
+    number: text(row, "number"),
+    status,
+    partId: text(row, "part_id"),
+    articleNumber: text(part, "article_number"),
+    partName: text(part, "name"),
+    condition,
+    quantity: numberValue(row.quantity) ?? 0,
+    ...(taskId ? { taskId } : {}),
+    ...(taskNumber ? { taskNumber } : {}),
+    ...(taskTitle ? { taskTitle } : {}),
+    ...(taskStatus ? { taskStatus } : {}),
+    ...(engineerName ? { engineerName } : {}),
+    ...(issuedToName ? { issuedToName } : {}),
+    createdAt: text(row, "created_at"),
+    updatedAt: text(row, "updated_at")
+  };
 }
 
 function throwIfError(error: { readonly message?: string } | null, fallback = "Не получилось выполнить запрос"): void {
@@ -2714,6 +2784,7 @@ export class M2ApiClient {
       ? await this.db().from("stock_balances").select("part_id, on_hand_quantity, reserved_quantity, available_quantity").in("part_id", ids)
       : { data: [], error: null };
     throwIfError(balanceError);
+    const withEngineersByPart = await this.issuedQuantityByPart(ids);
     const balanceByPart = new Map<string, { onHandQuantity: number; reservedQuantity: number; availableQuantity: number }>();
     for (const item of balances ?? []) {
       const balance = asRow(item);
@@ -2728,7 +2799,7 @@ export class M2ApiClient {
     const items = (data ?? []).map((item) => {
       const row = asRow(item);
       const balance = balanceByPart.get(text(row, "id")) ?? { onHandQuantity: 0, reservedQuantity: 0, availableQuantity: 0 };
-      const withEngineersQuantity = 0;
+      const withEngineersQuantity = withEngineersByPart.get(text(row, "id")) ?? 0;
       const minimumStock = numberValue(row.minimum_stock) ?? 0;
       return {
         id: text(row, "id"),
@@ -2861,6 +2932,7 @@ export class M2ApiClient {
       availableQuantity += numberValue(balance.available_quantity) ?? 0;
     }
     const minimumStock = numberValue(row.minimum_stock) ?? 0;
+    const withEngineersQuantity = (await this.issuedQuantityByPart([id])).get(id) ?? 0;
     return {
       id: text(row, "id"),
       articleNumber: text(row, "article_number"),
@@ -2871,9 +2943,74 @@ export class M2ApiClient {
       onHandQuantity,
       reservedQuantity,
       availableQuantity,
-      withEngineersQuantity: 0,
+      withEngineersQuantity,
       belowMinimum: availableQuantity < minimumStock
     };
+  }
+
+  /** Сколько штук каждой запчасти сейчас выдано инженерам и ещё не установлено и не возвращено. */
+  private async issuedQuantityByPart(partIds: readonly string[]): Promise<ReadonlyMap<string, number>> {
+    const result = new Map<string, number>();
+    if (partIds.length === 0) return result;
+    const { data, error } = await this.db().from("stock_reservations").select("part_id, quantity").eq("status", "issued").in("part_id", [...partIds]);
+    throwIfError(error);
+    for (const item of data ?? []) {
+      const row = asRow(item);
+      const partId = text(row, "part_id");
+      result.set(partId, (result.get(partId) ?? 0) + (numberValue(row.quantity) ?? 0));
+    }
+    return result;
+  }
+
+  /**
+   * Резервы для окна склада. active: ждут сборки, выдачи или висят на инженере, по времени
+   * заявки (строка не переезжает после действия, под курсором не окажется чужая кнопка).
+   * closed: последние 100 закрытых.
+   */
+  public async stockReservations(state: "active" | "closed" = "active"): Promise<readonly StockReservationRecord[]> {
+    const select = "id, number, status, part_id, part_condition, quantity, task_id, created_at, updated_at, "
+      + "part:parts(article_number, name), task:tasks(number, title, status_code, engineer:users!engineer_id(full_name)), issued:users!issued_to(full_name)";
+    let request = this.db().from("stock_reservations").select(select);
+    request = state === "active"
+      ? request.in("status", [...ACTIVE_RESERVATION_STATUSES]).order("created_at").order("number").limit(500)
+      : request.in("status", [...CLOSED_RESERVATION_STATUSES]).order("updated_at", { ascending: false }).limit(100);
+    const { data, error } = await request;
+    throwIfError(error, "Не получилось загрузить резервы");
+    return (data ?? []).map((item) => stockReservationRecord(asRow(item)));
+  }
+
+  /** Склад собрал запчасть, её можно выдавать инженеру. */
+  public async markStockReservationReady(id: string): Promise<void> {
+    await this.changeStockReservationStatus(id, "warehouse_notified", ["created"], "Не получилось отметить, что запчасть собрана");
+  }
+
+  /** Снять резерв, пока запчасть не выдана: она снова доступна на складе. */
+  public async cancelStockReservation(id: string): Promise<void> {
+    await this.changeStockReservationStatus(id, "cancelled", ["created", "warehouse_notified"], "Не получилось снять резерв");
+  }
+
+  /** Выдать запчасть инженеру задачи: статус и списание со склада одной операцией (миграция 0022). */
+  public async issueStockReservation(id: string): Promise<void> {
+    await this.stockReservationRpc("issue_stock_reservation", id, "Не получилось выдать запчасть");
+  }
+
+  /** Инженер вернул запчасть: она снова на складе (миграция 0022). */
+  public async returnStockReservation(id: string): Promise<void> {
+    await this.stockReservationRpc("return_stock_reservation", id, "Не получилось принять запчасть на склад");
+  }
+
+  private async changeStockReservationStatus(id: string, status: StockReservationStatus, from: readonly StockReservationStatus[], fallback: string): Promise<void> {
+    const { data, error } = await this.db().from("stock_reservations").update({ status }).eq("id", id).in("status", [...from]).select("id");
+    throwIfError(error, fallback);
+    if (!data?.length) throw new M2ApiError(409, "Резерв уже в другом состоянии. Обновите список резервов.");
+  }
+
+  private async stockReservationRpc(fn: "issue_stock_reservation" | "return_stock_reservation", id: string, fallback: string): Promise<void> {
+    const { error } = await this.db().rpc(fn, { p_reservation_id: id });
+    if (error && (error as { readonly code?: string }).code === "PGRST202") {
+      throw new M2ApiError(501, "Выдача и возврат заработают после обновления базы на сервере");
+    }
+    throwIfError(error, fallback);
   }
 
   public async operationsReport(from: string, to: string): Promise<OperationsReportRecord> {

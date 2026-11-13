@@ -1723,6 +1723,8 @@ td .resource-state {
 }
 
 .table-scroll {
+  /* Скрытые подписи колонок (sr-only) остаются внутри таблицы: на телефоне страница склада и резервов не уезжает вбок. */
+  position: relative;
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
@@ -8345,6 +8347,31 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .customer-people-group + .customer-people-group { margin-top: 10px; }
 .customer-people-group h4 { margin: 0; color: var(--color-muted); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
 .customer-site-card { border-radius: 12px; }
+
+/* ===== Склад: резервы под задачи ===== */
+/* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана: с меню слева на ноутбуке и планшете кнопки не уезжают за край. */
+.reservations-container { container-type: inline-size; }
+.reservations-table { min-width: 1000px; }
+.reservations-table td { vertical-align: top; }
+/* Номер резерва, дата, количество и номер задачи не рвутся посередине. */
+.reservations-table .reservations-table__nowrap,
+.reservations-table__date { white-space: nowrap; overflow-wrap: normal; }
+.reservations-table__name,
+.reservations-table__date,
+.reservations-table__note { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12.5px; line-height: 1.35; }
+.reservations-table__note { color: var(--color-danger); font-weight: 600; }
+.reservations-table__none { color: var(--color-muted); }
+.reservations-table__actions { flex-wrap: wrap; justify-content: flex-end; gap: 6px; }
+/* Узко (телефон, планшет): резерв карточкой, подпись над каждым значением, без прокрутки вбок. */
+@container (max-width: 1000px) {
+  .reservations-table { min-width: 0; }
+  .reservations-table thead { display: none; }
+  .reservations-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 14px; padding: 14px 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .reservations-table tbody td { display: block; padding: 0; border: 0; }
+  .reservations-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .reservations-table td.reservations-table__wide { grid-column: 1 / -1; }
+  .reservations-table__actions { justify-content: flex-start; }
+}
 
 /* ===== Справочники v2: действия в одну строку, строки обычной высоты ===== */
 .reference-admin-actions { flex-wrap: nowrap; gap: 4px; }

@@ -85,6 +85,7 @@ const roleNavigation: Readonly<Record<AppRole, readonly NavigationItem[]>> = {
   ],
   warehouse: [
     { id: "warehouse", label: "Склад", description: "Запчасти и остатки", group: "Работа", icon: "warehouse" },
+    { id: "reservations", label: "Резервы", description: "Собрать, выдать инженеру, принять обратно", group: "Работа", icon: "reservations" },
     { id: "notifications", label: "Уведомления", description: "События по складу", group: "Работа", icon: "notifications" }
   ]
 };
