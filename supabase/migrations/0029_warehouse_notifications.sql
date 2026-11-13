@@ -19,11 +19,11 @@ VALUES
 
 Новый резерв {{reservationNumber}}: {{partName}} {{partArticle}}, {{quantity}} шт., {{condition}}. Задача {{taskNumber}} «{{taskTitle}}», {{siteName}}.
 
-Соберите запчасть и отметьте «Собрано».
-
-Карточка задачи: {{taskUrl}}',
+Соберите запчасть и отметьте «Собрано» в разделе «Резервы».',
+    -- Без ссылки на карточку задачи: у кладовщика в CRM карточек задач нет, он работает
+    -- в разделе «Резервы». Поэтому и кнопку «Открыть задачу» служба такому письму не ставит.
     ARRAY['recipientName', 'reservationNumber', 'partArticle', 'partName', 'quantity',
-          'condition', 'taskNumber', 'taskTitle', 'siteName', 'engineerName', 'taskUrl']
+          'condition', 'taskNumber', 'taskTitle', 'siteName', 'engineerName']
   ),
   (
     'stock_reservation_ready', 'Запчасти можно забрать',

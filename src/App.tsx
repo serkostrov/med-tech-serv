@@ -106,6 +106,12 @@ import { toTechnicalCode } from "./slug.js";
 import { AppShell } from "./components/app-shell.js";
 import { Skeleton } from "./components/ui/skeleton.js";
 
+/**
+ * Этапы, на которых склад по задаче больше не меняется: база не принимает ни новый резерв
+ * (app_task_accepts_reservations), ни отметки об установке (0028), в том числе у координатора.
+ */
+const TERMINAL_MARK_STATUSES: readonly string[] = ["under_review", "closed", "cancelled"];
+
 const FILE_KIND_LABELS: Readonly<Record<string, string>> = {
   act: "Фото акта",
   photo: "Фото",
@@ -918,7 +924,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       await m2Api.updateTaskResult(task.id, { ...payload, ...(existingActId ? { actFileId: existingActId } : {}) });
       // Отметки «установлена» по выданным со склада запчастям: результат уже сохранён,
       // поэтому неудачу показываем предупреждением, а не теряем весь ввод.
-      if (task.equipmentId && reservations.some((item) => item.status === "issued")) {
+      // На проверке, в закрытой и отменённой задаче база отметки больше не принимает,
+      // в том числе у координатора: не дёргаем её и не пугаем предупреждением на ровном месте.
+      if (task.equipmentId && !TERMINAL_MARK_STATUSES.includes(task.status) && reservations.some((item) => item.status === "issued")) {
         try {
           await m2Api.setTaskPartsInstalled(task.id, data.getAll("installedReservation").map(String));
           await loadReservations();
@@ -1157,7 +1165,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             onChanged={async () => { await loadReservations(); await onChanged(); }}
             reservations={reservations}
             taskId={task.id}
-            taskInWork={!["closed", "cancelled"].includes(task.status)}
+            taskInWork={!TERMINAL_MARK_STATUSES.includes(task.status)}
           />
           <section className="task-section" aria-labelledby={`task-parts-${task.id}`}>
           <header className="task-section__head">

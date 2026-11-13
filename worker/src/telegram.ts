@@ -1,4 +1,4 @@
-import { renderNotificationTemplate, type BusinessEvent } from "./domain.js";
+import { renderNotificationTemplate, taskLinkSuitsRecipient, type BusinessEvent } from "./domain.js";
 import { escapeHtml, loadTaskCardFromPlan, type TaskCardData } from "./task-card.js";
 import { chatIdWidgetHtml, clipUtf16, taskWidgetHtml, widgetFitsLimits } from "./telegram-widget.js";
 import {
@@ -165,7 +165,9 @@ export class TelegramDeliveryChannel implements DeliveryChannel {
     if (command.channel !== this.code) throw new ChannelDeliveryError("telegram_channel_mismatch");
     if (!isValidTelegramChatId(command.recipientAddress)) throw new ChannelDeliveryError("telegram_invalid_chat_id", false);
     const chatId = command.recipientAddress.trim();
-    const taskUrl = command.taskId && this.publicAppUrl ? `${this.publicAppUrl}/tasks/${encodeURIComponent(command.taskId)}` : undefined;
+    const taskUrl = command.taskId && this.publicAppUrl && taskLinkSuitsRecipient(command.eventCode)
+      ? `${this.publicAppUrl}/tasks/${encodeURIComponent(command.taskId)}`
+      : undefined;
     // Ссылка на карточку — кнопкой под сообщением, а не длинной строкой в тексте.
     const replyMarkup = taskUrl ? { inline_keyboard: [[{ text: "Открыть задачу", url: taskUrl }]] } : undefined;
 

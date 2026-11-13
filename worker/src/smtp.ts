@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { connect as connectTcp, type Socket } from "node:net";
 import { connect as connectTls, type TLSSocket } from "node:tls";
-import { isValidEmailAddress } from "./domain.js";
+import { isValidEmailAddress, taskLinkSuitsRecipient } from "./domain.js";
 import { taskEmailHtml } from "./email-html.js";
 import { ChannelDeliveryError, type ChannelDeliveryCommand, type ChannelDeliveryReceipt, type DeliveryChannel, type OutboxSqlExecutor } from "./outbox.js";
 import { loadTaskCardFromPlan, type TaskCardData } from "./task-card.js";
@@ -529,7 +529,9 @@ export class SmtpDeliveryChannel implements DeliveryChannel {
     try {
       const card = await withinTimeout(cards.load(command), this.options.cardTimeoutMs ?? TASK_CARD_TIMEOUT_MS);
       if (!card) return undefined;
-      const taskUrl = command.taskId && this.publicAppUrl ? `${this.publicAppUrl}/tasks/${encodeURIComponent(command.taskId)}` : undefined;
+      const taskUrl = command.taskId && this.publicAppUrl && taskLinkSuitsRecipient(command.eventCode)
+        ? `${this.publicAppUrl}/tasks/${encodeURIComponent(command.taskId)}`
+        : undefined;
       const html = taskEmailHtml(card, { subject: command.subject, ...(taskUrl ? { taskUrl } : {}) });
       return Buffer.byteLength(html, "utf8") <= TASK_HTML_LIMIT_BYTES ? html : undefined;
     } catch {

@@ -118,6 +118,17 @@ describe("Telegram", () => {
     assert.match(body.html, /12–13 нояб/u);
   });
 
+  it("кладовщику кнопку «Открыть задачу» не ставит: карточек задач у него нет", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const channel = new TelegramDeliveryChannel(
+      new TelegramClient(config, fakeFetch(200, { ok: true, result: { message_id: 79 } }, calls)),
+      { publicAppUrl: "https://crm.example.test/", cards: { load: async () => card } }
+    );
+    await channel.deliver({ ...withUrl, eventCode: "stock_reservation_created" });
+    const body = calls[0]?.body as { reply_markup?: unknown };
+    assert.equal(body.reply_markup, undefined);
+  });
+
   it("если Telegram не принял виджет, отправляет оформленное сообщение с той же кнопкой", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const fetchImpl: FetchLike = async (url, init) => {

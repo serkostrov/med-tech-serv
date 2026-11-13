@@ -40,6 +40,15 @@ export const BUSINESS_EVENT_CATALOG = {
 } as const;
 
 export type BusinessEventCode = keyof typeof BUSINESS_EVENT_CATALOG;
+
+/**
+ * Можно ли вести получателя этого события в карточку задачи. У кладовщика карточки задач
+ * в интерфейсе нет (его экраны — «Склад» и «Резервы»), поэтому ссылка и кнопка «Открыть задачу»
+ * в письме о новом резерве увели бы его в никуда: такому событию ссылку не даём.
+ */
+export function taskLinkSuitsRecipient(code: BusinessEventCode): boolean {
+  return code !== "stock_reservation_created";
+}
 export type BusinessAggregateType = (typeof BUSINESS_EVENT_CATALOG)[BusinessEventCode]["aggregateType"];
 
 export interface BusinessEvent<Payload extends Readonly<Record<string, unknown>> = Readonly<Record<string, unknown>>> {
