@@ -30,6 +30,29 @@ export function equipmentHistoryEventLabel(type: EquipmentHistoryEventType): str
   return EVENT_LABELS[type];
 }
 
+const PART_CONDITION_LABELS: Readonly<Record<"G" | "N" | "B", string>> = {
+  G: "Г, гарантийная",
+  N: "Н, новая",
+  B: "Б, б/у"
+};
+
+/**
+ * Что поставили на прибор: «AU-LAMP-12V20W Лампа галогеновая, 2 шт., Н, новая».
+ * У старых событий замены подробностей нет — тогда остаётся прежний заголовок.
+ */
+export function equipmentHistoryPartText(event: Pick<EquipmentHistoryEvent, "part">): string | undefined {
+  const part = event.part;
+  if (!part) return undefined;
+  const quantity = part.quantity === undefined ? undefined
+    : Number.isInteger(part.quantity) ? `${part.quantity} шт.` : `${String(part.quantity).replace(".", ",")} шт.`;
+  const line = [
+    [part.articleNumber, part.name].filter(Boolean).join(" "),
+    quantity,
+    part.condition ? PART_CONDITION_LABELS[part.condition] : undefined
+  ].filter(Boolean).join(", ");
+  return line || undefined;
+}
+
 export function equipmentHistoryDescription(event: EquipmentHistoryEvent): string {
   return event.description || "Описание не указано";
 }

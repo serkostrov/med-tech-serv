@@ -1,7 +1,9 @@
 import React, { useState } from "react";
-import type { TaskCardResponse } from "./m2-api.js";
+import type { StockReservationRecord, TaskCardResponse } from "./m2-api.js";
 import { AutoTextarea, Button, StatusBadge } from "./ui.js";
 import { formatDisplayDate } from "./date-format.js";
+import { RESERVATION_CONDITION_LABELS } from "./reservations.js";
+import { partQuantityText } from "./TaskReservations.js";
 
 /** Вкладка карточки задачи, куда ведёт пункт сводки. */
 export type ClosureReviewSection = "work" | "parts";
@@ -41,9 +43,23 @@ export function uncheckedActMarks(card: Pick<TaskCardResponse, "closure" | "task
  * Сами материалы (результат, фото акта, фото с выезда, запчасти) показаны один раз ниже,
  * во вкладках карточки. Здесь только сводка, что приложено, и переход к нужной вкладке.
  */
-export function ClosureReview({ card, busy, canClose, canReturn, onClose, onReturn, onShow }: {
+/**
+ * Выданные со склада запчасти, которые инженер не отметил установленными. Закрывать задачу
+ * это не мешает: они останутся за инженером, пока склад не примет возврат.
+ */
+export function unmarkedIssuedParts(
+  card: Pick<TaskCardResponse, "parts">,
+  reservations: readonly StockReservationRecord[]
+): readonly StockReservationRecord[] {
+  return reservations.filter((item) => item.status === "issued"
+    && !card.parts.some((part) => part.reservationId === item.id && part.installed === true));
+}
+
+export function ClosureReview({ card, busy, canClose, canReturn, onClose, onReturn, onShow, reservations = [] }: {
   readonly card: TaskCardResponse;
   readonly busy: boolean;
+  /** Резервы задачи: по ним видно, что выдали, но не отметили установленным. */
+  readonly reservations?: readonly StockReservationRecord[];
   readonly canClose: boolean;
   readonly canReturn: boolean;
   readonly onClose: () => Promise<void>;
@@ -76,6 +92,8 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
     },
     { label: card.parts.length ? `Запчасти: ${card.parts.length}` : "Запчасти не использовались", section: "parts" }
   ];
+  const installed = card.parts.filter((part) => part.installed === true);
+  const unmarked = unmarkedIssuedParts(card, reservations);
   // Закрыть нельзя, пока не хватает того, что проверяет база: объясняем сразу, а не ошибкой после нажатия.
   const blockers = closureBlockers(card);
   const unchecked = uncheckedActMarks(card);
@@ -93,6 +111,12 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
             {onShow ? <button className="text-button" onClick={() => onShow(item.section)} type="button">{item.label}</button> : item.label}
           </li>)}
         </ul>
+        {installed.length ? <ul aria-label="Установленные запчасти" className="closure-review__parts">
+          {installed.map((part) => <li key={part.id}>
+            <strong>{part.articleNumber}</strong> {part.name} · {partQuantityText(part.quantity)} · {RESERVATION_CONDITION_LABELS[part.condition]}
+            {part.reservationNumber ? <small>{part.reservationNumber}</small> : null}
+          </li>)}
+        </ul> : null}
       </div>
       <div className="closure-review__buttons">
         <Button disabled={busy || !canReturn} onClick={() => setReworkOpen((open) => !open)} variant="secondary">На доработку</Button>
@@ -101,6 +125,9 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
     </header>
     {canClose && blockers.length ? <p className="closure-review__blocked" role="note">
       Закрыть пока нельзя: {blockers.join("; ")}. Догрузите недостающее во вкладке «Работа и акт» или верните задачу на доработку и напишите инженеру, что добавить.
+    </p> : null}
+    {unmarked.length ? <p className="closure-review__note" role="note">
+      Выдано, но не отмечено установленным: {unmarked.length}. Останется за инженером, пока склад не примет возврат.
     </p> : null}
     {canClose && !blockers.length && unchecked.length ? <p className="closure-review__note" role="note">
       В акте не отмечено: {unchecked.join(", ")}. Проверьте, что это так и задумано, прежде чем закрывать.

@@ -1,4 +1,5 @@
-import type { StockReservationRecord, StockReservationStatus } from "./m2-api.js";
+import type { StockReservationRecord, StockReservationStatus, StockReservationStep } from "./m2-api.js";
+import { companyDateTimeText } from "./task-dates.js";
 import type { StatusTone } from "./ui.js";
 
 /** Что склад может сделать с резервом в этом статусе. */
@@ -27,6 +28,13 @@ const CONDITION_LABELS: Readonly<Record<StockReservationRecord["condition"], str
   N: "новая",
   G: "гарантийная",
   B: "б/у"
+};
+
+/** Состояние запчасти буквой и словом, как в списке запчастей задачи: «Н, новая». */
+export const RESERVATION_CONDITION_LABELS: Readonly<Record<StockReservationRecord["condition"], string>> = {
+  G: "Г, гарантийная",
+  N: "Н, новая",
+  B: "Б, б/у"
 };
 
 /**
@@ -84,4 +92,73 @@ export function reservationSummary(items: readonly Pick<StockReservationRecord, 
     ready: items.filter((item) => item.status === "warehouse_notified" && !issueBlockReason(item)).length,
     withEngineers: items.filter((item) => item.status === "issued").length
   };
+}
+
+/** Последний шаг резерва: кто и когда перевёл его в нынешнее состояние. */
+export function lastReservationStep(reservation: Pick<StockReservationRecord, "steps">): StockReservationStep | undefined {
+  return reservation.steps.length ? reservation.steps[reservation.steps.length - 1] : undefined;
+}
+
+/** «Собрана · Никитина Ольга Павловна · 12.11.2026 09:30». Без автора — только время. */
+export function reservationStepText(step: StockReservationStep): string {
+  return [RESERVATION_STATUS_LABELS[step.status], step.actorName, companyDateTimeText(step.changedAt)].filter(Boolean).join(" · ");
+}
+
+/** Когда запчасть выдали инженеру: шаг «У инженера», иначе последнее изменение резерва. */
+export function reservationIssuedAt(reservation: Pick<StockReservationRecord, "steps" | "updatedAt">): string | undefined {
+  const issued = [...reservation.steps].reverse().find((step) => step.status === "issued");
+  return issued?.changedAt ?? reservation.updatedAt;
+}
+
+/** Сколько полных суток запчасть у инженера. Без даты выдачи — 0. */
+export function daysWithEngineer(reservation: Pick<StockReservationRecord, "steps" | "updatedAt">, now: number = Date.now()): number {
+  const issuedAt = Date.parse(reservationIssuedAt(reservation) ?? "");
+  if (!Number.isFinite(issuedAt)) return 0;
+  return Math.max(0, Math.floor((now - issuedAt) / 86_400_000));
+}
+
+/** Что инженеру делать с запчастью: забирать её или она уже у него. */
+export function engineerReservationHint(status: StockReservationStatus): string | undefined {
+  if (status === "created") return "ждёт сборки";
+  if (status === "warehouse_notified") return "собрана, можно забрать";
+  if (status === "issued") return "у вас";
+  return undefined;
+}
+
+export interface EngineerReservationRow {
+  readonly reservation: StockReservationRecord;
+  readonly days: number;
+}
+
+export interface EngineerReservationGroup {
+  readonly engineerName: string;
+  readonly items: readonly EngineerReservationRow[];
+  /** Сколько дней висит самая старая запчасть группы: по ней сортируем инженеров. */
+  readonly oldestDays: number;
+}
+
+const NO_ENGINEER = "Инженер не указан";
+
+/**
+ * Выданные запчасти по инженерам: у кого что лежит и сколько дней. Сверху тот,
+ * у кого запчасть висит дольше всех, внутри группы — тоже сначала самые старые.
+ */
+export function reservationsByEngineer(
+  items: readonly StockReservationRecord[],
+  now: number = Date.now()
+): readonly EngineerReservationGroup[] {
+  const groups = new Map<string, EngineerReservationRow[]>();
+  for (const reservation of items.filter((item) => item.status === "issued")) {
+    const name = reservation.issuedToName ?? reservation.engineerName ?? NO_ENGINEER;
+    const rows = groups.get(name) ?? [];
+    rows.push({ reservation, days: daysWithEngineer(reservation, now) });
+    groups.set(name, rows);
+  }
+  return [...groups.entries()]
+    .map(([engineerName, rows]) => ({
+      engineerName,
+      items: [...rows].sort((left, right) => right.days - left.days || left.reservation.number.localeCompare(right.reservation.number, "ru")),
+      oldestDays: rows.reduce((max, row) => Math.max(max, row.days), 0)
+    }))
+    .sort((left, right) => right.oldestDays - left.oldestDays || left.engineerName.localeCompare(right.engineerName, "ru"));
 }

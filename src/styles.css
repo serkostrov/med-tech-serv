@@ -8592,3 +8592,105 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .maintenance-period-card__facts { grid-template-columns: minmax(0, 1fr); grid-column: auto; }
   .maintenance-plan-form__keep { justify-self: stretch; }
 }
+
+/* ===== Резерв со склада в карточке задачи ===== */
+.task-reservations { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.task-reservations__item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 260px) auto;
+  align-items: start;
+  gap: 10px 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+}
+.task-reservations__main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
+.task-reservations__number { color: var(--color-muted); font-size: 13px; font-weight: 600; white-space: nowrap; }
+.task-reservations__name { min-width: 0; overflow-wrap: anywhere; }
+.task-reservations__main small { flex-basis: 100%; color: var(--color-muted); font-size: 12.5px; }
+.task-reservations__state { display: grid; justify-items: start; gap: 4px; }
+.task-reservations__actions { display: flex; justify-content: flex-end; }
+@media (max-width: 760px) {
+  .task-reservations__item { grid-template-columns: minmax(0, 1fr); }
+  .task-reservations__actions { justify-content: flex-start; }
+}
+
+/* Шаги резерва: последний виден всегда, остальные по кнопке */
+.reservation-steps { display: grid; justify-items: start; gap: 2px; }
+.reservation-steps__last { color: var(--color-muted); font-size: 12.5px; line-height: 1.35; }
+.reservation-steps__toggle { padding: 0; font-size: 12.5px; }
+.reservation-steps__list { display: grid; gap: 2px; margin: 4px 0 0; padding: 0 0 0 16px; color: var(--color-ink-soft); font-size: 12.5px; line-height: 1.4; }
+
+/* Выбор запчасти в окне резерва */
+.reserve-part-list { display: grid; gap: 4px; max-height: 240px; padding: 6px; overflow-y: auto; border: 1px solid var(--color-border-soft); border-radius: var(--radius-md); }
+.reserve-part-option {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+.reserve-part-option:hover { background: #f4f6f8; }
+.reserve-part-option.is-selected { border-color: var(--color-accent-dark); background: #eef6fb; }
+.reserve-part-option__text { display: grid; gap: 2px; min-width: 0; }
+.reserve-part-option__text small { color: var(--color-muted); font-size: 12.5px; }
+.reserve-part-option__stock { color: var(--color-muted); font-size: 12.5px; white-space: nowrap; }
+
+/* Что забрать на складе: подсказка инженеру на карточке задачи */
+.task-pickup { margin: 0 0 16px; padding: 12px 14px; border: 1px solid #cfe3ec; border-radius: var(--radius-md); background: #f4fafd; }
+.task-pickup h2 { margin: 0 0 8px; font-size: 15px; }
+.task-pickup__list { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.task-pickup__list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-height: 36px; }
+.task-pickup__list small { flex-basis: 100%; color: var(--color-muted); font-size: 13px; }
+
+/* Отметки «Установлена» в форме результата: крупные цели для пальца */
+.dialog-form .result-parts { grid-template-columns: minmax(0, 1fr); }
+.dialog-form .result-parts .form-hint { margin: 0; }
+.dialog-form .result-parts .field-check { align-items: flex-start; min-height: 48px; padding: 6px 0; }
+.dialog-form .result-parts .field-check input { width: 22px; height: 22px; margin-top: 2px; }
+.result-parts__text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.result-parts__text small { flex-basis: 100%; color: var(--color-muted); font-size: 12.5px; font-weight: 400; }
+
+/* Установленные запчасти в проверке закрытия */
+.closure-review__parts { display: grid; gap: 4px; margin: 10px 0 0; padding: 0; list-style: none; color: var(--color-ink-soft); font-size: 13px; }
+.closure-review__parts small { margin-left: 8px; color: var(--color-muted); font-size: 12.5px; }
+.task-parts-table__installed { color: var(--color-success); }
+
+/* ===== Резервы: вкладка «У инженеров» ===== */
+.engineer-reservations { display: grid; gap: 14px; }
+.engineer-reservations__group { border: 1px solid var(--color-border-soft); border-radius: var(--radius-md); overflow: hidden; }
+.engineer-reservations__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  padding: 10px 14px;
+  background: #f6f8fa;
+}
+.engineer-reservations__head h3 { margin: 0; font-size: 15px; }
+.engineer-reservations__head span { color: var(--color-muted); font-size: 13px; }
+.engineer-reservations__list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.engineer-reservations__list li {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 220px) auto;
+  align-items: start;
+  gap: 6px 16px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--color-border-soft);
+}
+.engineer-reservations__part { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
+.engineer-reservations__part small { flex-basis: 100%; color: var(--color-muted); font-size: 12.5px; }
+.engineer-reservations__days { font-weight: 600; white-space: nowrap; }
+.engineer-reservations__days--long { color: var(--color-danger); }
+@media (max-width: 760px) {
+  .engineer-reservations__list li { grid-template-columns: minmax(0, 1fr); }
+}

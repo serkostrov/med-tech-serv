@@ -3481,6 +3481,22 @@ export class M2ApiClient {
     return [];
   }
 
+  /**
+   * Сколько запчасти доступно по состояниям Г/Н/Б (stock_balances). Нужно окну резерва:
+   * база всё равно проверит остаток, но лишний раз ошибку ловить не придётся.
+   */
+  public async inventoryPartAvailability(partId: string): Promise<Readonly<Record<"G" | "N" | "B", number>>> {
+    const { data, error } = await this.db().from("stock_balances").select("part_condition, available_quantity").eq("part_id", partId);
+    throwIfError(error, "Не получилось прочитать остатки по состояниям");
+    const totals: Record<"G" | "N" | "B", number> = { G: 0, N: 0, B: 0 };
+    for (const item of data ?? []) {
+      const row = asRow(item);
+      const condition = text(row, "part_condition");
+      if (condition === "G" || condition === "N" || condition === "B") totals[condition] += numberValue(row.available_quantity) ?? 0;
+    }
+    return totals;
+  }
+
   /** Склад собрал запчасть, её можно выдавать инженеру. */
   public async markStockReservationReady(id: string): Promise<void> {
     await this.changeStockReservationStatus(id, "warehouse_notified", ["created"], "Не получилось отметить, что запчасть собрана");
