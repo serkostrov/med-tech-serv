@@ -11,14 +11,32 @@
 -- Что делаем.
 --   1. create_task_part_reservation — заказ запчасти под задачу с понятными отказами.
 --   2. set_task_parts_installed — инженер отмечает, что из выданного он поставил.
---   3. При закрытии задачи отмеченное проводится по складу (install) и резерв
---      становится «установлено»; неотмеченное остаётся «выдано» — висит на инженере,
+--      Отметка живёт в самом резерве (stock_reservations.install_marked), а не в
+--      строке task_parts: одинаковых запчастей под задачу могут выдать две штуки
+--      разными резервами (два одинаковых предохранителя), и поставить инженер может
+--      обе, а строка позиции на задачу, запчасть и состояние по схеме всего одна.
+--   3. При закрытии задачи каждый отмеченный резерв проводится по складу своим
+--      движением install; неотмеченное остаётся «выдано» — висит на инженере,
 --      пока кладовщик не примет возврат.
---   4. При отмене задачи неотданные резервы (создан, собран) снимаются.
+--   4. При закрытии и при отмене задачи неотданные резервы (создан, собран)
+--      снимаются: по закрытой задаче они уже не понадобятся, а пока они висят,
+--      «доступно» на складе занижено, и запчасть не выдать на другую задачу.
 --
--- Обе RPC работают с правами вызывающего (SECURITY INVOKER): что можно, решают
--- политики склада и задач, новых прав функции не дают. Триггеры, как все служебные
--- (0009), работают от владельца схемы и напрямую никому не доступны.
+-- create_task_part_reservation работает с правами вызывающего (SECURITY INVOKER).
+-- set_task_parts_installed — от владельца схемы с явной проверкой прав внутри (как
+-- accept_task_closure в 0014): отметку она пишет в stock_reservations, а инженеру
+-- этого по политикам склада нельзя — у него только warehouse.read. Триггеры, как все
+-- служебные (0009), работают от владельца схемы и напрямую никому не доступны.
+
+-- ---------------------------------------------------------------------------
+-- 0. Отметка «установлено» на самом резерве
+-- ---------------------------------------------------------------------------
+
+ALTER TABLE public.stock_reservations
+  ADD COLUMN IF NOT EXISTS install_marked boolean NOT NULL DEFAULT false;
+
+COMMENT ON COLUMN public.stock_reservations.install_marked IS
+  'Инженер отметил, что эту выданную запчасть он поставил в прибор (0028). При закрытии задачи по каждому отмеченному резерву проводится своё движение install. Хранить отметку в task_parts нельзя: строка позиции на задачу, запчасть и состояние всего одна, а одинаковых запчастей под задачу могут выдать две разными резервами.';
 
 -- ---------------------------------------------------------------------------
 -- 1. Заказ запчасти под задачу
@@ -113,36 +131,43 @@ CREATE OR REPLACE FUNCTION public.set_task_parts_installed(
 )
 RETURNS void
 LANGUAGE plpgsql
-SECURITY INVOKER
+SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
   marked uuid[] := coalesce(p_reservation_ids, ARRAY[]::uuid[]);
-  task_equipment uuid;
-  task_found boolean;
+  task_row public.tasks%ROWTYPE;
   wrong_id uuid;
-  reservation record;
+  grp record;
+  link_id uuid;
   next_position integer;
 BEGIN
-  IF auth.uid() IS NOT NULL THEN
-    IF NOT (public.app_is_task_engineer(p_task_id) OR public.app_has_permission('tasks.write')) THEN
-      RAISE EXCEPTION 'Отметить установку может инженер задачи или координатор'
-        USING ERRCODE = '42501';
-    END IF;
-    IF NOT public.app_can_write_task(p_task_id) THEN
-      RAISE EXCEPTION 'Задача сдана, закрыта или отменена: отметки об установке больше не меняются'
-        USING ERRCODE = '42501';
-    END IF;
+  -- Работает от владельца схемы, поэтому права проверяем сами, как accept_task_closure (0014).
+  IF auth.uid() IS NOT NULL
+     AND NOT (public.app_is_task_engineer(p_task_id) OR public.app_has_permission('tasks.write')) THEN
+    RAISE EXCEPTION 'Отметить установку может инженер задачи или координатор'
+      USING ERRCODE = '42501';
   END IF;
 
-  SELECT t.equipment_id, true INTO task_equipment, task_found
-    FROM public.tasks AS t WHERE t.id = p_task_id;
-  IF NOT coalesce(task_found, false) THEN
+  SELECT * INTO task_row FROM public.tasks AS t WHERE t.id = p_task_id;
+  IF task_row.id IS NULL THEN
     RAISE EXCEPTION 'Задача не найдена' USING ERRCODE = '23514';
   END IF;
+  -- Смотрим этап самой задачи, а не app_can_write_task: та разрешает координатору
+  -- править задачу в любом этапе, а после закрытия установку уже провели по складу
+  -- (или не проведут никогда) — отметки тогда разошлись бы со складом навсегда.
+  IF auth.uid() IS NOT NULL AND task_row.status_code IN ('under_review', 'closed', 'cancelled') THEN
+    RAISE EXCEPTION 'Задача сдана, закрыта или отменена: отметки об установке больше не меняются'
+      USING ERRCODE = '42501';
+  END IF;
   -- Установка пишется в историю прибора: без прибора её некуда записать.
-  IF task_equipment IS NULL THEN
+  IF task_row.equipment_id IS NULL THEN
     RAISE EXCEPTION 'Чтобы отметить установку, у задачи должен быть прибор' USING ERRCODE = '23514';
+  END IF;
+  -- Пустое значение в списке — почти всегда позиция без резерва, пришедшая с экрана.
+  -- Молча пропустить его нельзя: тогда проверка «свой ли это резерв» ничего не найдёт.
+  IF array_position(marked, NULL) IS NOT NULL THEN
+    RAISE EXCEPTION 'В списке установленных запчастей попалось пустое значение' USING ERRCODE = '23514';
   END IF;
 
   -- Отмечать можно только то, что выдано инженеру по этой же задаче.
@@ -158,41 +183,79 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
 
-  FOR reservation IN
-    SELECT r.id, r.part_id, r.part_condition, r.quantity
+  -- Сама отметка: один вызов задаёт полный список установленного по задаче.
+  UPDATE public.stock_reservations AS r
+     SET install_marked = (r.id = ANY (marked))
+   WHERE r.task_id = p_task_id
+     AND r.status = 'issued'
+     AND r.install_marked IS DISTINCT FROM (r.id = ANY (marked));
+
+  -- Дальше — только строки позиций для карточки задачи: по одной на запчасть и
+  -- состояние, количество — сумма отмеченных резервов. Замок по задаче, чтобы два
+  -- одновременных вызова не взяли одинаковый position (UNIQUE по задаче и позиции).
+  PERFORM pg_advisory_xact_lock(hashtextextended('task_parts:' || p_task_id::text, 0));
+  FOR grp IN
+    SELECT r.part_id,
+           r.part_condition,
+           coalesce(sum(r.quantity) FILTER (WHERE r.install_marked), 0) AS marked_quantity
       FROM public.stock_reservations AS r
      WHERE r.task_id = p_task_id AND r.status = 'issued'
-     ORDER BY r.created_at, r.id
+     GROUP BY r.part_id, r.part_condition
+     ORDER BY r.part_id, r.part_condition
   LOOP
-    IF reservation.id = ANY (marked) THEN
+    -- Позицию «для продажи» вписал координатор, со складом она не связана (0008):
+    -- её количество и наименование не трогаем. Отметку резерва это не отменяет —
+    -- по складу установка всё равно проведётся, просто отдельной строки в карточке
+    -- для неё не будет: на задачу, запчасть и состояние строка всего одна.
+    IF EXISTS (
+      SELECT 1 FROM public.task_parts AS tp
+       WHERE tp.task_id = p_task_id AND tp.part_id = grp.part_id
+         AND tp.part_condition = grp.part_condition AND tp.for_sale
+    ) THEN
+      CONTINUE;
+    END IF;
+
+    IF grp.marked_quantity > 0 THEN
+      SELECT r2.id INTO link_id
+        FROM public.stock_reservations AS r2
+       WHERE r2.task_id = p_task_id AND r2.status = 'issued' AND r2.install_marked
+         AND r2.part_id = grp.part_id AND r2.part_condition = grp.part_condition
+       ORDER BY r2.created_at, r2.id
+       LIMIT 1;
       SELECT coalesce(max(tp.position) + 1, 0) INTO next_position
         FROM public.task_parts AS tp WHERE tp.task_id = p_task_id;
       -- Такая запчасть в этом состоянии уже может быть в списке позиций задачи:
-      -- тогда привязываем её к резерву, а не заводим вторую строку.
+      -- тогда обновляем её, а не заводим вторую строку.
       INSERT INTO public.task_parts (
         task_id, part_id, reservation_id, part_condition,
         article_number_snapshot, name_snapshot, quantity, installed, position
       )
-      SELECT p_task_id, p.id, reservation.id, reservation.part_condition,
-             p.article_number, p.name, reservation.quantity, true, next_position
+      SELECT p_task_id, p.id, link_id, grp.part_condition,
+             p.article_number, p.name, grp.marked_quantity, true, next_position
         FROM public.parts AS p
-       WHERE p.id = reservation.part_id
+       WHERE p.id = grp.part_id
       ON CONFLICT (task_id, part_id, part_condition) DO UPDATE
         SET reservation_id = excluded.reservation_id,
             installed = true,
-            quantity = excluded.quantity;
+            quantity = excluded.quantity,
+            article_number_snapshot = excluded.article_number_snapshot,
+            name_snapshot = excluded.name_snapshot;
     ELSE
       -- Сняли отметку: строка и связь с резервом остаются, установки нет.
       UPDATE public.task_parts AS tp
          SET installed = false
-       WHERE tp.task_id = p_task_id AND tp.reservation_id = reservation.id AND tp.installed;
+       WHERE tp.task_id = p_task_id AND tp.part_id = grp.part_id
+         AND tp.part_condition = grp.part_condition
+         AND tp.reservation_id IS NOT NULL AND tp.installed;
     END IF;
   END LOOP;
 END
 $$;
 
+REVOKE ALL ON FUNCTION public.set_task_parts_installed(uuid, uuid[]) FROM PUBLIC, anon;
+
 COMMENT ON FUNCTION public.set_task_parts_installed(uuid, uuid[]) IS
-  'Отметка инженера «эти выданные запчасти установлены» (0028): создаёт или обновляет позиции задачи по выданным резервам. По складу ничего не проводит — установка проводится при закрытии задачи.';
+  'Отметка инженера «эти выданные запчасти установлены» (0028): ставит install_marked на выданных резервах задачи (вызов задаёт полный список) и пересобирает строки позиций для карточки. Работает от владельца схемы с проверкой прав внутри: инженеру писать в резервы по политикам склада нельзя. По складу ничего не проводит — установка проводится при закрытии задачи.';
 
 -- ---------------------------------------------------------------------------
 -- 3. Закрытие задачи: проводим установку отмеченных запчастей
@@ -213,12 +276,13 @@ BEGIN
     RETURN NULL;
   END IF;
 
+  -- Идём по резервам, а не по строкам позиций: двум одинаковым запчастям под одной
+  -- задачей соответствует одна строка в карточке, но два резерва и два движения.
   FOR installed_part IN
     SELECT r.id AS reservation_id, r.part_id, r.part_condition, r.quantity, r.issued_to
-      FROM public.task_parts AS tp
-      JOIN public.stock_reservations AS r ON r.id = tp.reservation_id
-     WHERE tp.task_id = NEW.id AND tp.installed AND r.status = 'issued'
-     ORDER BY tp.position, tp.id
+      FROM public.stock_reservations AS r
+     WHERE r.task_id = NEW.id AND r.install_marked AND r.status = 'issued'
+     ORDER BY r.created_at, r.id
   LOOP
     -- Ставим в прибор ту же партию, из которой выдали.
     SELECT m.lot_id INTO issue_lot
@@ -291,10 +355,13 @@ $$;
 REVOKE EXECUTE ON FUNCTION public.record_stock_reservation_transition() FROM PUBLIC, anon, authenticated;
 
 -- ---------------------------------------------------------------------------
--- 4. Отмена задачи: освобождаем склад
+-- 4. Задача закончилась (закрыта или отменена): освобождаем склад
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION public.release_task_reservations_on_task_cancel()
+DROP TRIGGER IF EXISTS tasks_release_reservations ON public.tasks;
+DROP FUNCTION IF EXISTS public.release_task_reservations_on_task_cancel();
+
+CREATE OR REPLACE FUNCTION public.release_task_reservations_on_task_finish()
 RETURNS trigger
 LANGUAGE plpgsql
 SECURITY DEFINER
@@ -302,6 +369,9 @@ SET search_path = public, pg_temp
 AS $$
 BEGIN
   -- Заказанное и собранное снимаем: запчасть снова доступна другим задачам.
+  -- И при отмене, и при закрытии: по законченной задаче запчасть уже не поедет,
+  -- а пока резерв висит, «доступно» на складе занижено на его количество —
+  -- заказали лишнее, закрыли задачу, и запчасть пропала из остатка навсегда.
   -- Выданное не трогаем — оно физически у инженера, его принимает склад.
   UPDATE public.stock_reservations
      SET status = 'cancelled'
@@ -310,16 +380,15 @@ BEGIN
 END
 $$;
 
-REVOKE EXECUTE ON FUNCTION public.release_task_reservations_on_task_cancel() FROM PUBLIC, anon, authenticated;
-COMMENT ON FUNCTION public.release_task_reservations_on_task_cancel() IS
-  'Отмена задачи (0028): резервы в статусах «создан» и «собран» снимаются, склад освобождается. Выданное остаётся на инженере до возврата.';
+REVOKE EXECUTE ON FUNCTION public.release_task_reservations_on_task_finish() FROM PUBLIC, anon, authenticated;
+COMMENT ON FUNCTION public.release_task_reservations_on_task_finish() IS
+  'Закрытие и отмена задачи (0028): резервы в статусах «создан» и «собран» снимаются, склад освобождается. Выданное остаётся на инженере до возврата.';
 
-DROP TRIGGER IF EXISTS tasks_release_reservations ON public.tasks;
 CREATE TRIGGER tasks_release_reservations
   AFTER UPDATE OF status_code ON public.tasks
   FOR EACH ROW
-  WHEN (NEW.status_code = 'cancelled' AND OLD.status_code IS DISTINCT FROM 'cancelled')
-  EXECUTE FUNCTION public.release_task_reservations_on_task_cancel();
+  WHEN (NEW.status_code IN ('closed', 'cancelled') AND OLD.status_code NOT IN ('closed', 'cancelled'))
+  EXECUTE FUNCTION public.release_task_reservations_on_task_finish();
 
 -- ---------------------------------------------------------------------------
 -- 5. Права на RPC: без входа недоступны, вошедшему сотруднику — да.
