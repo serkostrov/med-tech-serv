@@ -242,11 +242,18 @@ BEGIN
             name_snapshot = excluded.name_snapshot;
     ELSE
       -- Сняли отметку: строка и связь с резервом остаются, установки нет.
+      -- Строку, привязанную к уже возвращённому или снятому резерву, не трогаем:
+      -- такую связь всё равно отвергнет task_parts_reservation_link_valid (0001),
+      -- а падать из-за чужой строки при снятии отметки незачем.
       UPDATE public.task_parts AS tp
          SET installed = false
        WHERE tp.task_id = p_task_id AND tp.part_id = grp.part_id
          AND tp.part_condition = grp.part_condition
-         AND tp.reservation_id IS NOT NULL AND tp.installed;
+         AND tp.installed
+         AND EXISTS (
+               SELECT 1 FROM public.stock_reservations AS r
+                WHERE r.id = tp.reservation_id AND r.status = 'issued'
+             );
     END IF;
   END LOOP;
 END
