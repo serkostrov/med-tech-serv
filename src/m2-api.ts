@@ -764,7 +764,6 @@ export function localDay(value: string | undefined): string | undefined {
   return `${moment.getFullYear()}-${String(moment.getMonth() + 1).padStart(2, "0")}-${String(moment.getDate()).padStart(2, "0")}`;
 }
 
-/** Закрыта вовремя: день закрытия (по местному времени) не позже конца срока. Без срока или даты: не считаем. */
 /**
  * Массовое назначение инженера: новая задача получает инженера и этап «Назначена»; у запланированной,
  * назначенной и задачи в работе меняется только инженер; сданную, закрытую и отменённую не трогаем.
@@ -775,6 +774,7 @@ export function bulkAssignMode(status: string): "assign" | "engineer_only" | "re
   return "refuse";
 }
 
+/** Закрыта вовремя: день окончания работ (по местному времени) не позже конца срока. Без срока или даты: не считаем. */
 export function closedOnTime(completedAt: string | undefined, deadlineTo: string | undefined): boolean | undefined {
   const completed = localDay(completedAt);
   const deadline = deadlineTo?.slice(0, 10);

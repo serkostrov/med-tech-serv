@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ClosureReview, closureBlockers } from "./ClosureReview.js";
+import { ClosureReview, closureBlockers, uncheckedActMarks } from "./ClosureReview.js";
 import type { TaskCardResponse } from "./m2-api.js";
 
 const card: TaskCardResponse = {
@@ -88,12 +88,16 @@ describe("coordinator closure review", () => {
     assert.doesNotMatch(ready, /<button[^>]*disabled=""[^>]*>Проверено — закрыть<\/button>/u);
   });
 
-  it("называет, чего не хватает для закрытия: акт, фото, отметки акта", () => {
+  it("называет, чего не хватает для закрытия: акт и фото; неотмеченные пункты акта закрыть не мешают", () => {
     // Акт удалили: в закрытии ссылка на файл, которого больше нет.
     const noAct = closureBlockers({ ...card, closure: { ...card.closure!, actFileId: "act-deleted" }, files: card.files.filter((file) => file.kind !== "act") });
     assert.ok(noAct.includes("нет фото акта"));
-    const unchecked = closureBlockers({ ...card, task: { ...card.task, apparatusApproved: false, customerHasNoClaims: false } });
-    assert.ok(unchecked.some((item) => item === "не отмечено в акте: аппарат исправен и допущен, претензий нет"), JSON.stringify(unchecked));
+    const honest = { ...card, task: { ...card.task, apparatusApproved: false, customerHasNoClaims: false } };
+    assert.deepEqual(uncheckedActMarks(honest), ["аппарат исправен и допущен", "претензий нет"]);
+    const photo = (index: number) => ({ id: `photo-${index}`, kind: "photo" as const, originalName: `фото-${index}.jpg`, contentType: "image/jpeg", byteSize: 1024, createdAt: "2026-08-18T09:52:00.000Z" });
+    const markup = render({ card: { ...honest, files: [...card.files, photo(2), photo(3)] } });
+    assert.ok(markup.includes("В акте не отмечено: аппарат исправен и допущен, претензий нет"));
+    assert.doesNotMatch(markup, /<button[^>]*disabled=""[^>]*>Проверено — закрыть<\/button>/u);
   });
 
   it("shows the latest hand-in from the task history, not the first saved act", () => {

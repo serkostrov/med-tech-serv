@@ -157,7 +157,8 @@ export function buildWorkAct(card: WorkActCardSource, overrides: WorkActBuildOve
     contractNumber: task.contractNumber ?? task.contractId ?? "",
     callDate: task.callDate ?? "",
     visitDate: task.visitDate ?? "",
-    completionDate: task.completedAt ?? "",
+    // Дата окончания работ: по времени окончания из акта, иначе по моменту сдачи на проверку.
+    completionDate: task.workFinishedAt ?? task.completedAt ?? "",
     workStartedAt: task.workStartedAt ?? "",
     workFinishedAt: task.workFinishedAt ?? "",
     customer: {

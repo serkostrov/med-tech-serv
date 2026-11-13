@@ -10,24 +10,30 @@ export type ClosureReviewSection = "work" | "parts";
 export const MIN_CLOSURE_PHOTOS = 3;
 
 /**
- * Почему задачу пока нельзя закрыть: база отклонит закрытие без фото акта, без трёх фото с выезда
- * и без трёх отметок акта. Пустой список: закрыть можно.
+ * Почему задачу пока нельзя закрыть: база отклонит закрытие без фото акта и без трёх фото с выезда.
+ * Пустой список: закрыть можно.
  */
-export function closureBlockers(card: Pick<TaskCardResponse, "files" | "closure" | "task">): readonly string[] {
-  const { task, closure } = card;
+export function closureBlockers(card: Pick<TaskCardResponse, "files" | "closure">): readonly string[] {
   const blockers: string[] = [];
-  const hasAct = card.files.some((file) => file.id === closure?.actFileId || file.kind === "act");
+  const hasAct = card.files.some((file) => file.id === card.closure?.actFileId || file.kind === "act");
   if (!hasAct) blockers.push("нет фото акта");
   const photos = card.files.filter((file) => file.kind === "photo").length;
   if (photos < MIN_CLOSURE_PHOTOS) blockers.push(`фото с выезда ${photos} из ${MIN_CLOSURE_PHOTOS} обязательных`);
+  return blockers;
+}
+
+/**
+ * Пункты акта, которые инженер не отметил. Закрыть всё равно можно: честный акт бывает и таким
+ * («претензии есть», «аппарат не допущен»), координатор решает сам. Поэтому только предупреждение.
+ */
+export function uncheckedActMarks(card: Pick<TaskCardResponse, "closure" | "task">): readonly string[] {
+  const { task, closure } = card;
   const checks: readonly [boolean | undefined, string][] = [
     [task.workCompleted ?? closure?.workCompleted, "работы выполнены полностью"],
     [task.apparatusApproved ?? closure?.apparatusApproved, "аппарат исправен и допущен"],
     [task.customerHasNoClaims ?? closure?.customerHasNoClaims, "претензий нет"]
   ];
-  const unchecked = checks.filter(([value]) => value !== true).map(([, label]) => label);
-  if (unchecked.length) blockers.push(`не отмечено в акте: ${unchecked.join(", ")}`);
-  return blockers;
+  return checks.filter(([value]) => value !== true).map(([, label]) => label);
 }
 
 /**
@@ -72,6 +78,7 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
   ];
   // Закрыть нельзя, пока не хватает того, что проверяет база: объясняем сразу, а не ошибкой после нажатия.
   const blockers = closureBlockers(card);
+  const unchecked = uncheckedActMarks(card);
 
   return <section aria-labelledby="closure-review-title" className="closure-review">
     <header className="closure-review__header">
@@ -93,7 +100,10 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
       </div>
     </header>
     {canClose && blockers.length ? <p className="closure-review__blocked" role="note">
-      Закрыть пока нельзя: {blockers.join("; ")}. Верните задачу на доработку и напишите инженеру, что добавить.
+      Закрыть пока нельзя: {blockers.join("; ")}. Догрузите недостающее во вкладке «Работа и акт» или верните задачу на доработку и напишите инженеру, что добавить.
+    </p> : null}
+    {canClose && !blockers.length && unchecked.length ? <p className="closure-review__note" role="note">
+      В акте не отмечено: {unchecked.join(", ")}. Проверьте, что это так и задумано, прежде чем закрывать.
     </p> : null}
 
     {reworkOpen ? <div className="closure-review__rework">

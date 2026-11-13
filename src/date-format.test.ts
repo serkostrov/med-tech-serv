@@ -29,6 +29,16 @@ describe("russian date format", () => {
     assert.equal(parseDisplayTime("24:00"), null);
   });
 
+  it("принимает время, набранное на цифровой клавиатуре телефона", () => {
+    for (const typed of ["930", "0930", "9.30", "9,30", "9 30", "09:30"]) assert.equal(parseDisplayTime(typed), "09:30", typed);
+    assert.equal(parseDisplayTime("9"), "09:00");
+    assert.equal(parseDisplayTime("1315"), "13:15");
+    assert.equal(parseDisplayTime("2400"), null);
+    assert.equal(parseDisplayTime("960"), null);
+    assert.equal(parseDisplayTime("12345"), null);
+    assert.equal(parseDisplayTime("9:3"), null);
+  });
+
   it("replaces native date inputs with the shared picker", async () => {
     const files = await Promise.all([
       "App.tsx",

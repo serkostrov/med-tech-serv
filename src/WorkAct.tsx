@@ -1,7 +1,8 @@
 import React from "react";
 import type { WorkActModel, WorkActPartCondition } from "./work-act.js";
 import { Button, EntityDetailToolbar } from "./ui.js";
-import { formatDisplayDate, formatDisplayTime } from "./date-format.js";
+import { formatDisplayDate } from "./date-format.js";
+import { companyDateText, companyTime } from "./task-dates.js";
 
 const PART_LABELS: Readonly<Record<WorkActPartCondition, string>> = {
   G: "Г",
@@ -9,12 +10,13 @@ const PART_LABELS: Readonly<Record<WorkActPartCondition, string>> = {
   B: "Б"
 };
 
+/** Календарная дата как есть, момент времени по часам компании (как в бумажном акте). */
 function date(value: string): string {
-  return formatDisplayDate(value);
+  return /^\d{4}-\d{2}-\d{2}$/u.test(value) ? formatDisplayDate(value) : companyDateText(value);
 }
 
 function time(value: string): string {
-  return formatDisplayTime(value);
+  return companyTime(value);
 }
 
 function Mark({ checked, children }: { readonly checked: boolean; readonly children: string }) {

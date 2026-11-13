@@ -49,7 +49,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
-import { taskCalendarDate } from "./task-dates.js";
+import { companyDateTimeText, companyDateTimeToIso, companyTime, taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
@@ -94,7 +94,7 @@ import {
   Select,
   toast
 } from "./ui.js";
-import { formatDisplayDate, formatDisplayTime, parseDisplayTime, todayIsoDate } from "./date-format.js";
+import { formatDisplayDate, parseDisplayTime, todayIsoDate } from "./date-format.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { toTechnicalCode } from "./slug.js";
 import { AppShell } from "./components/app-shell.js";
@@ -838,18 +838,23 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       if (quotaError) throw new Error(quotaError);
       const numberField = (name: string) => String(data.get(name) ?? "").trim() === "" ? null : Number(String(data.get(name)).replace(",", "."));
       const reasonCode = String(data.get("reasonCode") ?? "") || null;
-      // Дата выезда и время работ из акта: время относится к дню выезда, по часам телефона или компьютера.
+      // Дата выезда и время работ из акта: время относится к дню выезда, по часам компании (Москва).
       const visitRaw = String(data.get("visitDate") ?? "").trim();
       const startTime = parseDisplayTime(String(data.get("workStartTime") ?? ""));
       const finishTime = parseDisplayTime(String(data.get("workFinishTime") ?? ""));
-      if (startTime === null || finishTime === null) throw new Error("Время работ укажите как чч:мм, например 09:30");
+      if (startTime === null || finishTime === null) throw new Error("Время работ укажите как чч:мм, например 9:30 или 0930");
       if ((startTime || finishTime) && !visitRaw) throw new Error("Укажите дату выезда: к ней относится время работ");
       if (startTime && finishTime && finishTime < startTime) throw new Error("Время окончания работ раньше времени начала");
       const visitDate = visitRaw ? taskCalendarDate(visitRaw) : null;
+      if (visitDate && task.callDate && visitDate < task.callDate) throw new Error(`Дата выезда раньше даты вызова (${formatTaskDate(task.callDate)})`);
+      // Отправляем только изменённое: координатор, поправив опечатку в старой задаче, не запишет в неё чужую дату.
+      const visitChanged = visitDate !== (task.visitDate ?? null);
+      const startChanged = startTime !== companyTime(task.workStartedAt);
+      const finishChanged = finishTime !== companyTime(task.workFinishedAt);
       const actTimes = {
-        visitDate,
-        workStartedAt: visitDate && startTime ? localDateTimeToIso(`${visitDate}T${startTime}`) : null,
-        workFinishedAt: visitDate && finishTime ? localDateTimeToIso(`${visitDate}T${finishTime}`) : null
+        ...(visitChanged ? { visitDate } : {}),
+        ...(visitChanged || startChanged ? { workStartedAt: visitDate && startTime ? companyDateTimeToIso(visitDate, startTime) : null } : {}),
+        ...(visitChanged || finishChanged ? { workFinishedAt: visitDate && finishTime ? companyDateTimeToIso(visitDate, finishTime) : null } : {})
       };
       const workModifier = (String(data.get("workModifier") ?? "") || null) as "G" | "N" | null;
       const payload = {
@@ -978,7 +983,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const nextStep: { readonly title: string; readonly hint: string; readonly tone?: "warning" } | null =
     canAssign ? { title: "Назначьте инженера", hint: "Задача ждёт исполнителя. После назначения инженер получит уведомление." }
       : workflowActions.some((action) => action.code === "accept") ? (card.isTaskEngineer ? { title: "Примите задачу", hint: "Подтвердите, что берёте задачу в работу. Координатор увидит, что вы приступили." } : { title: `Задача ждёт, когда инженер${card.engineer ? ` ${card.engineer.fullName}` : ""} её примет`, hint: "Принять за инженера можно, если он подтвердил выезд по телефону." })
-        : reworkNote && isTaskEngineer ? { title: "Задачу вернули на доработку", hint: `Что исправить: ${reworkNote}. Поправьте результат или фото и снова передайте на проверку.`, tone: "warning" }
+        : reworkNote && isTaskEngineer ? { title: "Задачу вернули на доработку", hint: `Что исправить: ${reworkNote}. Поправьте результат или фото и снова передайте на проверку.${photosMissing ? ` Фото с выезда ${photoCount} из ${MIN_CLOSURE_PHOTOS}: добавьте ещё ${photosMissing}.` : ""}`, tone: "warning" }
           : workflowActions.some((action) => action.code === "submit_for_review") && resultFilled ? (photosMissing
             ? { title: "Загрузите фото с выезда", hint: `Для проверки нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, сейчас ${photoCount}. Добавьте ещё ${photosMissing} во вкладке «Работа и акт» или в форме результата.`, tone: "warning" as const }
             : { title: "Всё заполнено, можно передать на проверку", hint: "Координатор проверит акт и фото и закроет задачу." })
@@ -1117,8 +1122,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             <div><dt>Вид работ</dt><dd>{workTypeLabel}</dd></div>
             {task.callDate ? <div><dt>Дата вызова</dt><dd>{formatTaskDate(task.callDate)}</dd></div> : null}
             {task.visitDate ? <div><dt>Дата выезда</dt><dd>{formatTaskDate(task.visitDate)}</dd></div> : null}
-            {task.workStartedAt || task.workFinishedAt ? <div><dt>Время работ</dt><dd>{task.workStartedAt && task.workFinishedAt ? formatTaskDateRange(task.workStartedAt, task.workFinishedAt, true) : task.workStartedAt ? `с ${formatTaskDate(task.workStartedAt, true)}` : `до ${formatTaskDate(task.workFinishedAt, true)}`}</dd></div> : null}
-            {task.completedAt ? <div><dt>Окончание</dt><dd>{formatTaskDate(task.completedAt, true)}</dd></div> : null}
+            {task.workStartedAt || task.workFinishedAt ? <div><dt>Время работ</dt><dd>{task.workStartedAt && task.workFinishedAt ? `${companyDateTimeText(task.workStartedAt)} — ${companyDateTimeText(task.workFinishedAt)}` : task.workStartedAt ? `с ${companyDateTimeText(task.workStartedAt)}` : `до ${companyDateTimeText(task.workFinishedAt)}`}</dd></div> : null}
+            {task.completedAt ? <div><dt>Окончание</dt><dd>{companyDateTimeText(task.completedAt)}</dd></div> : null}
           </dl>
           <dl>
             <div><dt>Прибор</dt><dd>{card.equipment ? <>{card.equipment.manufacturer} {card.equipment.model}<small>S/N {card.equipment.serialNumber}{card.equipment.statusName || card.equipment.status ? ` · ${card.equipment.statusName ?? card.equipment.status}` : ""}</small></> : <span className="is-empty">Не выбран</span>}</dd></div>
@@ -1155,10 +1160,10 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <label className="field-wide">Замечания пользователя<AutoTextarea defaultValue={task.userRemarks ?? ""} maxLength={2000} name="userRemarks" rows={3} /></label>
       <label>Причина неисправности<Select defaultValue={task.reasonCode ?? card.reason?.code ?? ""} name="reasonCode"><option value="">Не выбрана</option>{card.reason && !resultCatalogs.reasons.some((item) => (item.code ?? item.id) === card.reason?.code) ? <option value={card.reason.code}>{card.reason.name}</option> : null}{resultCatalogs.reasons.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
       {card.canSetWorkModifier ? <label>Гарантия или неправильная эксплуатация<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Обычная работа</option><option value="G">Г, гарантийная</option><option value="N">Н, неправильная эксплуатация</option></Select></label> : null}
-      <label>Дата выезда<DatePicker defaultValue={task.visitDate ?? todayIsoDate()} name="visitDate" /></label>
+      <label>Дата выезда<DatePicker defaultValue={task.visitDate ?? (isTaskEngineer ? todayIsoDate() : "")} name="visitDate" /></label>
       <div className="result-times">
-        <label>Начало работ<input autoComplete="off" defaultValue={formatDisplayTime(task.workStartedAt)} inputMode="numeric" name="workStartTime" placeholder="чч:мм" /></label>
-        <label>Окончание работ<input autoComplete="off" defaultValue={formatDisplayTime(task.workFinishedAt)} inputMode="numeric" name="workFinishTime" placeholder="чч:мм" /></label>
+        <label>Начало работ<input autoComplete="off" defaultValue={companyTime(task.workStartedAt)} inputMode="decimal" name="workStartTime" placeholder="чч:мм, например 9:30" /></label>
+        <label>Окончание работ<input autoComplete="off" defaultValue={companyTime(task.workFinishedAt)} inputMode="decimal" name="workFinishTime" placeholder="чч:мм, например 13:15" /></label>
       </div>
       {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
       {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
@@ -1451,7 +1456,9 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const finishBulk = async (report: BulkTaskCommandResponse) => {
     setSelectedTaskIds(new Set(report.failures.map((failure) => failure.taskId)));
     if (report.failureCount) {
-      toast.warning(`Обновлено ${report.successCount}, не получилось ${report.failureCount}.`);
+      const reasons = report.failures.slice(0, 3).map((failure) => failure.error).join(". ");
+      const more = report.failureCount > 3 ? ` И ещё ${report.failureCount - 3}.` : "";
+      toast.warning(`Обновлено ${report.successCount}, не получилось ${report.failureCount}. ${reasons}.${more}`, { durationMs: 12000 });
     }
     await reloadTasks();
   };

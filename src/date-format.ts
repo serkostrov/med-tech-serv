@@ -87,10 +87,16 @@ export function joinLocalDateTime(date: string, time: string): string {
   return `${date}T${time || "00:00"}`;
 }
 
+/**
+ * Время «чч:мм». С телефона двоеточие не набрать на цифровой клавиатуре, поэтому принимаем
+ * и 9.30, 9,30, 9 30, 930, 0930, а просто 9 значит 09:00.
+ */
 export function parseDisplayTime(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed) return "";
-  const match = /^(\d{1,2}):(\d{2})$/u.exec(trimmed);
+  const match = /^(\d{1,2})[:.,\s](\d{2})$/u.exec(trimmed)
+    ?? /^(\d{1,2})(\d{2})$/u.exec(trimmed)
+    ?? (/^\d{1,2}$/u.test(trimmed) ? [trimmed, trimmed, "00"] as const : null);
   if (!match) return null;
   const hour = Number(match[1]);
   const minute = Number(match[2]);

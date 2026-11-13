@@ -158,4 +158,37 @@ SELECT pg_temp.check((SELECT status_code FROM tasks WHERE id = (SELECT id FROM i
 SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.enforce_task_status_transition()', 'EXECUTE'), 'проверку этапов напрямую не вызвать');
 SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'enforce_task_status_transition'), 'проверка этапов работает от владельца схемы');
 
+-- Свой этап справочника: схема его не ограничивает, но на проверку и из него только с тремя фото.
+INSERT INTO task_statuses (code, name, sort_order) VALUES ('waiting_parts', 'Ждёт запчасть', 35);
+INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, deadline_from, deadline_to, status_code, visit_date, call_reason, work_description)
+VALUES ('Задача со своим этапом', (SELECT code FROM work_types WHERE is_active ORDER BY code LIMIT 1), (SELECT id FROM ids WHERE k = 'equipment'),
+  (SELECT id FROM ids WHERE k = 'site'), (SELECT id FROM ids WHERE k = 'payer'), (SELECT id FROM ids WHERE k = 'engineer'),
+  (SELECT id FROM ids WHERE k = 'coordinator'), current_date, current_date + 7, 'in_progress', current_date, 'Ошибка дозатора', 'Заменён шприц');
+INSERT INTO ids SELECT 't5', id FROM tasks WHERE title = 'Задача со своим этапом';
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE public.tasks SET status_code = %L WHERE id = %L', 'waiting_parts', (SELECT id FROM ids WHERE k = 't5'))) = 1, 'свой этап справочника не ограничен схемой');
+SELECT pg_temp.expect_denied(format('UPDATE public.tasks SET status_code = %L WHERE id = %L', 'under_review', (SELECT id FROM ids WHERE k = 't5')), 'из своего этапа на проверку без фото не сдать');
+RESET ROLE;
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't5'), 'act', 1);
+INSERT INTO task_closures (task_id, act_file_id, submitted_by)
+  SELECT (SELECT id FROM ids WHERE k = 't5'), f.id, (SELECT id FROM ids WHERE k = 'engineer') FROM files f WHERE f.task_id = (SELECT id FROM ids WHERE k = 't5') AND f.kind = 'act';
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't5'), 'photo', 1);
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't5'), 'photo', 2);
+SELECT pg_temp.add_file((SELECT id FROM ids WHERE k = 't5'), 'photo', 3);
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE public.tasks SET status_code = %L WHERE id = %L', 'under_review', (SELECT id FROM ids WHERE k = 't5'))) = 1, 'с тремя фото из своего этапа на проверку можно');
+RESET ROLE;
+SELECT pg_temp.check((SELECT completed_at = (visit_date + time '12:00') AT TIME ZONE 'Europe/Moscow' FROM tasks WHERE id = (SELECT id FROM ids WHERE k = 't5')), 'без времени окончания дата окончания работ: полдень дня выезда по Москве');
+
+-- Доработка стирает дату окончания, повторная сдача и правка координатора её пересчитывают.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+UPDATE public.tasks SET status_code = 'in_progress', rework_comment = 'Уточните время' WHERE id = (SELECT id FROM ids WHERE k = 't5');
+RESET ROLE;
+SELECT pg_temp.check((SELECT completed_at IS NULL FROM tasks WHERE id = (SELECT id FROM ids WHERE k = 't5')), 'после возврата на доработку даты окончания работ нет');
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
+UPDATE public.tasks SET status_code = 'under_review' WHERE id = (SELECT id FROM ids WHERE k = 't5');
+UPDATE public.tasks SET work_finished_at = '2026-11-13 15:45:00+03' WHERE id = (SELECT id FROM ids WHERE k = 't5');
+RESET ROLE;
+SELECT pg_temp.check((SELECT completed_at = '2026-11-13 15:45:00+03'::timestamptz FROM tasks WHERE id = (SELECT id FROM ids WHERE k = 't5')), 'координатор поправил время окончания на проверке: дата окончания работ пересчитана');
+
 ROLLBACK;
