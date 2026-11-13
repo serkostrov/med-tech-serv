@@ -1,15 +1,23 @@
 import React, { useEffect, useState, type FormEvent } from "react";
 import { m2Api, type EngineerOverview, type InventoryPartRecord, type OperationsReportRecord } from "./m2-api.js";
+import { EngineerCompetencyEditor, type CompetencyDraft, type CompetencyReferences } from "./EngineerCompetencyEditor.js";
+import { competenciesToSave, competencyKey, competencyLabel, withManufacturerIds, type EngineerCompetency } from "./engineer-competencies.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, toast } from "./ui.js";
 import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate, todayIsoDate } from "./date-format.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { reportFileName, reportWorkbook } from "./report-export.js";
 import { XLSX_MIME } from "./xlsx.js";
 
-function competencyText(engineer: EngineerOverview): string {
-  const values = engineer.competencies.map((item) => [item.manufacturer, item.modelLine].filter(Boolean).join(" · ")).filter(Boolean);
-  return values.length ? values.join(", ") : "—";
+function CompetencyTags({ engineer }: { readonly engineer: EngineerOverview }) {
+  if (engineer.competencies.length === 0) return <>—</>;
+  return (
+    <ul aria-label={`Компетенции: ${engineer.fullName}`} className="competency-tags">
+      {engineer.competencies.map((item, index) => <li className="tag" key={`${competencyKey(item)}-${index}`}>{competencyLabel(item)}</li>)}
+    </ul>
+  );
 }
+
+const EMPTY_DRAFT: CompetencyDraft = { manufacturerId: "", modelLine: "" };
 
 export function EngineersPage() {
   const [engineers, setEngineers] = useState<readonly EngineerOverview[]>([]);
@@ -17,6 +25,11 @@ export function EngineersPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [editing, setEditing] = useState<EngineerOverview | null>(null);
+  // Компетенции в окне: теги и строка добавления. В базу уходят по «Сохранить карточку».
+  const [competencies, setCompetencies] = useState<readonly EngineerCompetency[]>([]);
+  const [draft, setDraft] = useState<CompetencyDraft>(EMPTY_DRAFT);
+  const [references, setReferences] = useState<CompetencyReferences>({ manufacturers: [], models: [] });
+  const [referencesState, setReferencesState] = useState<"idle" | "loading" | "ready" | "error">("idle");
   const reload = async () => {
     setLoading(true);
     try { setEngineers(await m2Api.engineers()); }
@@ -24,17 +37,41 @@ export function EngineersPage() {
     finally { setLoading(false); }
   };
   useEffect(() => { void reload(); }, []);
+  const loadReferences = async () => {
+    setReferencesState("loading");
+    try {
+      const passport = await m2Api.passportReferences();
+      setReferences({ manufacturers: passport.manufacturers, models: passport.models });
+      setReferencesState("ready");
+    } catch (loadError) {
+      setReferencesState("error");
+      toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить справочник производителей");
+    }
+  };
+  const openEditor = (engineer: EngineerOverview) => {
+    setFormError(null);
+    setCompetencies(engineer.competencies);
+    setDraft(EMPTY_DRAFT);
+    setEditing(engineer);
+    if (referencesState === "idle" || referencesState === "error") void loadReferences();
+  };
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     if (!editing) return;
     const form = new FormData(event.currentTarget);
-    const manufacturer = String(form.get("manufacturer") ?? "").trim();
-    const modelLine = String(form.get("modelLine") ?? "").trim();
+    // Набранную, но не добавленную линейку сохраняем вместе с тегами, а не теряем молча.
+    const prepared = competenciesToSave(competencies, draft, editing.competencies, references.manufacturers);
+    if ("error" in prepared) {
+      setFormError(prepared.error);
+      return;
+    }
     setSaving(true); setFormError(null);
     try {
       await m2Api.updateEngineer(editing.id, {
         fullName: String(form.get("fullName") ?? "").trim(),
-        competencies: manufacturer && modelLine ? [{ manufacturer, modelLine }] : []
+        ...(prepared.changed ? {
+          competencies: prepared.items.map((item) => ({ manufacturerId: item.manufacturerId ?? "", manufacturer: item.manufacturer, modelLine: item.modelLine ?? "" }))
+        } : {})
       });
       setEditing(null); await reload();
     } catch (saveError) {
@@ -55,8 +92,22 @@ export function EngineersPage() {
       <MetricCard icon="tasks" label="Открытые задачи" tone="yellow" value={String(assigned)} />
       <MetricCard icon="clock" label="Просроченные" tone="orange" value={String(overdue)} />
     </div>
-    <DataTableShell meta={`${engineers.length} человек`} title="Загрузка">{loading && engineers.length === 0 ? <ResourceState description="Подождите, список инженеров сейчас появится." status="loading" title="Загружаем инженеров" /> : engineers.length === 0 ? <ResourceState description="Когда появятся сотрудники с ролью инженера, они отобразятся здесь." status="empty" title="Инженеров пока нет" /> : <div className="table-scroll"><table className="data-table engineer-load-table"><thead><tr><th>Инженер</th><th>Компетенции</th><th>Загрузка</th><th className="numeric">Открытые</th><th className="numeric">В работе</th><th className="numeric">Просрочено</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{engineers.map((engineer) => <tr className={engineer.isActive ? "" : "reference-admin-table__inactive"} key={engineer.id}><td><strong>{engineer.fullName}</strong></td><td>{competencyText(engineer)}</td><td><div aria-label={`Загрузка: ${engineer.assignedTaskCount} задач`} className="load-cell"><span><i style={{ width: `${Math.max(4, engineer.assignedTaskCount / maxLoad * 100)}%` }} /></span></div></td><td className="numeric">{engineer.assignedTaskCount}</td><td className="numeric">{engineer.inProgressTaskCount}</td><td className="numeric"><strong className={engineer.overdueTaskCount ? "danger-text" : ""}>{engineer.overdueTaskCount}</strong></td><td><StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Неактивен" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(engineer); }} /></div></td></tr>)}</tbody></table></div>}</DataTableShell>
-    <DialogForm busy={saving} description="Имя и компетенции влияют на подсказки при назначении." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} submitLabel="Сохранить карточку" title="Изменить карточку инженера"><label className="field-wide">ФИО<input autoFocus defaultValue={editing?.fullName} name="fullName" required /></label><label>Производитель<input defaultValue={editing?.competencies[0]?.manufacturer ?? ""} name="manufacturer" /></label><label>Линейка приборов<input defaultValue={editing?.competencies[0]?.modelLine ?? ""} name="modelLine" /></label></DialogForm>
+    <DataTableShell meta={`${engineers.length} человек`} title="Загрузка">{loading && engineers.length === 0 ? <ResourceState description="Подождите, список инженеров сейчас появится." status="loading" title="Загружаем инженеров" /> : engineers.length === 0 ? <ResourceState description="Когда появятся сотрудники с ролью инженера, они отобразятся здесь." status="empty" title="Инженеров пока нет" /> : <div className="table-scroll"><table className="data-table engineer-load-table"><thead><tr><th>Инженер</th><th>Компетенции</th><th>Загрузка</th><th className="numeric">Открытые</th><th className="numeric">В работе</th><th className="numeric">Просрочено</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{engineers.map((engineer) => <tr className={engineer.isActive ? "" : "reference-admin-table__inactive"} key={engineer.id}><td><strong>{engineer.fullName}</strong></td><td><CompetencyTags engineer={engineer} /></td><td><div aria-label={`Загрузка: ${engineer.assignedTaskCount} задач`} className="load-cell"><span><i style={{ width: `${Math.max(4, engineer.assignedTaskCount / maxLoad * 100)}%` }} /></span></div></td><td className="numeric">{engineer.assignedTaskCount}</td><td className="numeric">{engineer.inProgressTaskCount}</td><td className="numeric"><strong className={engineer.overdueTaskCount ? "danger-text" : ""}>{engineer.overdueTaskCount}</strong></td><td><StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Неактивен" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить карточку" onClick={() => openEditor(engineer)} /></div></td></tr>)}</tbody></table></div>}</DataTableShell>
+    <DialogForm busy={saving} description="По компетенциям CRM подсказывает, кого назначить на прибор." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} submitLabel="Сохранить карточку" title="Изменить карточку инженера">
+      <label className="field-wide">ФИО<input autoFocus defaultValue={editing?.fullName} name="fullName" required /></label>
+      <div className="field-wide competency-field">
+        <span className="competency-field__label">Компетенции</span>
+        <EngineerCompetencyEditor
+          canAdd={editing?.isActive !== false}
+          draft={draft}
+          onChange={setCompetencies}
+          onDraftChange={setDraft}
+          references={references}
+          referencesState={referencesState === "idle" ? "loading" : referencesState}
+          value={withManufacturerIds(competencies, references.manufacturers)}
+        />
+      </div>
+    </DialogForm>
   </>;
 }
 

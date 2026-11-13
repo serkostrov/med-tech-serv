@@ -8471,3 +8471,124 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .profile-summary dd { margin: 0; font-weight: 600; overflow-wrap: anywhere; }
 .profile-hint { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
 .profile-retry { display: grid; justify-items: start; gap: 8px; }
+
+/* ===== Компетенции инженера: теги «производитель · линейка» ===== */
+.competency-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.competency-tags .tag { max-width: 100%; padding: 3px 8px; overflow-wrap: break-word; white-space: normal; }
+/* Таблица инженеров на телефоне прокручивается вбок: имена и теги не рвутся посреди слова. */
+.engineer-load-table td:first-child { min-width: 140px; }
+.engineer-load-table .competency-tags { min-width: 200px; }
+.competency-field { display: grid; gap: 6px; min-width: 0; }
+.competency-field__label { color: var(--color-ink); font-size: 12px; font-weight: 600; }
+.competency-editor {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #f7fbfd;
+}
+.competency-editor__chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.competency-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  max-width: 100%;
+  min-width: 0;
+  padding: 2px 2px 2px 10px;
+  border: 1px solid #cfe6f0;
+  border-radius: 7px;
+  color: #276c89;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+}
+.competency-chip > span { min-width: 0; overflow-wrap: anywhere; }
+.competency-chip__remove {
+  display: inline-grid;
+  flex: 0 0 auto;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: 6px;
+  color: var(--color-muted);
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.competency-chip__remove:hover { color: var(--color-danger); background: var(--color-danger-soft); }
+.competency-chip__remove:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+.competency-editor__empty,
+.competency-editor__problem { margin: 0; font-size: 13px; line-height: 1.45; }
+.competency-editor__empty { color: var(--color-muted); }
+.competency-editor__problem { color: var(--color-danger); }
+/* Производитель на всю ширину (длинные названия не переносятся в поле), ниже линейка и «Добавить». */
+.competency-editor__add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas: "maker maker" "line add";
+  align-items: end;
+  gap: 8px 10px;
+}
+.competency-editor__maker { grid-area: maker; }
+.competency-editor__line { grid-area: line; }
+.competency-editor__add .button { grid-area: add; white-space: nowrap; }
+.competency-editor__models { display: grid; gap: 6px; min-width: 0; }
+.competency-editor__models > span { color: var(--color-muted); font-size: 12px; font-weight: 600; overflow-wrap: anywhere; }
+.competency-editor__models ul { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.competency-editor__models li { max-width: 100%; }
+.competency-editor__model {
+  max-width: 100%;
+  padding: 4px 9px;
+  border: 1px dashed #b9d7e4;
+  border-radius: 7px;
+  color: var(--color-accent-dark);
+  background: #fff;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.competency-editor__model:hover { border-style: solid; background: var(--color-accent-soft); }
+.competency-editor__model:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
+@media (max-width: 640px) {
+  .competency-editor__add { grid-template-columns: minmax(0, 1fr); grid-template-areas: "maker" "line" "add"; }
+  .competency-editor__add .button { width: 100%; }
+  .competency-chip__remove { width: 36px; height: 36px; }
+  .competency-editor__model { padding: 8px 12px; font-size: 13px; }
+}
+
+/* ===== План ТО: прибор выбирается поиском ===== */
+/* Окно плана до выбора прибора низкое: список приборов идёт в поток и раздвигает окно, а не обрезается его краем. */
+.maintenance-plan-form .equipment-combobox__list { position: static; margin-top: 4px; }
+/* Период, по которому уже создана задача: только для просмотра. */
+.maintenance-period-card--locked { background: #f4f8f6; }
+.maintenance-period-card__lock {
+  flex: 0 1 auto;
+  padding: 3px 8px;
+  border-radius: 999px;
+  color: var(--color-success);
+  background: var(--color-success-soft);
+  font-size: 12px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.maintenance-period-card__facts {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+.maintenance-period-card__facts dt { color: var(--color-muted); font-size: 12px; font-weight: 600; }
+.maintenance-period-card__facts dd { margin: 2px 0 0; font-size: 13px; overflow-wrap: anywhere; }
+.maintenance-plan-form__keep { justify-self: start; }
+@media (max-width: 760px) {
+  .maintenance-period-card__facts { grid-template-columns: minmax(0, 1fr); grid-column: auto; }
+  .maintenance-plan-form__keep { justify-self: stretch; }
+}

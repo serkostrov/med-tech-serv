@@ -64,6 +64,7 @@ import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
+import { preselectedEngineerId } from "./engineer-competencies.js";
 import { PartsMultiPicker, type SelectedTaskPart } from "./PartsMultiPicker.js";
 import { AccessAdminPage } from "./AccessAdminPage.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
@@ -688,7 +689,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           return left.fullName.localeCompare(right.fullName, "ru");
         });
         setSuggestions(ranked);
-        setEngineerId(ranked.find((item) => item.engineerId !== card.engineer?.id)?.engineerId ?? ranked[0]?.engineerId ?? "");
+        // Смена инженера: сразу выбран другой; инженер из плана ТО у новой задачи — выбран он.
+        setEngineerId(preselectedEngineerId(ranked, card.engineer?.id, canReassign));
       })
       .catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить список инженеров"));
   }, [task.id, canAssign, canReassign, card.equipment?.id]);
@@ -1208,7 +1210,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           {suggestions.map((item) => {
             const selected = item.engineerId === engineerId;
             const hints = [
-              item.previouslyWorkedWithEquipment ? "опыт с прибором" : null,
+              item.previouslyWorkedWithEquipment ? "есть компетенция по прибору" : null,
               item.isAvailable ? "свободен" : "занят"
             ].filter(Boolean).join(" · ");
             return (
