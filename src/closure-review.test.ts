@@ -2,8 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import { ClosureReview, closureBlockers, uncheckedActMarks } from "./ClosureReview.js";
-import type { TaskCardResponse } from "./m2-api.js";
+import { ClosureReview, closureBlockers, uncheckedActMarks, unmarkedIssuedParts } from "./ClosureReview.js";
+import type { StockReservationRecord, TaskCardResponse } from "./m2-api.js";
 
 const card: TaskCardResponse = {
   task: {
@@ -98,6 +98,28 @@ describe("coordinator closure review", () => {
     const markup = render({ card: { ...honest, files: [...card.files, photo(2), photo(3)] } });
     assert.ok(markup.includes("В акте не отмечено: аппарат исправен и допущен, претензий нет"));
     assert.doesNotMatch(markup, /<button[^>]*disabled=""[^>]*>Проверено — закрыть<\/button>/u);
+  });
+
+  it("показывает установленные запчасти и предупреждает про выданное, но не отмеченное", () => {
+    const issued = (id: string, number: string): StockReservationRecord => ({
+      id, number, status: "issued", partId: "p1", articleNumber: "TEST-PART-36", partName: "Учебная лампа",
+      condition: "G", quantity: 2, steps: [], createdAt: "2026-08-17T08:00:00.000Z", updatedAt: "2026-08-18T08:00:00.000Z"
+    });
+    const withParts = {
+      ...card,
+      parts: [
+        ...card.parts,
+        { id: "part-test-36", articleNumber: "TEST-PART-36", name: "Учебная лампа", quantity: 2, condition: "G" as const, reservationId: "r1", reservationNumber: "Р-000036", installed: true }
+      ]
+    };
+    const reservations = [issued("r1", "Р-000036"), issued("r2", "Р-000037")];
+    assert.deepEqual(unmarkedIssuedParts(withParts, reservations).map((item) => item.number), ["Р-000037"]);
+    const markup = render({ card: withParts, reservations });
+    assert.ok(markup.includes("TEST-PART-36"), "установленная запчасть видна");
+    assert.ok(markup.includes("2 шт. · Г, гарантийная"), "количество и состояние");
+    assert.ok(markup.includes("Выдано, но не отмечено установленным: 1. Останется за инженером, пока склад не примет возврат."), "предупреждение");
+    // Это предупреждение, а не запрет: кнопка закрытия не блокируется им.
+    assert.ok(!markup.includes("Закрыть пока нельзя: Выдано"));
   });
 
   it("shows the latest hand-in from the task history, not the first saved act", () => {
