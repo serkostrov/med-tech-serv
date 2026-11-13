@@ -8689,6 +8689,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 }
 .engineer-reservations__part { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 10px; min-width: 0; }
 .engineer-reservations__part small { flex-basis: 100%; color: var(--color-muted); font-size: 12.5px; }
+.engineer-reservations__when { display: grid; justify-items: start; gap: 2px; }
 .engineer-reservations__days { font-weight: 600; white-space: nowrap; }
 .engineer-reservations__days--long { color: var(--color-danger); }
 @media (max-width: 760px) {
