@@ -1,4 +1,5 @@
 import type { StockReservationRecord, StockReservationStatus, StockReservationStep } from "./m2-api.js";
+import type { TaskPartPosition } from "./types.js";
 import { companyDateTimeText } from "./task-dates.js";
 import type { StatusTone } from "./ui.js";
 
@@ -161,4 +162,28 @@ export function reservationsByEngineer(
       oldestDays: rows.reduce((max, row) => Math.max(max, row.days), 0)
     }))
     .sort((left, right) => right.oldestDays - left.oldestDays || left.engineerName.localeCompare(right.engineerName, "ru"));
+}
+
+/**
+ * Резервы, которыми закрыта строка запчастей задачи. Строку склад собирает из всех
+ * отмеченных резервов одной запчасти в одном состоянии, поэтому их может быть несколько,
+ * а записанный в строке reservation_id — любой из них.
+ */
+export function installedReservations(
+  part: Pick<TaskPartPosition, "articleNumber" | "condition" | "reservationId">,
+  reservations: readonly StockReservationRecord[]
+): readonly StockReservationRecord[] {
+  if (!part.reservationId) return [];
+  return reservations.filter((item) => item.articleNumber === part.articleNumber
+    && item.condition === part.condition
+    && item.installMarked
+    && (item.status === "issued" || item.status === "installed"));
+}
+
+/** Номера резервов для подписи «установлена · Р-000012, Р-000013». */
+export function installedReservationNumbers(
+  part: Pick<TaskPartPosition, "articleNumber" | "condition" | "reservationId">,
+  reservations: readonly StockReservationRecord[]
+): readonly string[] {
+  return installedReservations(part, reservations).map((item) => item.number);
 }

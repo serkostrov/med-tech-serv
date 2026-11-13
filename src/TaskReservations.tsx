@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import { m2Api, type InventoryPartRecord, type StockReservationRecord } from "./m2-api.js";
 import type { TaskPartPosition } from "./types.js";
+
 import { Button, ConfirmationDialog, DialogForm, ResourceState, Select, StatusBadge, toast } from "./ui.js";
 import {
   RESERVATION_CONDITION_LABELS,
@@ -255,11 +256,11 @@ export function EngineerPickupNote({ reservations }: { readonly reservations: re
 
 /**
  * Блок формы результата: выданные со склада запчасти с отметкой «Установлена».
+ * Отметка живёт в самом резерве (install_marked), поэтому и галочка берётся оттуда.
  * Галочки уходят в setTaskPartsInstalled вместе с сохранением результата.
  */
-export function ResultReservationChecks({ reservations, parts, hasEquipment = true }: {
+export function ResultReservationChecks({ reservations, hasEquipment = true }: {
   readonly reservations: readonly StockReservationRecord[];
-  readonly parts: readonly TaskPartPosition[];
   /** Без прибора база отметку не примет: объясняем это сразу, а не ошибкой после сохранения. */
   readonly hasEquipment?: boolean;
 }) {
@@ -272,7 +273,7 @@ export function ResultReservationChecks({ reservations, parts, hasEquipment = tr
     <p className="form-hint">Отметьте, что из выданного встало на прибор. Неотмеченное останется за вами, пока склад не примет возврат.</p>
     {issued.map((reservation) => <label className="field-check result-parts__row" key={reservation.id}>
       <input
-        defaultChecked={parts.some((part) => part.reservationId === reservation.id && part.installed === true)}
+        defaultChecked={reservation.installMarked}
         name="installedReservation"
         type="checkbox"
         value={reservation.id}

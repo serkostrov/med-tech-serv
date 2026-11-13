@@ -42,7 +42,7 @@ describe("task part card", () => {
     }
   });
 
-  it("помечает позицию из резерва установленной и называет её резерв", () => {
+  it("показывает собранные складом позиции и не выдаёт их reservation_id за «тот самый резерв»", () => {
     const card: TaskCardResponse = {
       task: {
         id: "task-test-34",
@@ -54,8 +54,8 @@ describe("task part card", () => {
       },
       status: { code: "under_review", name: "На проверке" },
       parts: [
-        { id: "part-test-c", articleNumber: "TEST-PART-C", name: "Учебная лампа", quantity: 1, condition: "N", reservationId: "r1", reservationNumber: "Р-000012", installed: true },
-        { id: "part-test-d", articleNumber: "TEST-PART-D", name: "Учебный предохранитель", quantity: 1, condition: "N", reservationId: "r2", reservationNumber: "Р-000013" }
+        { id: "part-test-c", articleNumber: "TEST-PART-C", name: "Учебная лампа", quantity: 3, condition: "N", reservationId: "r1" },
+        { id: "part-test-d", articleNumber: "TEST-PART-D", name: "Учебный предохранитель", quantity: 1, condition: "N" }
       ],
       canEditParts: false,
       files: [],
@@ -71,8 +71,11 @@ describe("task part card", () => {
     }));
 
     assert.ok(markup.includes("Резерв со склада"), "раздел резерва");
-    assert.ok(markup.includes("установлена · Р-000012"), "установленная позиция");
-    assert.equal(markup.includes("Р-000013"), false);
+    assert.ok(markup.includes("TEST-PART-C"), "позиция из резерва");
+    assert.ok(markup.includes("TEST-PART-D"), "позиция из списка");
+    // Номер резерва в строке произвольный: пока резервы не загружены, подписи «установлена» нет.
+    assert.equal(markup.includes("установлена"), false);
+    assert.equal(markup.includes("r1"), false);
     // Позиции из резерва руками не правят: кнопки изменения списка у них нет.
     assert.equal(markup.includes("Изменить список"), false);
   });
