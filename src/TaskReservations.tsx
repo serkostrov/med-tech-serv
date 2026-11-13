@@ -257,12 +257,17 @@ export function EngineerPickupNote({ reservations }: { readonly reservations: re
  * Блок формы результата: выданные со склада запчасти с отметкой «Установлена».
  * Галочки уходят в setTaskPartsInstalled вместе с сохранением результата.
  */
-export function ResultReservationChecks({ reservations, parts }: {
+export function ResultReservationChecks({ reservations, parts, hasEquipment = true }: {
   readonly reservations: readonly StockReservationRecord[];
   readonly parts: readonly TaskPartPosition[];
+  /** Без прибора база отметку не примет: объясняем это сразу, а не ошибкой после сохранения. */
+  readonly hasEquipment?: boolean;
 }) {
   const issued = reservations.filter((item) => item.status === "issued");
   if (issued.length === 0) return null;
+  if (!hasEquipment) return <fieldset className="field-wide result-checks result-parts"><legend>Запчасти со склада</legend>
+    <p className="form-hint">У задачи не выбран прибор, поэтому отметить установку нельзя. Попросите координатора указать прибор.</p>
+  </fieldset>;
   return <fieldset className="field-wide result-checks result-parts"><legend>Запчасти со склада</legend>
     <p className="form-hint">Отметьте, что из выданного встало на прибор. Неотмеченное останется за вами, пока склад не примет возврат.</p>
     {issued.map((reservation) => <label className="field-check result-parts__row" key={reservation.id}>

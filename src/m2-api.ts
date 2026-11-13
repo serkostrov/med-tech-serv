@@ -721,10 +721,6 @@ export function searchTextPattern(token: string): string {
 }
 
 /**
- * Ошибка из-за того, что представления или функции из новой миграции ещё нет в базе
- * (или PostgREST её ещё не видит). Тогда список работает по-старому, а не падает.
- */
-/**
  * Запчасть из details события «Замена запчасти»: артикул, наименование, количество и Г/Н/Б.
  * Старые события без этих полей остаются без запчасти.
  */
@@ -748,6 +744,10 @@ function isMissingDatabaseFunction(error: { readonly code?: string } | null): bo
   return (error as { readonly code?: string } | null)?.code === "PGRST202";
 }
 
+/**
+ * Ошибка из-за того, что представления или функции из новой миграции ещё нет в базе
+ * (или PostgREST её ещё не видит). Тогда список работает по-старому, а не падает.
+ */
 function isMissingSchemaObject(
   error: { readonly message?: string; readonly code?: string; readonly details?: string; readonly hint?: string } | null,
   name: string

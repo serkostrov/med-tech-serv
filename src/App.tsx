@@ -62,7 +62,7 @@ import {
   WarehousePage as OperationsWarehousePage
 } from "./OperationsPages.js";
 import { ReservationsPage } from "./ReservationsPage.js";
-import { EngineerPickupNote, ResultReservationChecks, TaskReservationsSection, partQuantityText } from "./TaskReservations.js";
+import { EngineerPickupNote, ResultReservationChecks, TaskReservationsSection } from "./TaskReservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
@@ -917,7 +917,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       await m2Api.updateTaskResult(task.id, { ...payload, ...(existingActId ? { actFileId: existingActId } : {}) });
       // Отметки «установлена» по выданным со склада запчастям: результат уже сохранён,
       // поэтому неудачу показываем предупреждением, а не теряем весь ввод.
-      if (reservations.some((item) => item.status === "issued")) {
+      if (task.equipmentId && reservations.some((item) => item.status === "issued")) {
         try {
           await m2Api.setTaskPartsInstalled(task.id, data.getAll("installedReservation").map(String));
           await loadReservations();
@@ -1230,7 +1230,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       </div>
       {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
       {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
-      <ResultReservationChecks parts={card.parts} reservations={reservations} />
+      <ResultReservationChecks hasEquipment={Boolean(task.equipmentId)} parts={card.parts} reservations={reservations} />
       <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
       <label className="field-check"><input defaultChecked={task.workCompleted ?? card.closure?.workCompleted === true} name="workCompleted" type="checkbox" /><span>Работы выполнены полностью</span></label>
       <label className="field-check"><input defaultChecked={task.apparatusApproved ?? card.closure?.apparatusApproved === true} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>
