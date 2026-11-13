@@ -6,7 +6,7 @@ import { maintenanceActivationConfig } from "./maintenance-activation.js";
 import { PostgresEventOutboxRepository, type DeliveryChannel, type EventDeliveryPlanner, type OutboxSqlExecutor } from "./outbox.js";
 import { CompositeEventDeliveryPlanner, DryRunDeliveryChannel, runPollCycle } from "./runtime.js";
 import { NodeSmtpTransport, PostgresEmailTaskCardSource, SmtpDeliveryChannel, smtpConfiguration } from "./smtp.js";
-import { aiMailParserFromEnv } from "./ai-parser.js";
+import { aiMailParserOrRules } from "./ai-parser.js";
 import { sendMailAutoreplies, type AutoreplySender } from "./mail-autoreply.js";
 import { ImapMailIntake, imapSettings } from "./mail-intake.js";
 import { supabaseMailFileStore } from "./storage-upload.js";
@@ -116,16 +116,22 @@ if (mailIntakeEnabled) {
 if (intakeSettings) {
   const files = supabaseMailFileStore(process.env);
   if (!files) console.warn("SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY не заданы: вложения писем сохраняться не будут");
-  mailIntake = new ImapMailIntake(intakeSettings, database, files, aiMailParserFromEnv(process.env));
+  // Ошибка в настройках нейросети (AI_*) тоже не останавливает службу: письма разбираются по правилам.
+  mailIntake = new ImapMailIntake(intakeSettings, database, files, aiMailParserOrRules(process.env));
   if (flag("MAIL_AUTOREPLY_ENABLED", true)) {
     // Ответ клиента на автоответ должен вернуться в заявки: адрес для ответа тот, с которого берём заявки.
     const replyTo = intakeSettings.onlyTo;
     if (dryRun) {
       autoreplySender = { send: async (message) => console.log(`Пробный режим: автоответ на ${message.toAddress} не отправлен`) };
     } else {
-      const smtp = smtpConfiguration(process.env);
-      const transport = new NodeSmtpTransport(smtp);
-      autoreplySender = { send: (message) => transport.send({ ...message, fromAddress: smtp.fromAddress, fromName: smtp.fromName, ...(replyTo ? { replyTo } : {}) }) };
+      // Ошибка в настройках отправки (SMTP_*) выключает только автоответы, а не всю службу.
+      try {
+        const smtp = smtpConfiguration(process.env);
+        const transport = new NodeSmtpTransport(smtp);
+        autoreplySender = { send: (message) => transport.send({ ...message, fromAddress: smtp.fromAddress, fromName: smtp.fromName, ...(replyTo ? { replyTo } : {}) }) };
+      } catch (error) {
+        console.error(`Автоответы на заявки выключены, ошибка в настройках почты: ${error instanceof Error ? error.message : String(error)}`);
+      }
     }
   }
 }

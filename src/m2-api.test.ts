@@ -98,6 +98,17 @@ describe("Supabase row mapping", () => {
     assert.match(publicApiErrorMessage("Could not find the function public.create_access_user"), /обновить схему/u);
   });
 
+  it("hard-deletes only rows that are replaced on save, never business records", async () => {
+    // Задачи, приборы, счета, площадки, плательщики и сотрудники база через API не удаляет (0024):
+    // их отменяют или отключают. Удаляются только строки, которые пересохраняются целиком.
+    const source = await readFile(new URL("./m2-api.ts", import.meta.url), "utf8");
+    const deleted = [...source.matchAll(/from\("([a-z_]+)"\)\.delete\(\)/gu)].map((match) => match[1]).sort();
+    assert.deepEqual(deleted, ["access_role_permissions", "maintenance_plans", "site_payers", "task_parts"]);
+    assert.match(source, /public async removeSite\(id: string\)[^\n]*\n\s*return \{ mode: "deactivated", after: await this\.updateSite\(id, \{ isActive: false \}\) \};/u);
+    assert.match(source, /public async removeContact\([^\n]*\n\s*return \{ mode: "deactivated", after: await this\.updateContact\(siteId, contactId, \{ isActive: false \}\) \};/u);
+    assert.match(source, /public async removePayer\(id: string\)[^\n]*\n\s*return this\.updatePayer\(id, \{ isActive: false \}\);/u);
+  });
+
   it("creates employees through a privileged RPC instead of public signup", async () => {
     const source = await readFile(new URL("./m2-api.ts", import.meta.url), "utf8");
     assert.match(source, /rpc\("create_access_user"/u);

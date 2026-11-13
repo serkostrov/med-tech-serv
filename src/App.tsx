@@ -53,6 +53,7 @@ import { taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
+import { tasksAvailableForInvoice } from "./invoice-tasks.js";
 import {
   EngineersPage as OperationsEngineersPage,
   ReportsPage as OperationsReportsPage,
@@ -2754,7 +2755,11 @@ function FinancePage() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
   const [formError, setFormError] = useState<string | null>(null);
-  const selectedTasks = tasks.filter((task) => selectedTaskIds.includes(task.id));
+  const [canCancelInvoices, setCanCancelInvoices] = useState(false);
+  const [cancelling, setCancelling] = useState<InvoiceApiRecord | null>(null);
+  // Задача входит только в один действующий счёт: уже выставленные не предлагаем (база тоже не пустит).
+  const invoiceableTasks = tasksAvailableForInvoice(tasks, invoices);
+  const selectedTasks = invoiceableTasks.filter((task) => selectedTaskIds.includes(task.id));
   const inheritedPayerIds = [...new Set(selectedTasks.map((task) => equipment.find((item) => item.id === task.equipmentId)?.payerId).filter((value): value is string => Boolean(value)))];
   const inheritedPayerId = inheritedPayerIds.length === 1 ? inheritedPayerIds[0] : "";
   const payerOverridden = Boolean(inheritedPayerId && payerId && payerId !== inheritedPayerId);
@@ -2764,16 +2769,29 @@ function FinancePage() {
     ]);
     setInvoices(loadedInvoices); setTasks(loadedTasks); setEquipment(loadedEquipment); setPayers(loadedPayers);
   };
+  // Для свежего списка задач хватает счетов и закрытых задач: приборы и плательщиков не перечитываем.
+  const reloadInvoiceTasks = async () => {
+    const [loadedInvoices, loadedTasks] = await Promise.all([m2Api.listInvoices(), m2Api.listTasks("closed")]);
+    setInvoices(loadedInvoices); setTasks(loadedTasks);
+  };
   useEffect(() => {
     void reload()
       .catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить счета"))
       .finally(() => setLoading(false));
   }, []);
+  useEffect(() => { void m2Api.hasPermission("finance.write").then(setCanCancelInvoices).catch(() => setCanCancelInvoices(false)); }, []);
+  // Задачу мог только что занять другой счёт: после обновления списка она уходит и из выбора.
+  useEffect(() => {
+    const available = new Set(invoiceableTasks.map((task) => task.id));
+    setSelectedTaskIds((current) => current.every((id) => available.has(id)) ? current : current.filter((id) => available.has(id)));
+  }, [tasks, invoices]);
   const openForm = () => {
     setFormError(null);
     setSelectedTaskIds([]);
     setPayerId("");
     setFormOpen(true);
+    // Пока окно было закрыто, задачи могли попасть в другой счёт.
+    void reloadInvoiceTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось обновить список задач"));
   };
   const closeForm = () => {
     setFormOpen(false);
@@ -2782,7 +2800,7 @@ function FinancePage() {
   };
   const toggleTask = (taskId: string) => {
     const next = selectedTaskIds.includes(taskId) ? selectedTaskIds.filter((id) => id !== taskId) : [...selectedTaskIds, taskId];
-    const selected = tasks.filter((task) => next.includes(task.id));
+    const selected = invoiceableTasks.filter((task) => next.includes(task.id));
     const nextPayers = [...new Set(selected.map((task) => equipment.find((item) => item.id === task.equipmentId)?.payerId).filter((value): value is string => Boolean(value)))];
     setSelectedTaskIds(next);
     const onlyPayer = nextPayers.length === 1 ? nextPayers[0] : undefined;
@@ -2806,6 +2824,8 @@ function FinancePage() {
       const text = createError instanceof Error ? createError.message : "Не получилось создать счёт";
       setFormError(text);
       toast.error(text);
+      // Список задач обновляем: занятые другим счётом из него уйдут.
+      void reloadInvoiceTasks().catch(() => undefined);
     }
     finally { setSaving(false); }
   };
@@ -2816,11 +2836,14 @@ function FinancePage() {
     <DialogForm busy={saving} description="Счёт создастся по выбранным закрытым задачам. Плательщик подставится из прибора." error={formError} onOpenChange={(open) => { if (open) openForm(); else closeForm(); }} onSubmit={submit} open={formOpen} submitDisabled={!canCreateInvoice} submitLabel="Создать счёт" title="Новый счёт">
       <div className="invoice-form">
         <div className="invoice-form__section">
-          <span className="invoice-form__label" id="invoice-tasks-label">Закрытые задачи{tasks.length > 0 ? " *" : ""}</span>
-          {tasks.length === 0
-            ? <p className="invoice-form__empty">Закрытых задач для выставления счёта нет. Когда задача будет закрыта, она появится здесь.</p>
-            : <div aria-labelledby="invoice-tasks-label" className="workflow-task-picker" role="group">{tasks.map((task) => <label key={task.id}><input checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTask(task.id)} type="checkbox" /> <span><strong>{task.number}</strong> · {task.title}<small>{task.customer?.siteName ?? "Без площадки"}</small></span></label>)}</div>}
-          {tasks.length > 0 ? <p className="form-hint">{selectedTaskIds.length === 0 ? "Выберите хотя бы одну закрытую задачу." : selectedTaskIds.length === 1 ? "Выбрана 1 задача." : `Выбрано задач: ${selectedTaskIds.length}.`}</p> : null}
+          <span className="invoice-form__label" id="invoice-tasks-label">Закрытые задачи{invoiceableTasks.length > 0 ? " *" : ""}</span>
+          {invoiceableTasks.length === 0
+            ? <p className="invoice-form__empty">{tasks.length === 0
+              ? "Закрытых задач для выставления счёта нет. Когда задача будет закрыта, она появится здесь."
+              : "Все закрытые задачи уже есть в счетах. Задача снова появится здесь, если её счёт отменят."}</p>
+            : <div aria-labelledby="invoice-tasks-label" className="workflow-task-picker" role="group">{invoiceableTasks.map((task) => <label key={task.id}><input checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTask(task.id)} type="checkbox" /> <span><strong>{task.number}</strong> · {task.title}<small>{task.customer?.siteName ?? "Без площадки"}</small></span></label>)}</div>}
+          {invoiceableTasks.length > 0 ? <p className="form-hint">{selectedTaskIds.length === 0 ? "Выберите хотя бы одну закрытую задачу." : selectedTaskIds.length === 1 ? "Выбрана 1 задача." : `Выбрано задач: ${selectedTaskIds.length}.`}</p> : null}
+          {invoiceableTasks.length > 0 && invoiceableTasks.length < tasks.length ? <p className="form-hint">Задачи, которые уже есть в счёте, здесь не показаны.</p> : null}
         </div>
         <label>Плательщик
           <Select disabled={selectedTaskIds.length === 0} onChange={(event) => setPayerId(event.target.value)} required={selectedTaskIds.length > 0} value={payerId}>
@@ -2837,7 +2860,9 @@ function FinancePage() {
       <MetricCard detail="ожидают передачи" icon="mail" label="Выставлено" tone="purple" value={String(invoices.filter((item) => item.status === "issued").length)} />
       <MetricCard detail="передано в 1С" icon="check" label="Закрыто" tone="green" value={String(invoices.filter((item) => item.status === "transferred_to_1c").length)} />
     </div>
-    <section className="card card--table"><CardHeader meta={`${invoices.length} документов`} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th></tr></thead><tbody>{invoices.map((invoice) => <tr key={invoice.id}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td></tr>)}</tbody></table></div>}</section></>;
+    <section className="card card--table"><CardHeader meta={`${invoices.length} документов`} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th>{canCancelInvoices ? <th scope="col"><span className="sr-only">Действия</span></th> : null}</tr></thead><tbody>{invoices.map((invoice) => <tr key={invoice.id}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td>{canCancelInvoices ? <td>{invoice.status === "draft" || invoice.status === "issued" ? <div className="table-actions"><Button className="button--compact" onClick={() => setCancelling(invoice)} variant="ghost">Отменить счёт</Button></div> : null}</td> : null}</tr>)}</tbody></table></div>}</section>
+    {/* Счёт не удаляют, а отменяют (0024): он остаётся в списке, задачи можно выставить снова. */}
+    <ConfirmationDialog cancelLabel="Не отменять" confirmLabel="Отменить счёт" description={cancelling ? <>Счёт {cancelling.number} останется в списке со статусом «Отменён», его задачи можно будет выставить в новый счёт. Вернуть отменённый счёт в работу нельзя.</> : null} onConfirm={async () => { if (!cancelling) return; await m2Api.cancelInvoice(cancelling.id); toast.success(`Счёт ${cancelling.number} отменён`); void reloadInvoiceTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Счёт отменён, но список не обновился. Обновите страницу.")); }} onOpenChange={(open) => { if (!open) setCancelling(null); }} open={Boolean(cancelling)} title={cancelling ? `Отменить счёт ${cancelling.number}?` : "Отменить счёт?"} /></>;
 }
 
 function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
