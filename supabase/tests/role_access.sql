@@ -439,7 +439,17 @@ SELECT pg_temp.check(NOT EXISTS (
        -- 0040: сборка позиций счёта читает резервы склада и цены прихода, а роль
        -- с finance.write может быть без warehouse.read — тогда счёт собрался бы молча
        -- без запчастей. Поэтому от владельца схемы с проверкой finance.write внутри.
-       'rebuild_invoice_items')
+       'rebuild_invoice_items',
+       -- 0041: письмо в карточке задачи. Таблица писем по политикам открыта только
+       -- тем, кто разбирает почту, а переписку по задаче должен видеть и инженер
+       -- этой задачи — поэтому от владельца схемы с проверкой app_can_read_task.
+       'task_mail_thread',
+       -- 0041: ответ клиенту пишется только этой функцией (прямой записи в mail_replies
+       -- нет ни у кого), право на ответ проверяет app_can_reply_task_mail внутри.
+       'send_task_mail_reply', 'app_can_reply_task_mail',
+       -- 0041: вложения письма становятся файлами задачи. Читает письмо и пишет files
+       -- за координатора и за службу, права на задачу проверяет внутри.
+       'attach_mail_files_to_task')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');
