@@ -57,7 +57,8 @@ ALTER TABLE public.login_events
   DROP CONSTRAINT IF EXISTS login_events_attempted_login_check,
   ADD CONSTRAINT login_events_attempted_login_check CHECK (
     attempted_login IS NULL
-    OR (length(attempted_login) <= 320 AND attempted_login ~ '^[^[:space:]@]+@[^[:space:]@]+$')
+    -- 254 знака — предел почтового адреса по RFC 5321, то же число проверяет триггер.
+    OR (length(attempted_login) <= 254 AND attempted_login ~ '^[^[:space:]@]+@[^[:space:]@]+$')
   );
 
 COMMENT ON TABLE public.login_events IS
@@ -110,12 +111,14 @@ BEGIN
   EXCEPTION WHEN others THEN
     headers := NULL;
   END;
-  RETURN coalesce(
+  -- Только сам адрес, без маски сети: «10.9.9.9/24» и «10.9.9.9» это один адрес,
+  -- и в журнале он должен быть одной записью, а не двумя разными.
+  RETURN public.text_to_inet(host(coalesce(
     public.text_to_inet(split_part(coalesce(headers ->> 'x-forwarded-for', ''), ',', 1)),
     public.text_to_inet(headers ->> 'x-real-ip'),
     -- Служебные соединения без PostgREST (миграции, служба уведомлений) задают адрес сами.
     public.text_to_inet(current_setting('app.ip_address', true))
-  );
+  )));
 END
 $$;
 
@@ -140,10 +143,10 @@ DECLARE
   caller_ip inet := public.request_ip_address();
   -- Предел на пару «адрес + набранный логин»: столько попыток в минуту ещё пишем.
   pair_limit constant integer := 20;
-  -- Общий предел на журнал: даёт потолок росту, если адреса и логины перебирают.
+  -- Журнал растёт быстрее этого — парный предел сжимается до одной строки на пару.
   total_limit constant integer := 500;
+  allowed_for_pair integer := pair_limit;
   recent integer;
-  pair_exceeded boolean;
   marked boolean;
 BEGIN
   -- Запись о входе всегда в тот момент, когда она случилась.
@@ -176,46 +179,50 @@ BEGIN
 
   -- Журнал нельзя завалить потоком попыток, но и затереть потоком — тоже.
   --
-  -- Предел считается по паре «адрес + набранный логин», а не по одному адресу:
-  -- адрес приходит из заголовка обратного прокси, и если его подменить на адрес
-  -- офиса, предел по адресу погасил бы запись настоящих попыток из этого офиса
-  -- (а на общем адресе офиса предел достижим и без подмены). По паре вытеснить
-  -- чужую попытку можно, только зная и адрес, и логин, и в журнале это всё равно
-  -- останется видно.
+  -- Предел считается по паре «адрес + набранный логин», а не по одному адресу
+  -- и не по журналу целиком. Любой общий предел тут опаснее, чем польза от него:
+  -- адрес приходит из заголовка обратного прокси, а поток запросов стоит дёшево,
+  -- поэтому пределом по адресу или по всему журналу можно было бы погасить запись
+  -- чужих настоящих попыток. По паре вытеснить чужую попытку можно, только зная
+  -- и адрес, и логин, — и в журнале это всё равно останется видно.
   --
-  -- Сверх предела строка не теряется молча: один раз на минуту и пару пишется
-  -- отметка «слишком много попыток», и по ней видно, что счёт попыток оборвался.
-  -- Параллельные попытки считаются по очереди: без блокировки предел можно было бы
-  -- проскочить несколькими запросами разом.
+  -- Сверх парного предела строка не теряется молча: один раз на минуту и пару
+  -- пишется отметка «слишком много попыток», по ней видно, что счёт оборвался.
+  --
+  -- Когда журнал и так растёт быстро (больше total_limit строк в минуту), парный
+  -- предел сжимается до одной строки на пару в минуту. Это не обрыв записи:
+  -- настоящая попытка под другим адресом или другим логином — это другая пара,
+  -- и она запишется. Поток запросов упирается в ограничения обратного прокси,
+  -- а не в журнал: здесь ограничивается только то, сколько строк даёт одна пара.
+  --
+  -- Параллельные попытки одной пары считаются по очереди: без блокировки предел
+  -- можно было бы проскочить несколькими запросами разом.
   PERFORM pg_advisory_xact_lock(hashtextextended(
     'medtechservice:login-journal:' || coalesce(host(caller_ip), '') || '|' || coalesce(login, ''), 0));
+
+  SELECT count(*) INTO recent
+    FROM public.login_events AS earlier
+   WHERE earlier.occurred_at > now() - interval '1 minute';
+  IF recent >= total_limit THEN
+    allowed_for_pair := 1;
+  END IF;
 
   SELECT count(*) INTO recent
     FROM public.login_events AS earlier
    WHERE earlier.occurred_at > now() - interval '1 minute'
      AND earlier.ip_address IS NOT DISTINCT FROM caller_ip
      AND earlier.attempted_login IS NOT DISTINCT FROM login;
-  pair_exceeded := recent >= pair_limit;
-  IF NOT pair_exceeded THEN
-    -- Общий потолок журнала: перебор адресов и логинов мимо парного предела
-    -- не должен раздувать таблицу без конца.
-    SELECT count(*) INTO recent
-      FROM public.login_events AS earlier
-     WHERE earlier.occurred_at > now() - interval '1 minute';
-    IF recent < total_limit THEN
-      RETURN NEW;
-    END IF;
+  IF recent < allowed_for_pair THEN
+    RETURN NEW;
   END IF;
 
-  -- Отметка об обрыве счёта: при парном пределе — одна на пару, при общем потолке —
-  -- одна на весь журнал, иначе перебор пар снова раздул бы таблицу отметками.
+  -- Отметка об обрыве счёта: одна на пару и на минуту.
   SELECT EXISTS (
     SELECT 1 FROM public.login_events AS earlier
      WHERE earlier.occurred_at > now() - interval '1 minute'
        AND earlier.failure_reason = 'too_many_attempts'
-       AND (NOT pair_exceeded
-            OR (earlier.ip_address IS NOT DISTINCT FROM caller_ip
-                AND earlier.attempted_login IS NOT DISTINCT FROM login)))
+       AND earlier.ip_address IS NOT DISTINCT FROM caller_ip
+       AND earlier.attempted_login IS NOT DISTINCT FROM login)
     INTO marked;
   IF marked THEN
     RETURN NULL;
