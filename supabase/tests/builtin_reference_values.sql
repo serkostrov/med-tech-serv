@@ -136,6 +136,31 @@ SELECT pg_temp.check(pg_temp.rows_affected(
   'свой этап справочника удаляется как раньше');
 SELECT pg_temp.act_as_nobody();
 
+-- Признак встроенности из CRM не поставить: иначе своя запись становилась бы вечной.
+SELECT pg_temp.act_as(pg_temp.uid('admin'));
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'INSERT INTO public.task_statuses (code, name, sort_order) VALUES (''own_stage'', ''Свой этап'', 35)') = 1,
+  'свой этап заводится');
+SELECT pg_temp.expect_russian_refusal(
+  'UPDATE public.task_statuses SET is_builtin = true WHERE code = ''own_stage''',
+  'свой этап нельзя пометить встроенным');
+SELECT pg_temp.check(NOT (SELECT is_builtin FROM task_statuses WHERE code = 'own_stage'),
+  'признак так и не поставлен');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'DELETE FROM public.task_statuses WHERE code = ''own_stage''') = 1,
+  'и запись по-прежнему удаляется');
+SELECT pg_temp.act_as_nobody();
+
+-- Служебные операции без входа (обновление базы, импорт) запрет не трогает: иначе
+-- размеченную запись не починила бы и следующая миграция.
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'UPDATE public.task_statuses SET is_active = false WHERE code = ''closed''') = 1,
+  'без входа встроенный этап выключается: это делает обновление базы');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'UPDATE public.task_statuses SET is_active = true WHERE code = ''closed''') = 1,
+  'и включается обратно');
+SELECT pg_temp.act_as(pg_temp.uid('admin'));
+
 -- Ровно случай из аудита: справочники ведёт и координатор, ему тоже отказ.
 SELECT pg_temp.act_as(pg_temp.uid('coord'));
 SELECT pg_temp.expect_russian_refusal(
