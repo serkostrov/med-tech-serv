@@ -10,6 +10,7 @@ export type NavigationId =
   | "notifications"
   | "reports"
   | "references"
+  | "import"
   | "finance"
   | "price"
   | "reservations"
@@ -73,7 +74,8 @@ const coordinatorNavigation: readonly NavigationItem[] = [
   { id: "price", label: "Прайс", description: "Цены по видам работ и их история", group: "Контроль", icon: "price" },
   { id: "reports", label: "Отчёты", description: "Сводка по задачам за период", group: "Контроль", icon: "reports" },
   { id: "notifications", label: "Уведомления", description: "Письма клиентам и сотрудникам", group: "Контроль", icon: "notifications" },
-  { id: "references", label: "Справочники", description: "Виды работ, статусы и модели приборов", group: "Настройки", icon: "references" }
+  { id: "references", label: "Справочники", description: "Виды работ, статусы и модели приборов", group: "Настройки", icon: "references" },
+  { id: "import", label: "Импорт", description: "Перенос приборов и их истории из 1С", group: "Настройки", icon: "handoff" }
 ];
 
 const roleNavigation: Readonly<Record<AppRole, readonly NavigationItem[]>> = {

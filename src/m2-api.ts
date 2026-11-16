@@ -18,6 +18,14 @@ import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
 import { invoiceWorkDate } from "./invoice-card.js";
 import { taskMailReplyRefusal } from "./task-mail.js";
+import {
+  importSerialKey,
+  type ImportExistingEquipment,
+  type ImportSnapshot,
+  type ImportWriteEquipment,
+  type ImportWriteEvent,
+  type ImportWriteResult
+} from "./import-1c.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
   AccessRoleResponse,
@@ -2363,6 +2371,135 @@ export class M2ApiClient {
       client: text(details, "client"),
       description: text(details, "description"),
       source: { kind: "manual", id: text(row, "id") }
+    };
+  }
+
+  /**
+   * Все строки справочника: читаем общим постраничным помощником, которым уже
+   * читаются планы ТО и задачи. PostgREST отдаёт не больше max_rows за запрос,
+   * а обрезанный справочник сказал бы «модели нет» там, где она есть.
+   */
+  private async readAllRows(
+    table: string, columns: string, failure: string, activeOnly = false
+  ): Promise<readonly Row[]> {
+    const rows = await allPages((start, end, withCount) => {
+      const request = this.db().from(table)
+        .select(columns, withCount ? { count: "exact" } : undefined);
+      // Порядок с id вторым ключом: у площадок имена повторяются у разных организаций.
+      return (activeOnly ? request.eq("is_active", true) : request)
+        .order("name").order("id").range(start, end);
+    }, failure);
+    return rows.map(asRow);
+  }
+
+  /**
+   * Снимок базы для пробного импорта (экран «Импорт»): справочник моделей,
+   * названия площадок и плательщиков, приборы по серийным номерам из файла и
+   * уже записанные ключи их истории. Только чтение: ничего не меняет.
+   */
+  public async importSnapshot(serialNumbers: readonly string[]): Promise<ImportSnapshot> {
+    const keys = [...new Set(serialNumbers.map(importSerialKey).filter(Boolean))];
+    // Справочники читаем страницами: PostgREST отдаёт не больше max_rows (1000),
+    // а обрезанный справочник показал бы «модели нет» там, где она есть.
+    const [manufacturers, models, sites, payers] = await Promise.all([
+      // Скрытые записи справочника тоже нужны: название в них уже занято.
+      this.readAllRows("manufacturers", "id, name, is_active", "Не получилось прочитать справочник производителей"),
+      this.readAllRows("equipment_models", "id, name, manufacturer_id, is_active", "Не получилось прочитать справочник моделей"),
+      this.readAllRows("sites", "name", "Не получилось прочитать список площадок", true),
+      this.readAllRows("payers", "name", "Не получилось прочитать список плательщиков", true)
+    ]);
+    const manufacturerById = new Map(manufacturers
+      .map((item) => [text(item, "id"), {
+        name: text(item, "name"),
+        isActive: item.is_active !== false
+      }]));
+
+    const equipment: ImportExistingEquipment[] = [];
+    // Серийные номера передаём порциями: в условии in.() их может быть много.
+    for (let offset = 0; offset < keys.length; offset += 100) {
+      const { data, error } = await this.db()
+        .from("equipment")
+        .select("id, serial_number, manufacturer:manufacturers(name), model:equipment_models(name)")
+        .in("serial_number_normalized", keys.slice(offset, offset + 100));
+      throwIfError(error);
+      for (const item of data ?? []) {
+        const row = asRow(item);
+        equipment.push({
+          id: text(row, "id"),
+          serialNumber: text(row, "serial_number"),
+          modelName: text(related(row, "model"), "name"),
+          manufacturerName: text(related(row, "manufacturer"), "name")
+        });
+      }
+    }
+
+    const historyKeys: string[] = [];
+    const ids = equipment.map((item) => item.id);
+    const PAGE = 500;
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const batch = ids.slice(offset, offset + 100);
+      // Страницами: иначе у приборов с длинной историей часть ключей осталась бы
+      // за пределом ответа и пробный импорт обещал бы уже записанные события.
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await this.db()
+          .from("equipment_history")
+          .select("source_key")
+          .in("equipment_id", batch)
+          .not("source_key", "is", null)
+          .order("source_key")
+          .range(from, from + PAGE - 1);
+        throwIfError(error);
+        for (const item of data ?? []) historyKeys.push(text(asRow(item), "source_key"));
+        if ((data ?? []).length < PAGE) break;
+      }
+    }
+
+    return {
+      manufacturers: [...manufacturerById.values()],
+      models: models.map((row) => {
+        const manufacturerId = text(row, "manufacturer_id");
+        const maker = manufacturerById.get(manufacturerId);
+        return {
+          id: text(row, "id"),
+          name: text(row, "name"),
+          manufacturerId,
+          manufacturerName: maker?.name ?? "",
+          // Скрытый производитель делает скрытой и свою модель: прибор на неё не завести.
+          isActive: row.is_active !== false && maker?.isActive !== false
+        };
+      }),
+      sites: sites.map((row) => text(row, "name")),
+      payers: payers.map((row) => text(row, "name")),
+      equipment,
+      historyKeys
+    };
+  }
+
+  /**
+   * Запись подтверждённого импорта: одна транзакция в базе (функция 0054).
+   * Существующие приборы не переписывает, повтор того же файла ничего не добавляет.
+   */
+  public async applyEquipmentImport(
+    sourceName: string,
+    write: { readonly equipment: readonly ImportWriteEquipment[]; readonly events: readonly ImportWriteEvent[] }
+  ): Promise<ImportWriteResult> {
+    const { data, error } = await this.db().rpc("import_equipment_history", {
+      p_source_name: sourceName,
+      p_equipment: write.equipment,
+      p_events: write.events
+    });
+    throwIfError(error, "Не получилось записать импорт");
+    const row = asRow(data);
+    const count = (key: string): number => numberValue(row[key]) ?? 0;
+    return {
+      sourceName: text(row, "sourceName") || sourceName,
+      manufacturersCreated: count("manufacturersCreated"),
+      modelsCreated: count("modelsCreated"),
+      equipmentCreated: count("equipmentCreated"),
+      equipmentAlready: count("equipmentAlready"),
+      eventsCreated: count("eventsCreated"),
+      eventsAlready: count("eventsAlready"),
+      eventsWithoutEquipment: count("eventsWithoutEquipment")
     };
   }
 
