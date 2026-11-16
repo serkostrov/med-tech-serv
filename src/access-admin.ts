@@ -61,6 +61,16 @@ export function employeeDisableBlock(
   return null;
 }
 
+/**
+ * Можно ли менять роль этому сотруднику.
+ *
+ * Свою роль не меняют: права считаются по ней, поэтому назначить себе роль послабее —
+ * та же потеря доступа, что и выключенный вход. Запрет держит база (миграция 0035).
+ */
+export function canChangeEmployeeRole(employeeId: string, viewerId: string): boolean {
+  return employeeId !== viewerId;
+}
+
 /** Сколько администраторов сейчас могут войти: по этому числу решается запрет выше. */
 export function activeAdminCount(employees: readonly DisableCandidate[]): number {
   return employees.filter((employee) => employee.isActive && employee.role === "admin").length;

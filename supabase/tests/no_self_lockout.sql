@@ -112,6 +112,26 @@ SELECT pg_temp.expect_russian_refusal(
   'кадровик с правом вести сотрудников тоже не отключит себя');
 SELECT pg_temp.act_as_nobody();
 
+-- Роль себе тоже не меняют: права считаются по ней, это тот же запертый вход.
+SELECT pg_temp.act_as(pg_temp.uid('admin1'));
+SELECT pg_temp.expect_russian_refusal(
+  format('UPDATE public.users SET access_role_key = ''engineer'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'admin1')),
+  'администратор не может назначить себе роль «Инженер»');
+SELECT pg_temp.expect_russian_refusal(
+  format('UPDATE public.users SET role = ''engineer'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'admin1')),
+  'и базовую роль себе не сменить');
+SELECT pg_temp.check((SELECT access_role_key FROM users WHERE id = pg_temp.uid('admin1')) = 'admin',
+  'роль у него осталась прежней');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.users SET full_name = ''Захаров Илья Романович'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'admin1'))) = 1,
+  'своё ФИО поправить по-прежнему можно');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.users SET access_role_key = ''sysadmin'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'admin2'))) = 1,
+  'чужую роль администратор меняет как раньше');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.users SET access_role_key = ''admin'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'admin2'))) = 1,
+  'и возвращает обратно');
+
 -- Чужой вход администратор отключает как раньше.
 SELECT pg_temp.act_as(pg_temp.uid('admin1'));
 SELECT pg_temp.check(pg_temp.rows_affected(

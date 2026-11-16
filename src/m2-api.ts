@@ -1570,8 +1570,10 @@ export class M2ApiClient {
   }
 
   public async updateAccessUser(id: string, input: Readonly<Record<string, unknown>>): Promise<AccessUserRecord> {
-    // Себе вход не отключают (миграция 0035): говорим это до запроса, а не сырой ошибкой базы.
-    if (input.isActive === false && id === (await this.cachedSession()).id) {
+    // Себе вход не отключают и роль себе не меняют (миграция 0035): говорим это до запроса,
+    // а не сырой ошибкой базы.
+    const session = await this.cachedSession();
+    if (input.isActive === false && id === session.id) {
       throw new M2ApiError(400, "Себе вход отключать нельзя: вы сразу потеряете доступ к системе. Попросите другого администратора");
     }
     const patch: Row = {};
@@ -1579,6 +1581,16 @@ export class M2ApiClient {
     if (input.role !== undefined) patch.role = input.role;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
     if (input.accessRoleKey !== undefined) patch.access_role_key = input.accessRoleKey;
+    if (id === session.id) {
+      const roleChanged = (patch.access_role_key !== undefined && patch.access_role_key !== session.accessRoleKey)
+        || (patch.role !== undefined && patch.role !== session.role);
+      if (roleChanged) {
+        throw new M2ApiError(400, "Себе роль менять нельзя: так можно остаться без нужных прав. Попросите другого администратора");
+      }
+      // Неизменившуюся роль не отправляем вовсе: база сторожит сам факт правки этих полей.
+      delete patch.access_role_key;
+      delete patch.role;
+    }
     if (input.telegramChatId !== undefined) patch.telegram_chat_id = normalizeTelegramChatId(input.telegramChatId);
     const { data, error } = await this.db().from("users").update(patch).eq("id", id).select("id, full_name, role, email, is_active, access_role_key, telegram_chat_id").single();
     throwIfError(error);

@@ -8,9 +8,10 @@
 -- оно уже после подтверждения.
 --
 -- Что теперь.
--- 1. Свой вход отключить нельзя: ни строкой сотрудника, ни отключением своей роли
---    доступа (роль с выключенным признаком не даёт прав вовсе, см. app_has_permission).
---    Отключает другой администратор — это и есть разделение обязанностей.
+-- 1. Свой вход отключить нельзя: ни строкой сотрудника, ни сменой себе роли доступа
+--    на более слабую, ни отключением своей роли (роль с выключенным признаком не даёт
+--    прав вовсе, см. app_has_permission). Отключает и переназначает другой администратор —
+--    это и есть разделение обязанностей.
 -- 2. Отказ по последнему администратору написан под то действие, которое делают:
 --    отключение, смена роли или удаление, — и подсказывает, что сделать сначала.
 -- Служебные операции без входа (импорт, миграции, служба уведомлений) работают как раньше.
@@ -36,10 +37,19 @@ DECLARE
   action_text text;
 BEGIN
   -- Свой вход выключает только служба: со входом в CRM это потеря собственного доступа.
-  IF TG_OP = 'UPDATE' AND auth.uid() IS NOT NULL AND NEW.id = auth.uid()
-     AND OLD.is_active AND NOT NEW.is_active THEN
-    RAISE EXCEPTION 'Себе вход отключать нельзя: вы сразу потеряете доступ к системе. Попросите другого администратора'
-      USING ERRCODE = '23514', CONSTRAINT = 'users_no_self_lockout';
+  IF TG_OP = 'UPDATE' AND auth.uid() IS NOT NULL AND NEW.id = auth.uid() THEN
+    IF OLD.is_active AND NOT NEW.is_active THEN
+      RAISE EXCEPTION 'Себе вход отключать нельзя: вы сразу потеряете доступ к системе. Попросите другого администратора'
+        USING ERRCODE = '23514', CONSTRAINT = 'users_no_self_lockout';
+    END IF;
+    -- Роль себе тоже не меняют. Права считаются по access_role_key (0009), поэтому назначить
+    -- себе роль послабее — та же потеря доступа, только другой кнопкой: единственный
+    -- администратор одним щелчком оставлял систему вообще без управления учётными записями.
+    IF NEW.access_role_key IS DISTINCT FROM OLD.access_role_key
+       OR NEW.role IS DISTINCT FROM OLD.role THEN
+      RAISE EXCEPTION 'Себе роль менять нельзя: так можно остаться без нужных прав. Попросите другого администратора'
+        USING ERRCODE = '23514', CONSTRAINT = 'users_no_self_role_change';
+    END IF;
   END IF;
 
   IF OLD.role = 'admin' AND OLD.is_active
@@ -72,9 +82,10 @@ REVOKE EXECUTE ON FUNCTION public.preserve_last_active_administrator() FROM PUBL
 COMMENT ON FUNCTION public.preserve_last_active_administrator() IS
   'Себе вход не отключают, последний активный администратор остаётся (0035). Отказ называет действие и подсказывает, что сделать сначала.';
 
+-- Столбец access_role_key добавлен в список нарочно: без него смена роли себе проходила мимо.
 DROP TRIGGER IF EXISTS users_preserve_last_active_admin ON users;
 CREATE TRIGGER users_preserve_last_active_admin
-  BEFORE UPDATE OF role, is_active OR DELETE ON users
+  BEFORE UPDATE OF role, is_active, access_role_key OR DELETE ON users
   FOR EACH ROW EXECUTE FUNCTION public.preserve_last_active_administrator();
 
 -- ---------------------------------------------------------------------------
