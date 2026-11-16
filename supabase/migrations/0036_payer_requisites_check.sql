@@ -33,7 +33,7 @@ LANGUAGE sql
 IMMUTABLE
 SET search_path = pg_catalog
 AS $$
-  SELECT btrim(coalesce(p_value, ''), E' \t\n\r\f\v ')
+  SELECT btrim(coalesce(p_value, ''), E' \t\n\r\f\v\u00A0')
 $$;
 
 COMMENT ON FUNCTION public.trim_requisite(text) IS
