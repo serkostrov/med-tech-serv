@@ -82,6 +82,33 @@ export function invoiceLinesWithoutPrice<T extends InvoiceLine>(items: readonly 
   return items.filter((item) => item.unitPrice === 0);
 }
 
+/**
+ * Сумма строки для показа. У гарантийной строки база держит в `line_total` ноль
+ * (так посчитан сам столбец), поэтому её справочную сумму — сколько работа стоила бы
+ * без гарантии — считаем здесь. В итог счёта она всё равно не идёт.
+ */
+export function invoiceLineAmount(line: InvoiceLine): number {
+  return roundToKopecks(line.excludedFromTotal ? line.quantity * line.unitPrice : line.lineTotal);
+}
+
+/**
+ * Позиции по порядку: по задаче, внутри задачи сначала работа, потом запчасти.
+ * Строки без задачи — в конце. Порядок строк с одинаковым ключом сохраняем.
+ */
+export function invoiceItemsInOrder<T extends { readonly taskNumber: string | null; readonly itemType: "part" | "work" }>(
+  items: readonly T[]
+): readonly T[] {
+  return items
+    .map((item, index) => ({ item, index }))
+    .sort((left, right) => {
+      const byTask = (left.item.taskNumber ?? "￿").localeCompare(right.item.taskNumber ?? "￿");
+      if (byTask !== 0) return byTask;
+      const byType = Number(left.item.itemType === "part") - Number(right.item.itemType === "part");
+      return byType !== 0 ? byType : left.index - right.index;
+    })
+    .map((entry) => entry.item);
+}
+
 export interface InvoiceAmounts {
   /** Сумма строк, которые идут в счёт. */
   readonly billable: number;
@@ -106,7 +133,7 @@ export function invoiceAmounts(card: {
   readonly totalAmount: number;
 }): InvoiceAmounts {
   const groups = invoiceItemGroups(card.items);
-  const sum = (lines: readonly InvoiceLine[]) => roundToKopecks(lines.reduce((total, line) => total + line.lineTotal, 0));
+  const sum = (lines: readonly InvoiceLine[]) => roundToKopecks(lines.reduce((total, line) => total + invoiceLineAmount(line), 0));
   const billable = sum(groups.billable);
   return {
     billable,
@@ -116,6 +143,14 @@ export function invoiceAmounts(card: {
     total: roundToKopecks(card.totalAmount),
     matches: billable === roundToKopecks(card.subtotal)
   };
+}
+
+/**
+ * Итог после корректировки — таким его посчитает база: сумма позиций плюс корректировка,
+ * но не ниже нуля (так устроен пересчёт в базе). По нему в окне видно, что получится.
+ */
+export function invoicePreviewTotal(subtotal: number, adjustment: number): number {
+  return Math.max(0, roundToKopecks(subtotal + adjustment));
 }
 
 export type InvoiceActionKind = "cancel" | "correct" | "issue" | "rebuild" | "transfer";
