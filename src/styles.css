@@ -7748,6 +7748,25 @@ td .resource-state {
 .mail-source__body { margin: 0.5rem 0 0; max-height: 16rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 0.88rem; background: var(--card); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0.6rem 0.7rem; }
 .mail-autoreply { display: block; margin-top: 0.25rem; color: var(--muted-foreground); font-size: 0.78rem; }
 
+/* Карточка задачи: переписка с клиентом — письмо заявки, ответы клиента и наши ответы */
+.task-mail { display: grid; gap: 14px; }
+.task-mail__list { display: grid; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.task-mail__item { display: grid; gap: 6px; padding: 10px 12px; border: 1px solid var(--border); border-left-width: 3px; border-radius: var(--radius); }
+.task-mail__item--incoming { border-left-color: #2f6f9f; background: var(--muted); }
+.task-mail__item--outgoing { border-left-color: #3b8a5a; background: var(--card); }
+.task-mail__head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.task-mail__head strong { font-size: 0.95rem; }
+.task-mail__when { color: var(--muted-foreground); font-size: 0.8rem; }
+.task-mail__meta { margin: 0; color: var(--muted-foreground); font-size: 0.8rem; overflow-wrap: anywhere; }
+.task-mail__body { margin: 0; max-height: 22rem; overflow: auto; padding: 8px 10px; border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); background: var(--card); white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 0.9rem; }
+.task-mail__files { display: grid; gap: 6px; }
+.task-mail__files h4 { margin: 0; color: var(--muted-foreground); font-size: 0.82rem; font-weight: 600; }
+.task-mail__warning { margin: 0; padding: 6px 8px; border-radius: calc(var(--radius) - 2px); background: #fdecec; color: #8a2b2b; font-size: 0.85rem; }
+.task-mail__reply { display: grid; gap: 8px; padding-top: 4px; border-top: 1px solid var(--border); }
+.task-mail__reply label { font-weight: 600; font-size: 0.9rem; }
+.task-mail__reply-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 16px; }
+.task-mail__reply-actions .form-hint { flex: 1 1 18rem; margin: 0; }
+
 /* Карточка задачи: следующий шаг над вкладками */
 .task-next-step {
   display: flex;

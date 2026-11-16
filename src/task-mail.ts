@@ -1,0 +1,57 @@
+import type { EquipmentFileResponse, TaskMailAttachment, TaskMailMessage } from "./types.js";
+
+/** Длина ответа в базе (send_task_mail_reply): интерфейс проверяет то же и до отправки. */
+export const MAX_TASK_MAIL_REPLY = 20_000;
+
+/**
+ * Почему ответ клиенту не отправится. Те же проверки, что в базе: пустой текст
+ * и слишком длинное письмо. NULL — ответ можно отправлять.
+ */
+export function taskMailReplyRefusal(body: string): string | null {
+  const text = body.trim();
+  if (!text) return "Напишите текст ответа клиенту";
+  if (text.length > MAX_TASK_MAIL_REPLY) return `Ответ клиенту длиннее ${MAX_TASK_MAIL_REPLY.toLocaleString("ru")} символов: сократите текст`;
+  return null;
+}
+
+/** Имя и адрес из заголовка письма: «Имя <адрес>», «адрес» или только имя. */
+export function taskMailAuthor(value: string): { readonly name: string; readonly address?: string } {
+  const raw = value.trim();
+  const inBrackets = /<([^<>]+)>/u.exec(raw)?.[1]?.trim();
+  if (inBrackets) {
+    const name = raw.slice(0, raw.indexOf("<")).trim().replace(/^"|"$/gu, "");
+    return { name: name || inBrackets, ...(inBrackets ? { address: inBrackets } : {}) };
+  }
+  if (/^[^\s@]+@[^\s@]+$/u.test(raw)) return { name: raw, address: raw };
+  return { name: raw || "Неизвестный отправитель" };
+}
+
+/** Что стало с ответом координатора: словами, рядом с самим ответом. */
+export function taskMailReplyStatus(message: TaskMailMessage): string | undefined {
+  if (message.direction !== "outgoing") return undefined;
+  if (message.status === "sent") return "Отправлено клиенту";
+  if (message.status === "sending") return "Отправляется";
+  if (message.status === "queued") return "В очереди на отправку";
+  return message.error ? `Не отправлено: ${message.error}` : "Не отправлено";
+}
+
+/** Ответ ещё не ушёл или не ушёл совсем: карточка подсвечивает такой ответ. */
+export function taskMailReplyPending(message: TaskMailMessage): boolean {
+  return message.direction === "outgoing" && message.status !== "sent";
+}
+
+/**
+ * Вложение письма в виде файла задачи: ту же плитку с превью и скачиванием рисует
+ * обычная галерея файлов задачи, и права на файл те же (их проверяет база).
+ */
+export function taskMailAttachmentFile(message: TaskMailMessage, attachment: TaskMailAttachment): EquipmentFileResponse {
+  return {
+    id: attachment.fileId ?? attachment.storageKey ?? `${message.id}-${attachment.fileName}`,
+    kind: "mail_attachment",
+    originalName: attachment.fileName,
+    contentType: attachment.contentType,
+    byteSize: attachment.byteSize,
+    createdAt: message.occurredAt,
+    ...(attachment.storageKey ? { storageKey: attachment.storageKey } : {})
+  };
+}
