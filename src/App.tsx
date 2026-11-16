@@ -2654,7 +2654,7 @@ function NotificationsPage() {
   const tone = (status: string): StatusTone => status === "failed" ? "danger" : status === "delivered" || status === "sent" ? "success" : "warning";
   const channelLabel: Readonly<Record<string, string>> = { email: "E-mail", telegram: "Telegram", max: "MAX", sms: "СМС" };
   const filtered = Boolean(filters.status || filters.eventCode || filters.recipient || filters.channel);
-  return <><PageIntro {...(ownOnly ? { description: "Здесь письма и сообщения, адресованные вам. Переписку с клиентами и сообщения другим сотрудникам ведёт координатор." } : {})} title="Уведомления" />
+  return <><PageIntro title="Уведомления" />
     <FilterBar loading={loading} onReset={() => { const reset = { channel: "", status: "", eventCode: "", recipient: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={() => { setPageIndex(0); return reload(filters, 0); }}>
       <label>Канал<Select onChange={(event) => changeFilter("channel", event.target.value)} value={filters.channel}><option value="">Все каналы</option><option value="email">E-mail</option><option value="telegram">Telegram</option></Select></label>
       <label>Событие<Select onChange={(event) => changeFilter("eventCode", event.target.value)} value={filters.eventCode}><option value="">Все события</option>{Object.entries(eventLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>
@@ -2662,7 +2662,9 @@ function NotificationsPage() {
       <label className="filter-field--search">Адресат<input onChange={(event) => changeFilter("recipient", event.target.value)} placeholder="E-mail или номер чата" type="search" value={filters.recipient} /></label>
     </FilterBar>
     <section className="card card--table" aria-label="Журнал уведомлений">
-      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Журнал отправки" />
+      {/* Инженеру и кладовщику журнал отдают только по их адресам: иначе «3 из 3» читается
+          как «система отправила всего три письма». */}
+      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}${ownOnly ? " · только адресованные вам" : ""}` })} title="Журнал отправки" />
       {loading && items.length === 0 ? <ResourceState description="Подождите, письма сейчас появятся." status="loading" title="Загружаем уведомления" />
         : items.length === 0 ? <ResourceState description={filtered ? "Измените условия или сбросьте фильтры." : "Письма появятся здесь, когда система отправит сообщения по заявкам."} status={filtered ? "filtered-empty" : "empty"} title={filtered ? "Уведомлений по этим условиям нет" : "Уведомлений пока нет"} />
           : <div className="table-scroll"><table className="data-table notification-table"><thead><tr><th scope="col">Когда</th><th scope="col">Кому</th><th scope="col">О чём</th><th scope="col">Канал</th><th scope="col">Статус</th></tr></thead><tbody>
