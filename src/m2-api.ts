@@ -1,7 +1,7 @@
 import type { Permission, WorkingRole } from "./domain/access.js";
 import { availableTaskActions, type AvailableTaskAction } from "./domain/task-actions.js";
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
-import { companyDay, companyDayEnd, companyDayStart, companyToday } from "./task-dates.js";
+import { companyDay, companyDayEnd, companyDayStart, companyToday, taskCalendarDate } from "./task-dates.js";
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistoryPart } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
@@ -242,6 +242,23 @@ export interface InvoiceApiRecord {
   readonly payerSelection: { readonly source: "equipment" | "manual" | "override"; readonly overrideReason?: string };
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/**
+ * Строка прайса: цена вида работ, действующая с `validFrom` по `validTo`
+ * (`null` — действует сейчас). Прошлые строки остаются с заполненным `validTo`: это история цен.
+ * `guaranteeCategoryId` пустой — цена для всех категорий гарантии.
+ */
+export interface PriceRowApiRecord {
+  readonly id: string;
+  readonly workTypeCode: string;
+  readonly guaranteeCategoryId: string | null;
+  /** ГГГГ-ММ-ДД */
+  readonly validFrom: string;
+  readonly validTo: string | null;
+  readonly amount: number;
+  readonly includeGuaranteeWork: boolean;
+  readonly createdAt: string;
 }
 
 export interface ReferenceCatalogDescriptor {
@@ -3913,6 +3930,94 @@ export class M2ApiClient {
     const { data, error } = await this.db().from("invoices").update({ status: "cancelled" }).eq("id", id).in("status", ["draft", "issued"]).select("id");
     throwIfError(error, "Не получилось отменить счёт");
     if (!Array.isArray(data) || data.length === 0) throw new M2ApiError(409, "Счёт не отменён: его уже отменили или передали в 1С. Обновите страницу.");
+  }
+
+  /**
+   * Прайс целиком: действующие, прошлые и будущие цены по видам работ. Читать можно
+   * с правом `price.read` или `finance.read` — это решает политика строк в базе.
+   */
+  public async listPriceList(): Promise<readonly PriceRowApiRecord[]> {
+    const { data, error } = await this.db().from("price_list")
+      .select("id, work_type_code, guarantee_category_id, valid_from, valid_to, amount, include_guarantee_work, created_at")
+      .order("work_type_code", { ascending: true })
+      .order("valid_from", { ascending: false });
+    throwIfError(error, "Не получилось загрузить прайс");
+    return (data ?? []).map((item) => {
+      const row = asRow(item);
+      return {
+        id: text(row, "id"),
+        workTypeCode: text(row, "work_type_code"),
+        guaranteeCategoryId: optionalText(row, "guarantee_category_id") ?? null,
+        validFrom: text(row, "valid_from").slice(0, 10),
+        validTo: optionalText(row, "valid_to")?.slice(0, 10) ?? null,
+        amount: numberValue(row.amount) ?? 0,
+        includeGuaranteeWork: row.include_guarantee_work === true,
+        createdAt: iso(row.created_at)
+      };
+    });
+  }
+
+  /**
+   * Цена вида работ с даты начала (функция базы `set_work_price`). Прошлый период база
+   * закрывает сама, цену тем же числом правит на месте, перед будущей ценой ставит конец
+   * периода. Писать в `price_list` напрямую нельзя: там стоит страж.
+   */
+  public async setWorkPrice(input: {
+    readonly workTypeCode: string;
+    readonly guaranteeCategoryId: string | null;
+    readonly amount: number;
+    readonly validFrom: string;
+    readonly includeGuaranteeWork: boolean;
+  }): Promise<void> {
+    const amount = Number(input.amount);
+    if (!Number.isFinite(amount) || amount < 0) throw new M2ApiError(400, "Укажите цену: ноль или больше");
+    const { error } = await this.db().rpc("set_work_price", {
+      p_work_type_code: input.workTypeCode,
+      p_guarantee_category_id: input.guaranteeCategoryId,
+      p_amount: amount,
+      p_valid_from: taskCalendarDate(input.validFrom),
+      p_include_guarantee_work: input.includeGuaranteeWork
+    });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Прайс заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось сохранить цену");
+  }
+
+  /**
+   * Одна дата начала на все выбранные позиции (функция базы `bulk_update_work_prices`):
+   * база применяет их в одной транзакции и возвращает число изменённых позиций.
+   */
+  public async bulkUpdateWorkPrices(
+    items: readonly {
+      readonly workTypeCode: string;
+      readonly guaranteeCategoryId: string | null;
+      readonly amount: number;
+      readonly includeGuaranteeWork: boolean;
+    }[],
+    validFrom: string
+  ): Promise<number> {
+    if (items.length === 0) throw new M2ApiError(400, "Выберите хотя бы одну строку прайса");
+    if (items.some((item) => !Number.isFinite(Number(item.amount)) || Number(item.amount) < 0)) {
+      throw new M2ApiError(400, "Укажите цену: ноль или больше");
+    }
+    const { data, error } = await this.db().rpc("bulk_update_work_prices", {
+      p_items: items.map((item) => ({
+        work_type_code: item.workTypeCode,
+        guarantee_category_id: item.guaranteeCategoryId,
+        amount: Number(item.amount),
+        include_guarantee_work: item.includeGuaranteeWork
+      })),
+      p_valid_from: taskCalendarDate(validFrom)
+    });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Прайс заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось изменить цены");
+    return numberValue(Array.isArray(data) ? data[0] : data) ?? 0;
+  }
+
+  /** Убрать ещё не начавшуюся цену (функция базы `delete_future_work_price`). Историю удалять нельзя. */
+  public async deleteFutureWorkPrice(id: string): Promise<void> {
+    const { error } = await this.db().rpc("delete_future_work_price", { p_id: id });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Прайс заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось убрать цену");
   }
 
   public async listCatalogs(): Promise<readonly ReferenceCatalogDescriptor[]> {
