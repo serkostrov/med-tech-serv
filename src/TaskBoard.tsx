@@ -590,7 +590,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     const isMoving = moving.has(task.id);
     return <article aria-busy={isMoving} className={`task-board-card${task.isOverdue ? " task-board-card--overdue" : ""}${draggedIds.includes(task.id) ? " task-board-card--dragging" : ""}`} data-board-card={task.id} draggable={!isMoving} key={task.id} onDragEnd={() => { setDraggedIds([]); setDropTarget(null); updateSlot(null); }} onDragStart={(event) => startDrag(event, task.id)}>
       <button className="task-board-card__open" onClick={() => onOpen(task.id)} type="button">
-        <span className="task-board-card__top">{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>
+        <span className="task-board-card__top">{task.number}{task.workModifier === "G" ? <b className="task-guarantee-mark" title="Гарантийный случай">Гарантия</b> : null}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>
         <strong>{task.title}</strong>
         <small>{[task.customer?.siteName ?? "Площадка не выбрана", task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : null].filter(Boolean).join(" · ")}</small>
         <span className="task-board-card__foot">

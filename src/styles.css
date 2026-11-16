@@ -9257,3 +9257,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   color: var(--color-muted);
   font-size: 12.5px;
 }
+
+/* Гарантийный случай: заметный, но спокойный значок на доске, в списке и в шапке задачи */
+.task-guarantee-mark { display: inline-flex; align-items: center; padding: 1px 7px; border-radius: 999px; color: #8a5a00; background: #fff4d6; font-size: 11.5px; font-style: normal; font-weight: 600; line-height: 1.5; white-space: nowrap; }
+.task-board-card__open > .task-board-card__top .task-guarantee-mark { margin-left: auto; }
+.task-board-card__open > .task-board-card__top .task-guarantee-mark + i { margin-left: 0; }
+.task-registry-row__flag--guarantee { color: #8a5a00; background: #fff4d6; }

@@ -247,7 +247,7 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
               <td><strong>{task.title}</strong></td>
               <td>{task.customer?.siteName ?? "Не выбрана"}</td>
               <td>{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · S/N ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · S/N ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</td>
-              <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="task-registry-row__flag">срочно</span> : null}{task.isOverdue ? <span className="task-registry-row__flag">просрочена</span> : null}</td>
+              <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="task-registry-row__flag">срочно</span> : null}{task.workModifier === "G" ? <span className="task-registry-row__flag task-registry-row__flag--guarantee">гарантия</span> : null}{task.isOverdue ? <span className="task-registry-row__flag">просрочена</span> : null}</td>
               <td>{task.engineerName ?? engineers.find((engineer) => engineer.id === task.engineerId)?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</td>
               <td><StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge></td>
             </tr>
@@ -512,12 +512,14 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
     if (periodFrom > periodTo) return fail("Начало периода не может быть позже конца");
     if (callDate && isFutureCompanyDate(callDate)) return fail("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
     const comment = String(data.get("comment") ?? "").trim();
+    const workModifier = String(data.get("workModifier") ?? "");
     setBusy(true);
     try {
       const task = await m2Api.createTask({
         title,
         workTypeCode,
         priority,
+        ...(workModifier === "G" || workModifier === "N" ? { workModifier } : {}),
         equipmentId: selectedEquipment.id,
         siteId: selectedEquipment.siteId,
         payerId: selectedEquipment.payerId,
@@ -619,6 +621,8 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
       <h3 className="task-form-step field-wide"><span>3</span>Что сделать</h3>
       <label className="field-wide">Название задачи *<input defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, не включается анализатор" required /></label>
       <label>Вид работ *<Select onChange={(event) => setWorkTypeCode(event.target.value)} required value={workTypeCode}>{activeWorkTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
+      {/* Гарантию решает координатор при создании: инженер этого может и не знать (встреча 16.11). */}
+      <label>Гарантия<Select defaultValue="" name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label>
       <label className="task-priority-check">
         <input
           checked={priority === "urgent"}
@@ -974,6 +978,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         title: String(data.get("title") ?? "").trim(),
         workTypeCode: String(data.get("workTypeCode") ?? "").trim(),
         priority: data.get("urgent") === "on" ? "urgent" : "planned",
+        workModifier: (String(data.get("workModifier") ?? "") || null) as "G" | "N" | null,
         periodFrom,
         periodTo,
         callDate,
@@ -1262,6 +1267,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         <span className="task-head__number">{task.number}</span>
         <StatusBadge tone={taskStatusTone(task.status)}>{card.status.name}</StatusBadge>
         {task.priority === "urgent" ? <span className="task-head__flag task-head__flag--urgent">Срочная</span> : null}
+        {task.workModifier === "G" ? <span className="task-head__flag task-guarantee-mark">Гарантия</span> : null}
         {task.isOverdue ? <span className="task-head__flag task-head__flag--late">Срок истёк</span> : null}
       </div>
       <h1>{task.title}</h1>
@@ -1445,7 +1451,6 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <label className="field-wide">Рекомендации<AutoTextarea defaultValue={closureDraftValue(closureDraft, "recommendations", task.recommendations ?? "")} maxLength={2000} name="recommendations" rows={3} /></label>
       <label className="field-wide">Замечания пользователя<AutoTextarea defaultValue={closureDraftValue(closureDraft, "userRemarks", task.userRemarks ?? "")} maxLength={2000} name="userRemarks" rows={3} /></label>
       <label>Причина неисправности<Select defaultValue={closureDraftValue(closureDraft, "reasonCode", task.reasonCode ?? card.reason?.code ?? "")} name="reasonCode"><option value="">Не выбрана</option>{card.reason && !resultCatalogs.reasons.some((item) => (item.code ?? item.id) === card.reason?.code) ? <option value={card.reason.code}>{card.reason.name}</option> : null}{resultCatalogs.reasons.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
-      {card.canSetWorkModifier ? <label>Гарантия или неправильная эксплуатация<Select defaultValue={closureDraftValue(closureDraft, "workModifier", task.workModifier ?? "")} name="workModifier"><option value="">Обычная работа</option><option value="G">Г, гарантийная</option><option value="N">Н, неправильная эксплуатация</option></Select></label> : null}
       <label>Дата выезда<DatePicker defaultValue={closureDraftValue(closureDraft, "visitDate", task.visitDate ?? (isTaskEngineer ? todayIsoDate() : ""))} name="visitDate" /></label>
       <div className="result-times">
         <label>Начало работ<input autoComplete="off" defaultValue={closureDraftValue(closureDraft, "workStartTime", companyTime(task.workStartedAt))} inputMode="decimal" name="workStartTime" placeholder="чч:мм, например 9:30" /></label>
@@ -1465,7 +1470,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео). Можно выбрать сразу несколько.`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
     {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
-    <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
+    <DialogForm busy={busy} description="Изменятся название, вид работ, гарантия, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Гарантия<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}
@@ -1491,13 +1496,15 @@ interface TaskRegistryFilters {
   readonly siteId: string;
   readonly workTypeCode: string;
   readonly priority: string;
+  /** «G» гарантийные, «N» вина клиента, «none» не гарантия, пусто — все. */
+  readonly guarantee: string;
   readonly periodFrom: string;
   readonly periodTo: string;
   readonly overdue: boolean;
   readonly sort: "deadline_asc" | "deadline_desc" | "updated_asc" | "updated_desc";
 }
 
-const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", periodFrom: "", periodTo: "", overdue: false, sort: "updated_desc" };
+const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", guarantee: "", periodFrom: "", periodTo: "", overdue: false, sort: "updated_desc" };
 
 const mailStatusLabels: Readonly<Record<MailInboxRecord["status"], string>> = {
   pending: "Новое", parsed: "Распознано", converted: "Создана задача", ignored: "Не требует работы",
@@ -1669,6 +1676,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         ...(currentFilters.engineerId ? { engineerId: currentFilters.engineerId } : {}), ...(currentFilters.siteId ? { siteId: currentFilters.siteId } : {}),
         ...(currentFilters.workTypeCode ? { workTypeCode: currentFilters.workTypeCode } : {}),
         ...(currentFilters.priority ? { priority: currentFilters.priority as "urgent" | "planned" } : {}),
+        ...(currentFilters.guarantee ? { guarantee: currentFilters.guarantee as "G" | "N" | "none" } : {}),
         ...(currentFilters.periodFrom ? { periodFrom: currentFilters.periodFrom } : {}), ...(currentFilters.periodTo ? { periodTo: currentFilters.periodTo } : {}),
         ...(currentFilters.overdue ? { overdue: true } : {}), sort: currentFilters.sort,
         limit: pageSizeRef.current, offset: registryPageOffset(targetPageIndex, pageSizeRef.current)
@@ -1802,7 +1810,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   // С фильтром видна только часть колонки: место среди видимых карточек сбило бы общий порядок,
   // поэтому расставлять карточки можно на доске без фильтров (сортировка и этап не мешают).
   const boardFiltered = Boolean(appliedFilters.search || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode
-    || appliedFilters.priority || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue);
+    || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
     const page = await m2Api.tasksPage({
       ...(appliedFilters.search ? { search: appliedFilters.search } : {}),
@@ -1811,6 +1819,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
       ...(appliedFilters.siteId ? { siteId: appliedFilters.siteId } : {}),
       ...(appliedFilters.workTypeCode ? { workTypeCode: appliedFilters.workTypeCode } : {}),
       ...(appliedFilters.priority ? { priority: appliedFilters.priority as "urgent" | "planned" } : {}),
+      ...(appliedFilters.guarantee ? { guarantee: appliedFilters.guarantee as "G" | "N" | "none" } : {}),
       ...(appliedFilters.periodFrom ? { periodFrom: appliedFilters.periodFrom } : {}),
       ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
       ...(appliedFilters.overdue ? { overdue: true } : {}),
@@ -1871,6 +1880,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         ...(appliedFilters.engineerId ? { engineerId: appliedFilters.engineerId } : {}), ...(appliedFilters.siteId ? { siteId: appliedFilters.siteId } : {}),
         ...(appliedFilters.workTypeCode ? { workTypeCode: appliedFilters.workTypeCode } : {}),
         ...(appliedFilters.priority ? { priority: appliedFilters.priority as "urgent" | "planned" } : {}),
+        ...(appliedFilters.guarantee ? { guarantee: appliedFilters.guarantee as "G" | "N" | "none" } : {}),
         ...(appliedFilters.periodFrom ? { periodFrom: appliedFilters.periodFrom } : {}), ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
         ...(appliedFilters.overdue ? { overdue: true } : {}), sort: appliedFilters.sort, limit, offset
       }));
@@ -1926,7 +1936,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         await refreshTasks(); await openTask(task.id);
       }} open={formOpen} workTypes={workTypes} />
 
-      {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{siteNames.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
+      {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{siteNames.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Гарантия<Select onChange={(event) => setFilters((current) => ({ ...current, guarantee: event.target.value }))} value={filters.guarantee}><option value="">Все</option><option value="G">Гарантийные</option><option value="none">Не гарантия</option><option value="N">Вина клиента</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
@@ -1935,7 +1945,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
           <CardHeader headingId="tasks-table-title" meta={`${tasks.length} из ${total}`} title="Все задачи" />
           {(loading || !listLoaded) && tasks.length === 0
             ? <ResourceState description="Подождите, список сейчас появится." status="loading" title="Загружаем задачи" />
-            : <TaskTable engineers={engineers} equipment={equipment} filtered={Boolean(appliedFilters.search || appliedFilters.status || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode || appliedFilters.priority || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue)} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} onToggle={toggleTask} onToggleAll={(selected) => setSelectedTaskIds((current) => { const next = new Set(current); for (const task of tasks) { if (selected) next.add(task.id); else next.delete(task.id); } return next; })} selectedTaskIds={selectedTaskIds} tasks={tasks} />}
+            : <TaskTable engineers={engineers} equipment={equipment} filtered={Boolean(appliedFilters.search || appliedFilters.status || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue)} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} onToggle={toggleTask} onToggleAll={(selected) => setSelectedTaskIds((current) => { const next = new Set(current); for (const task of tasks) { if (selected) next.add(task.id); else next.delete(task.id); } return next; })} selectedTaskIds={selectedTaskIds} tasks={tasks} />}
           <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={(next) => void changePage(next)} onPageSizeChange={(size) => { setPageSize(size); void changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
         </section>
 
@@ -3351,6 +3361,7 @@ function EngineerTaskCard({ task, onOpen }: {
         <StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge>
       </div>
       {task.isOverdue ? <span className="urgent-label">Просрочена</span> : task.priority === "urgent" ? <span className="urgent-label">Срочная</span> : null}
+      {task.workModifier === "G" ? <span className="task-guarantee-mark">Гарантия</span> : null}
     </div>
     <div className="mobile-task-card__heading">
       <span className="mobile-task-card__number">{task.number}</span>

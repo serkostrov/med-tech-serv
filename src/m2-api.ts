@@ -2974,6 +2974,8 @@ export class M2ApiClient {
     readonly siteId?: string;
     readonly workTypeCode?: string;
     readonly priority?: "urgent" | "planned";
+    /** Гарантия: «G» гарантийные, «N» вина клиента, «none» без отметки. */
+    readonly guarantee?: "G" | "N" | "none";
     readonly periodFrom?: string;
     readonly periodTo?: string;
     readonly overdue?: boolean;
@@ -3000,6 +3002,7 @@ export class M2ApiClient {
       lte: (column: string, value: string) => T;
       lt: (column: string, value: string) => T;
       not: (column: string, operator: string, value: string) => T;
+      is: (column: string, value: null) => T;
     }>(request: T): T => {
       let next = request;
       // Период: задачи, срок которых пересекается с выбранным периодом.
@@ -3015,6 +3018,8 @@ export class M2ApiClient {
       if (query.siteId) next = next.eq("site_id", query.siteId);
       if (query.workTypeCode) next = next.eq("work_type_code", query.workTypeCode);
       if (query.priority) next = next.eq("priority", query.priority);
+      if (query.guarantee === "none") next = next.is("work_modifier", null);
+      else if (query.guarantee) next = next.eq("work_modifier", query.guarantee);
       if (query.search?.trim()) next = next.or(`number.ilike.%${query.search.trim()}%,title.ilike.%${query.search.trim()}%`);
       return next;
     };
@@ -3176,6 +3181,7 @@ export class M2ApiClient {
         title: task.title,
         status: task.status as EngineerTaskListItem["status"],
         priority: task.priority,
+        ...(task.workModifier ? { workModifier: task.workModifier } : {}),
         isNew: task.status === "new" || task.status === "assigned",
         isOverdue: task.isOverdue === true,
         site: { name: task.customer?.siteName ?? "", address: task.customer?.address ?? "" },
@@ -3223,6 +3229,7 @@ export class M2ApiClient {
       work_type_code: String(input.workTypeCode || "diagnostics"),
       ...(planned ? { status_code: "planned" } : {}),
       priority: input.priority ?? "planned",
+      ...(input.workModifier === "G" || input.workModifier === "N" ? { work_modifier: input.workModifier } : {}),
       is_maintenance_plan: input.isMaintenancePlan === true,
       maintenance_plan_id: input.maintenancePlanId ?? null,
       equipment_id: input.equipmentId,
@@ -3260,6 +3267,8 @@ export class M2ApiClient {
     readonly title: string;
     readonly workTypeCode: string;
     readonly priority: "urgent" | "planned";
+    /** Г — гарантийный случай, Н — вина клиента, null — не гарантия. Ставит координатор. */
+    readonly workModifier?: "G" | "N" | null;
     readonly periodFrom: string;
     readonly periodTo: string;
     readonly callDate: string;
@@ -3272,6 +3281,7 @@ export class M2ApiClient {
       title: input.title,
       work_type_code: input.workTypeCode,
       priority: input.priority,
+      ...(input.workModifier !== undefined ? { work_modifier: input.workModifier } : {}),
       deadline_from: input.periodFrom,
       deadline_to: input.periodTo,
       call_date: input.callDate,

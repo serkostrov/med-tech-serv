@@ -155,6 +155,8 @@ export interface EngineerTaskListItem {
   readonly title: string;
   readonly status: TaskStatus;
   readonly priority?: TaskPriority;
+  /** Г — гарантийный случай, Н — вина клиента. */
+  readonly workModifier?: "G" | "N";
   readonly isNew: boolean;
   readonly isOverdue: boolean;
   readonly site: { readonly name: string; readonly address: string };
