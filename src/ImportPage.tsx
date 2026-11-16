@@ -100,6 +100,9 @@ export function ImportPage() {
     setManufacturer("");
     setFileName(file.name);
     try {
+      if (/\.(xls|csv|ods)$/iu.test(file.name)) {
+        throw new Error("Нужен файл .xlsx. Откройте выгрузку в Excel и сохраните как «Книга Excel (.xlsx)»");
+      }
       const parsed = await readImportFile(new Uint8Array(await file.arrayBuffer()));
       // Сверяем с базой только по приборам из файла: весь реестр читать не нужно.
       const base = await m2Api.importSnapshot(parsed.equipment.map((item) => item.serialNumber));
@@ -116,7 +119,7 @@ export function ImportPage() {
 
   const apply = async () => {
     if (!plan) return;
-    const result = await m2Api.applyEquipmentImport(fileName, plan.write);
+    const result = await m2Api.applyEquipmentImport(fileName.slice(0, 200), plan.write);
     setWritten(result);
     // Снимок устарел: перечитываем, чтобы повторное подтверждение показало «уже есть».
     if (reading) {

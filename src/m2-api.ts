@@ -2130,14 +2130,23 @@ export class M2ApiClient {
 
     const historyKeys: string[] = [];
     const ids = equipment.map((item) => item.id);
+    const PAGE = 500;
     for (let offset = 0; offset < ids.length; offset += 100) {
-      const { data, error } = await this.db()
-        .from("equipment_history")
-        .select("source_key")
-        .in("equipment_id", ids.slice(offset, offset + 100))
-        .not("source_key", "is", null);
-      throwIfError(error);
-      for (const item of data ?? []) historyKeys.push(text(asRow(item), "source_key"));
+      const batch = ids.slice(offset, offset + 100);
+      // Страницами: иначе у приборов с длинной историей часть ключей осталась бы
+      // за пределом ответа и пробный импорт обещал бы уже записанные события.
+      for (let from = 0; ; from += PAGE) {
+        const { data, error } = await this.db()
+          .from("equipment_history")
+          .select("source_key")
+          .in("equipment_id", batch)
+          .not("source_key", "is", null)
+          .order("source_key")
+          .range(from, from + PAGE - 1);
+        throwIfError(error);
+        for (const item of data ?? []) historyKeys.push(text(asRow(item), "source_key"));
+        if ((data ?? []).length < PAGE) break;
+      }
     }
 
     return {

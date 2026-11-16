@@ -18,6 +18,25 @@
  * событие — sha256 от содержания события (equipment_history.source_key с
  * уникальным индексом по прибору). Поэтому повторная загрузка того же файла
  * ничего не удваивает.
+ *
+ * Куда что ложится (поле файла → колонка базы):
+ *   серийный номер      → equipment.serial_number
+ *   название прибора    → equipment_models.name (производитель — из справочника
+ *                         моделей либо выбран человеком на экране)
+ *   производитель       → manufacturers.name
+ *   площадка            → equipment.current_site_id, если площадка есть в sites
+ *   плательщик          → equipment.current_payer_id, если он есть в payers
+ *   примечание          → equipment.notes
+ *   показание счётчика  → equipment.last_meter_reading
+ *   дата события        → equipment_history.happened_at (начало дня по Москве)
+ *   вид работ           → equipment_history.summary и details.workType
+ *   описание работ      → equipment_history.details.description
+ *   клиент события      → equipment_history.details.client (снимком, как в ленте)
+ *
+ * Чего в файлах нет и что остаётся пустым: статус прибора (встаёт «В эксплуатации»),
+ * категория гарантии, договор, план ТО, задачи, счета и файлы прибора. Переноса
+ * площадки во времени (equipment_site_history) импорт не делает: её пишут только
+ * триггеры при смене места установки.
  */
 import { normalizeEquipmentSerial } from "./equipment-passport.js";
 import { companyDayStart, companyToday } from "./task-dates.js";
