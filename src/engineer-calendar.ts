@@ -43,7 +43,7 @@ export interface CalendarRange {
   readonly to: string;
 }
 
-export const WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"] as const;
+const WEEKDAY_LABELS = ["Пн", "Вт", "Ср", "Чт", "Пт", "Сб", "Вс"] as const;
 
 const MONTH_SHORT = ["янв", "фев", "мар", "апр", "мая", "июн", "июл", "авг", "сен", "окт", "ноя", "дек"] as const;
 const MONTH_IN_CASE = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"] as const;
@@ -253,7 +253,7 @@ export interface CalendarPlacement {
 }
 
 export interface CalendarCell {
-  readonly date: string
+  readonly date: string;
   readonly isWeekend: boolean;
   readonly isToday: boolean;
   readonly level: DayLoadLevel;
@@ -287,10 +287,13 @@ export interface EngineerCalendar {
   /** Задачи периода без инженера: координатору видно, что их ещё некому отдать. */
   readonly unassignedTasks: readonly CalendarTask[];
   readonly totals: {
+    /** Все задачи периода: и разложенные по дням, и без срока, и ещё не назначенные. */
     readonly taskCount: number;
+    /** Активные инженеры: у кого есть перегруженный день и кто свободен весь период. */
     readonly overloadedEngineerCount: number;
     readonly freeEngineerCount: number;
     readonly undatedTaskCount: number;
+    readonly unassignedTaskCount: number;
   };
 }
 
@@ -303,7 +306,7 @@ function compareTasksInDay(left: CalendarTask, right: CalendarTask): number {
 
 /**
  * Раскладка календаря: строка на инженера, колонка на день периода.
- * Задачи приходят уже отобранными по периоду (функция базы engineer_calendar_tasks),
+ * Задачи приходят уже отобранными по периоду (функция базы engineer_calendar),
  * здесь только раскладка и подсчёты.
  */
 export function buildEngineerCalendar(input: {
@@ -315,10 +318,14 @@ export function buildEngineerCalendar(input: {
   const days = calendarDays(input.range, input.today);
   const rangeFrom = dayNumber(input.range.from, "дату начала");
   const rangeTo = dayNumber(input.range.to, "дату окончания");
+  const engineerIds = new Set(input.engineers.map((engineer) => engineer.id));
   const byEngineer = new Map<string, CalendarTask[]>();
   const unassigned: CalendarTask[] = [];
-  for (const task of input.tasks) {
-    if (!task.engineerId) {
+  // Повтор задачи в ответе не должен ни красить день перегрузом, ни ломать ключи в сетке.
+  const unique = [...new Map(input.tasks.map((task) => [task.id, task])).values()];
+  for (const task of unique) {
+    // Задача инженера, которого в сетке нет, не теряется: её видно среди нераспределённых.
+    if (!task.engineerId || !engineerIds.has(task.engineerId)) {
       unassigned.push(task);
       continue;
     }
@@ -391,16 +398,22 @@ export function buildEngineerCalendar(input: {
     };
   });
 
+  const undatedTaskCount = rows.reduce((sum, row) => sum + row.undatedTasks.length, 0);
+  const placedTaskCount = new Set(rows.flatMap((row) => row.cells.flatMap((cell) => cell.placements.map((item) => item.task.id)))).size;
   return {
     range: input.range,
     days,
     rows,
     unassignedTasks: [...unassigned].sort(compareTasksInDay),
     totals: {
-      taskCount: new Set(rows.flatMap((row) => row.cells.flatMap((cell) => cell.placements.map((item) => item.task.id)))).size,
-      overloadedEngineerCount: rows.filter((row) => row.summary.overloadedDayCount > 0).length,
+      // Считаем все задачи периода, иначе «Задач в периоде» спорило бы с блоком
+      // нераспределённых и со столбцом «Без срока» на том же экране.
+      taskCount: placedTaskCount + undatedTaskCount + unassigned.length,
+      // Про загрузку говорим только про активных: неактивному новую задачу всё равно не дать.
+      overloadedEngineerCount: rows.filter((row) => row.engineer.isActive && row.summary.overloadedDayCount > 0).length,
       freeEngineerCount: rows.filter((row) => row.engineer.isActive && row.summary.taskCount === 0).length,
-      undatedTaskCount: rows.reduce((sum, row) => sum + row.undatedTasks.length, 0)
+      undatedTaskCount,
+      unassignedTaskCount: unassigned.length
     }
   };
 }
@@ -506,12 +519,22 @@ export function calendarDayTitle(date: string): string {
  * поэтому пишем факт, а не запрет: «Свободен все 5 дней», «3 задачи 17 ноября — перегружен».
  */
 export function periodLoadText(load: EngineerPeriodLoad): string {
-  if (load.worksNoDay) return "В эти дни не работает: только выходные";
-  if (load.isFree) return `Свободен все ${formatRussianCount(load.workdayCount, ["день", "дня", "дней"])} периода`;
+  if (load.worksNoDay) return load.workdayCount === 0 && load.taskCount === 0
+    ? "В эти дни не работает: только выходные"
+    : "В эти дни не работает: только выходные, но задачи на них стоят";
+  if (load.isFree) {
+    return load.workdayCount === 1
+      ? "Свободен в этот день"
+      : `Свободен все ${formatRussianCount(load.workdayCount, ["день", "дня", "дней"])} периода`;
+  }
   const busiest = load.busiestDay ? ` ${calendarDayTitle(load.busiestDay)}` : "";
   const peak = `${formatRussianCount(load.busiestDayCount, ["задача", "задачи", "задач"])}${busiest}`;
-  const free = load.freeWorkdayCount > 0 ? `, свободных дней ${load.freeWorkdayCount}` : ", свободных дней нет";
-  const overdue = load.overdueTaskCount > 0 ? `, просрочек ${load.overdueTaskCount}` : "";
+  const free = load.freeWorkdayCount > 0
+    ? ` · ещё ${formatRussianCount(load.freeWorkdayCount, ["свободный день", "свободных дня", "свободных дней"])}`
+    : " · свободных дней нет";
+  const overdue = load.overdueTaskCount > 0
+    ? ` · ${formatRussianCount(load.overdueTaskCount, ["просрочка", "просрочки", "просрочек"])}`
+    : "";
   return `${load.isOverloaded ? `Перегружен: ${peak}` : `Занят: ${peak}`}${free}${overdue}`;
 }
 
@@ -559,5 +582,10 @@ export function assignmentLoadRange(
   task: Pick<CalendarTask, "periodFrom" | "periodTo" | "visitDate">,
   today: string
 ): CalendarRange {
-  return taskOccupiedRange(task) ?? { from: today, to: today };
+  const occupied = taskOccupiedRange(task) ?? { from: today, to: today };
+  // Срок задачи бывает длиннее предела календаря (годовое ТО). Считаем занятость
+  // по первым MAX_CALENDAR_DAYS дням: иначе база откажет и подсказка осталась бы без неё.
+  const length = dayNumber(occupied.to, "конец периода задачи") - dayNumber(occupied.from, "начало периода задачи") + 1;
+  if (length <= MAX_CALENDAR_DAYS) return occupied;
+  return { from: occupied.from, to: shiftCalendarDay(occupied.from, MAX_CALENDAR_DAYS - 1) };
 }

@@ -211,12 +211,14 @@ describe("раскладка календаря по дням", () => {
     assert.deepEqual(calendar.unassignedTasks.map((item) => item.id), ["g"]);
     assert.equal(calendar.rows.length, 3);
     assert.equal(calendar.days.length, 7);
-    // Три задачи первого и одна второго: многодневная считается один раз.
-    assert.equal(calendar.totals.taskCount, 4);
+    // Три задачи первого, одна второго, плюс без срока и нераспределённая: многодневная
+    // считается один раз, а числа на экране не спорят друг с другом.
+    assert.equal(calendar.totals.taskCount, 6);
     assert.equal(calendar.totals.overloadedEngineerCount, 1);
     // Свободен только неактивный, но он в свободные не попадает.
     assert.equal(calendar.totals.freeEngineerCount, 0);
     assert.equal(calendar.totals.undatedTaskCount, 1);
+    assert.equal(calendar.totals.unassignedTaskCount, 1);
   });
 });
 
@@ -264,15 +266,51 @@ describe("занятость на период назначаемой задач
 
   it("занятость пишется строкой для человека", () => {
     const load = engineerPeriodLoad({ engineers, tasks, range, today: "2026-11-16" });
-    assert.equal(periodLoadText(load.find((item) => item.engineerId === "e-1")!), "Перегружен: 3 задачи 17 ноября, свободных дней нет");
-    assert.equal(periodLoadText(load.find((item) => item.engineerId === "e-2")!), "Занят: 1 задача 18 ноября, свободных дней 4");
+    assert.equal(periodLoadText(load.find((item) => item.engineerId === "e-1")!), "Перегружен: 3 задачи 17 ноября · свободных дней нет");
+    assert.equal(periodLoadText(load.find((item) => item.engineerId === "e-2")!), "Занят: 1 задача 18 ноября · ещё 4 свободных дня");
     assert.equal(periodLoadText(load.find((item) => item.engineerId === "e-3")!), "Свободен все 5 дней периода");
+  });
+
+  it("однодневная задача не даёт «свободен все 1 день»", () => {
+    const single = engineerPeriodLoad({ engineers, tasks, range: { from: "2026-11-19", to: "2026-11-19" }, today: "2026-11-16" });
+    assert.equal(periodLoadText(single.find((item) => item.engineerId === "e-2")!), "Свободен в этот день");
+  });
+
+  it("повтор задачи в ответе не красит день перегрузом", () => {
+    const duplicated = buildEngineerCalendar({
+      engineers,
+      tasks: [tasks[1]!, tasks[1]!, tasks[1]!],
+      range,
+      today: "2026-11-16"
+    });
+    const day = duplicated.rows[0]?.cells.find((cell) => cell.date === "2026-11-17");
+    assert.equal(day?.placements.length, 1);
+    assert.equal(day?.level, "normal");
+    assert.equal(duplicated.totals.taskCount, 1);
+  });
+
+  it("задача инженера не из сетки не теряется, а идёт в нераспределённые", () => {
+    const calendar = buildEngineerCalendar({
+      engineers: [engineers[0]!],
+      tasks: [task({ id: "x", engineerId: "e-99", periodFrom: "2026-11-17", periodTo: "2026-11-17" })],
+      range,
+      today: "2026-11-16"
+    });
+    assert.deepEqual(calendar.unassignedTasks.map((item) => item.id), ["x"]);
+    assert.equal(calendar.totals.taskCount, 1);
   });
 
   it("период занятости берётся у задачи, иначе день выезда, иначе сегодня", () => {
     assert.deepEqual(assignmentLoadRange({ periodFrom: "2026-11-16", periodTo: "2026-11-18" }, "2026-11-10"), { from: "2026-11-16", to: "2026-11-18" });
     assert.deepEqual(assignmentLoadRange({ visitDate: "2026-11-19" }, "2026-11-10"), { from: "2026-11-19", to: "2026-11-19" });
     assert.deepEqual(assignmentLoadRange({}, "2026-11-10"), { from: "2026-11-10", to: "2026-11-10" });
+  });
+
+  it("слишком длинный срок задачи обрезается до предела календаря", () => {
+    // Годовое ТО: база не отдаст занятость за год, поэтому считаем по первым дням срока.
+    const range = assignmentLoadRange({ periodFrom: "2026-01-01", periodTo: "2026-12-31" }, "2026-11-10");
+    assert.equal(range.from, "2026-01-01");
+    assert.equal(calendarDayCount(range), MAX_CALENDAR_DAYS);
   });
 });
 

@@ -26,8 +26,11 @@ const EMPTY_DRAFT: CompetencyDraft = { manufacturerId: "", modelLine: "" };
 
 export function EngineersPage() {
   const [engineers, setEngineers] = useState<readonly EngineerOverview[]>([]);
-  // Список или календарь загрузки: календарь видит тот, кто и так видит всех инженеров.
+  // Список или календарь загрузки. Календарь показываем тому, кто и так видит все задачи
+  // (координатор, руководитель): у остальных ролей база его не отдаст, и предлагать
+  // кнопку, которая приведёт к отказу, незачем.
   const [view, setView] = useState<"list" | "calendar">("list");
+  const [canSeeCalendar, setCanSeeCalendar] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -44,6 +47,9 @@ export function EngineersPage() {
     finally { setLoading(false); }
   };
   useEffect(() => { void reload(); }, []);
+  useEffect(() => {
+    void m2Api.hasPermission("tasks.read_all").then(setCanSeeCalendar).catch(() => setCanSeeCalendar(false));
+  }, []);
   const loadReferences = async () => {
     setReferencesState("loading");
     try {
@@ -98,9 +104,9 @@ export function EngineersPage() {
         ? "Кто в какой день занят, кто перегружен и у кого окно. Дни считаются по Москве."
         : "Кто сейчас занят, у кого просрочки и кому можно дать новую заявку."}
       title="Инженеры"
-      titleAside={<ViewSwitch items={[{ value: "list", label: "Список" }, { value: "calendar", label: "Календарь" }]} label="Как показать инженеров" onValueChange={setView} value={view} />}
+      titleAside={canSeeCalendar ? <ViewSwitch items={[{ value: "list", label: "Список" }, { value: "calendar", label: "Календарь" }]} label="Как показать инженеров" onValueChange={setView} value={view} /> : undefined}
     />
-    {view === "calendar" ? <EngineerCalendar /> : <>
+    {view === "calendar" && canSeeCalendar ? <EngineerCalendar /> : <>
     <div className="metric-grid metric-grid--three">
       <MetricCard icon="engineers" label="Активные инженеры" value={String(active.length)} />
       <MetricCard icon="tasks" label="Открытые задачи" tone="yellow" value={String(assigned)} />

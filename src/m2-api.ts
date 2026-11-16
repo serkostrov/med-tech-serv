@@ -4068,8 +4068,9 @@ export class M2ApiClient {
 
   /**
    * Занятость инженеров на период (функция engineer_period_load, миграция 0051): одна строка
-   * на человека, сколько бы задач в периоде ни было. Пусто, если функции в базе ещё нет:
-   * подсказка тогда остаётся прежней, по компетенциям, и ничего не падает.
+   * на человека, сколько бы задач в периоде ни было. Пусто, если функции в базе ещё нет
+   * или она отказала: подсказка тогда остаётся прежней — компетенции и «свободен / занят»
+   * по числу задач в работе, как было до календаря.
    */
   private async engineerPeriodLoad(
     from: string,
@@ -4080,7 +4081,8 @@ export class M2ApiClient {
     const { data, error } = await this.db().rpc("engineer_period_load", {
       p_from: from,
       p_to: to,
-      p_ignore_task_id: ignoreTaskId ?? null
+      // Пустой параметр не отправляем вовсе: в GET-запросе null уехал бы строкой «null».
+      ...(ignoreTaskId ? { p_ignore_task_id: ignoreTaskId } : {})
     }, { get: true });
     if (isMissingSchemaObject(error, "engineer_period_load")) {
       this.engineerPeriodLoadAvailable = false;

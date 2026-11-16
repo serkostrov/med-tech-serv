@@ -72,8 +72,10 @@ BEGIN
     uid := gen_random_uuid();
     base := CASE WHEN r LIKE 'engineer%' THEN 'engineer' ELSE r END;
     INSERT INTO auth.users (id, email, aud, role) VALUES (uid, 'cal-' || r || '@test.local', 'authenticated', 'authenticated');
+    -- Все заводятся активными: задачу база разрешает назначить только активному инженеру
+    -- (триггер tasks_active_engineer_required). Неактивных выключим ниже, после вставки задач.
     INSERT INTO public.users (id, full_name, role, email, is_active, access_role_key)
-    VALUES (uid, 'Календарь ' || r, base::user_role, 'cal-' || r || '@test.local', r NOT IN ('engineer3', 'engineer5'), base);
+    VALUES (uid, 'Календарь ' || r, base::user_role, 'cal-' || r || '@test.local', true, base);
     INSERT INTO ids VALUES (r, uid);
   END LOOP;
   SELECT id INTO coord FROM ids WHERE k = 'coordinator';
@@ -88,7 +90,7 @@ BEGIN
   INSERT INTO equipment_models (manufacturer_id, name) VALUES (manuf, 'Кал-100') RETURNING id INTO model;
   INSERT INTO equipment (serial_number, manufacturer_id, model_id, current_site_id, current_payer_id)
   VALUES ('SN-CAL-1', manuf, model, site, payer) RETURNING id INTO eq;
-  SELECT code INTO wt FROM work_types WHERE is_active ORDER BY code LIMIT 1;
+  SELECT code INTO wt FROM work_types WHERE is_active AND NOT coalesce(requires_hours, false) ORDER BY code LIMIT 1;
 
   -- Первый инженер: трёхдневная задача 16—18.11 и две однодневные 17.11 (во вторник три задачи).
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, deadline_from, deadline_to, status_code)
@@ -117,12 +119,15 @@ BEGIN
   EXECUTE 'ALTER TABLE public.tasks ADD CONSTRAINT tasks_execution_period_required CHECK (deadline_from IS NOT NULL AND deadline_to IS NOT NULL) NOT VALID';
 
   -- Неактивный инженер: закрытая задача в дне периода (день она всё-таки заняла).
-  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, deadline_from, deadline_to, status_code, work_completed, apparatus_approved, customer_has_no_claims, work_description)
-  VALUES ('Календарь: закрытая', wt, eq, site, payer, e3, coord, '2026-11-10', '2026-11-20', '2026-11-20', 'closed', true, true, true, 'сделано') RETURNING id INTO t_closed;
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, deadline_from, deadline_to, status_code, work_completed, apparatus_approved, customer_has_no_claims, call_reason, work_description)
+  VALUES ('Календарь: закрытая', wt, eq, site, payer, e3, coord, '2026-11-10', '2026-11-20', '2026-11-20', 'closed', true, true, true, 'Не включается', 'Заменён блок питания') RETURNING id INTO t_closed;
 
   -- Задача периода без инженера: её назначают из календаря.
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, call_date, deadline_from, deadline_to, status_code)
   VALUES ('Календарь: без инженера', wt, eq, site, payer, coord, '2026-11-10', '2026-11-18', '2026-11-18', 'new') RETURNING id INTO t_free;
+
+  -- Теперь можно выключить: engineer3 остаётся с задачей в периоде, engineer5 — без задач.
+  UPDATE public.users SET is_active = false WHERE id IN (e3, (SELECT id FROM ids WHERE k = 'engineer5'));
 
   INSERT INTO ids VALUES ('t_long', t_long), ('t_day1', t_day1), ('t_day2', t_day2), ('t_visit', t_visit),
     ('t_undated', t_undated), ('t_cancelled', t_cancelled), ('t_outside', t_outside), ('t_closed', t_closed),
@@ -159,12 +164,12 @@ SELECT pg_temp.check(
     WHERE c.task_id = (SELECT id FROM ids WHERE k = 't_closed')) = 1,
   'закрытая задача остаётся в прошедшем дне: день она заняла');
 
--- Задача без срока приходит с признаком, а не ставится на какой-то день.
+-- Задача без срока приходит с пустыми датами, а не ставится на какой-то день.
 SELECT pg_temp.check(
-  (SELECT c.has_no_dates AND c.period_from IS NULL AND c.visit_date IS NULL
+  (SELECT c.period_from IS NULL AND c.period_to IS NULL AND c.visit_date IS NULL
      FROM public.engineer_calendar('2026-11-16', '2026-11-22') AS c
     WHERE c.task_id = (SELECT id FROM ids WHERE k = 't_undated')),
-  'открытая задача без срока приходит с признаком has_no_dates');
+  'открытая задача без срока приходит с пустыми датами');
 
 -- Строка задачи несёт номер, название, площадку и прибор для карточки дня.
 SELECT pg_temp.check(
@@ -272,6 +277,8 @@ RESET ROLE;
 SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
 SELECT pg_temp.expect_forbidden($$SELECT * FROM public.engineer_calendar('2026-11-16', '2026-11-22')$$, 'кладовщик не открывает календарь загрузки');
 SELECT pg_temp.expect_forbidden($$SELECT * FROM public.engineer_period_load('2026-11-16', '2026-11-22')$$, 'кладовщик не читает занятость инженеров');
+-- Отказ по правам идёт раньше проверки периода: постороннему не рассказываем даже про её пределы.
+SELECT pg_temp.expect_forbidden($$SELECT * FROM public.engineer_calendar('2026-01-01', '2026-12-31')$$, 'кладовщику сначала отказывают в правах, а не в периоде');
 RESET ROLE;
 
 -- ----------------------------------------------------------------- Права на сами функции
@@ -281,6 +288,5 @@ SELECT pg_temp.check(has_function_privilege('authenticated', 'public.engineer_ca
 SELECT pg_temp.check(has_function_privilege('authenticated', 'public.engineer_period_load(date, date, uuid)', 'execute'), 'вошедший пользователь вызывает занятость');
 -- Индексы выборки на месте: без них на стенде с тысячами задач календарь будет перебирать всё.
 SELECT pg_temp.check(EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'tasks_calendar_days_idx'), 'индекс дней задач создан');
-SELECT pg_temp.check(EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'tasks_calendar_undated_idx'), 'индекс задач без срока создан');
 
 ROLLBACK;

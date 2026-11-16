@@ -74,7 +74,8 @@ import { PricePage } from "./PricePage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { preselectedEngineerId } from "./engineer-competencies.js";
-import { periodLoadText, rankAssignmentCandidates } from "./engineer-calendar.js";
+import { rankAssignmentCandidates } from "./engineer-calendar.js";
+import { EngineerPicker } from "./EngineerPicker.js";
 import { PartsMultiPicker, type SelectedTaskPart } from "./PartsMultiPicker.js";
 import { AccessAdminPage } from "./AccessAdminPage.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
@@ -1282,33 +1283,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       open={assignDialogOpen}
       title={canReassign ? "Смена инженера" : "Выбор инженера"}
     >
-      {suggestions.length === 0 ? (
-        <p className="form-hint">Инженеров пока нет. Добавьте их в разделе «Инженеры».</p>
-      ) : (
-        <div className="engineer-picker" role="listbox" aria-label="Инженеры">
-          {suggestions.map((item) => {
-            const selected = item.engineerId === engineerId;
-            // Занятость считается на период задачи: кто свободен в эти дни, у кого уже три выезда.
-            const hints = [
-              item.previouslyWorkedWithEquipment ? "есть компетенция по прибору" : null,
-              item.load ? periodLoadText(item.load) : item.isAvailable ? "свободен" : "занят"
-            ].filter(Boolean).join(" · ");
-            return (
-              <button
-                aria-selected={selected}
-                className={`engineer-picker__option${selected ? " is-selected" : ""}${item.load?.isOverloaded ? " engineer-picker__option--overloaded" : ""}`}
-                key={item.engineerId}
-                onClick={() => setEngineerId(item.engineerId)}
-                role="option"
-                type="button"
-              >
-                <strong>{item.fullName}</strong>
-                <span>{hints}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Один список и здесь, и в окне календаря: занятость считается на период задачи. */}
+      <EngineerPicker items={suggestions} onChange={setEngineerId} value={engineerId} />
     </Dialog>
   </>;
 }

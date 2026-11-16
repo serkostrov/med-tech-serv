@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { m2Api, type AssignmentSuggestionRecord, type EngineerCalendarData, type TaskCardResponse } from "./m2-api.js";
 import {
   MAX_CALENDAR_DAYS,
@@ -7,7 +7,6 @@ import {
   calendarDayTitle,
   calendarRange,
   calendarRangeTitle,
-  periodLoadText,
   rankAssignmentCandidates,
   shiftCalendarRange,
   taskOccupiedRange,
@@ -20,6 +19,7 @@ import {
 } from "./engineer-calendar.js";
 import { companyToday } from "./task-dates.js";
 import { Button, CardHeader, DatePicker, Dialog, MetricCard, ResourceState, StatusBadge, ViewSwitch, toast } from "./ui.js";
+import { EngineerPicker } from "./EngineerPicker.js";
 import { formatIsoCalendarDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
@@ -74,6 +74,8 @@ function TaskChip({ placement, onOpen }: {
     `calendar-task--${task.status}`,
     placement.isFirstVisibleDay ? "calendar-task--start" : "calendar-task--continued",
     placement.isLastVisibleDay ? "calendar-task--end" : "",
+    placement.continuesBefore && placement.isFirstVisibleDay ? "calendar-task--from-before" : "",
+    placement.continuesAfter && placement.isLastVisibleDay ? "calendar-task--to-after" : "",
     task.isOverdue ? "calendar-task--overdue" : "",
     task.priority === "urgent" ? "calendar-task--urgent" : "",
     placement.isVisitDay ? "calendar-task--visit" : ""
@@ -109,7 +111,12 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
 }) {
   // В длинном периоде подписи в клетках не читаются: остаются полоски и подсказка.
   const dense = calendar.days.length >= DENSE_FROM_DAYS;
-  return <div className="engineer-calendar__scroll">
+  return <div
+    aria-label={`Календарь загрузки: ${title}`}
+    className="engineer-calendar__scroll"
+    role="region"
+    tabIndex={0}
+  >
     <div
       aria-label={`Загрузка инженеров: ${title}`}
       className={`engineer-calendar__grid${dense ? " engineer-calendar__grid--dense" : ""}`}
@@ -150,6 +157,7 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
           </div>)}
           <div className="engineer-calendar__undated" role="cell">
             {row.undatedTasks.length === 0 ? <span className="is-empty">—</span> : row.undatedTasks.map((task) => <button
+              aria-label={taskHint(task)}
               className="calendar-task calendar-task--undated"
               key={task.id}
               onClick={() => onOpenTask(task.id)}
@@ -194,6 +202,10 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
   const [card, setCard] = useState<TaskCardResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [suggestions, setSuggestions] = useState<readonly AssignmentSuggestionRecord[]>([]);
+  // Пока занятость считается, «инженеров нет» писать рано: отличаем ожидание от пустого ответа.
+  const [suggestionsState, setSuggestionsState] = useState<"loading" | "ready">("loading");
+  // Инженера в окне календаря не предвыбираем: назначение — решение человека, и оно
+  // не должно происходить одним нажатием по задаче, открытой «просто посмотреть».
   const [engineerId, setEngineerId] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -201,6 +213,7 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setSuggestionsState("loading");
     setError(null);
     void m2Api.taskCard(taskId)
       .then(async (loaded) => {
@@ -208,17 +221,25 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
         setCard(loaded);
         setEngineerId("");
         // Можно ли назначать, решает сама задача: её этап и права, как в разделе «Задачи».
-        if (!taskAssignable(loaded)) return;
+        if (!taskAssignable(loaded)) {
+          setSuggestionsState("ready");
+          return;
+        }
         const hints = await m2Api.taskAssignmentSuggestions(
           taskId,
           loaded.equipment?.manufacturer ?? "",
           loaded.equipment?.model,
           { periodFrom: loaded.task.periodFrom, periodTo: loaded.task.periodTo, visitDate: loaded.task.visitDate }
         );
-        if (!cancelled) setSuggestions(rankAssignmentCandidates(hints));
+        if (!cancelled) {
+          setSuggestions(rankAssignmentCandidates(hints));
+          setSuggestionsState("ready");
+        }
       })
       .catch((loadError: unknown) => {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
+        if (cancelled) return;
+        setError(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу");
+        setSuggestionsState("ready");
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -229,10 +250,14 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
     setBusy(true);
     setError(null);
     try {
-      if (card.engineer?.id) await m2Api.reassignTask(taskId, engineerId);
+      // Смена инженера — только там, где это видит база (canReassign). У новой задачи
+      // с инженером из плана ТО это всё ещё назначение: оно и переводит её в «Назначена».
+      if (card.canReassign === true) await m2Api.reassignTask(taskId, engineerId);
       else await m2Api.assignTask(taskId, engineerId);
       const name = suggestions.find((item) => item.engineerId === engineerId)?.fullName;
-      toast.success(name ? `Инженер назначен: ${name}` : "Инженер назначен");
+      toast.success(name
+        ? `${card.canReassign === true ? "Инженер изменён" : "Инженер назначен"}: ${name}`
+        : card.canReassign === true ? "Инженер изменён" : "Инженер назначен");
       onAssigned();
       onClose();
     } catch (assignError) {
@@ -252,7 +277,7 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
       description={task ? `${TASK_STATUS_LABELS[task.status] ?? task.status} · срок ${taskPeriodText({ id: task.id, number: task.number, title: task.title, status: task.status, periodFrom: task.periodFrom, periodTo: task.periodTo, visitDate: task.visitDate })}` : "Загружаем задачу…"}
       footer={<>
         <Button disabled={busy} onClick={onClose} variant="secondary">Закрыть</Button>
-        {canChange ? <Button busy={busy} disabled={!engineerId} onClick={() => void assign()}>{card?.engineer?.id ? "Сменить инженера" : "Назначить инженера"}</Button> : null}
+        {canChange ? <Button busy={busy} disabled={!engineerId} onClick={() => void assign()}>{card?.canReassign === true ? "Сменить инженера" : "Назначить инженера"}</Button> : null}
       </>}
       onOpenChange={(open) => { if (!open) onClose(); }}
       open
@@ -270,31 +295,8 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
           {task.callReason ? <div><dt>Причина вызова</dt><dd>{task.callReason}</dd></div> : null}
         </dl>
         {canChange ? <div className="engineer-picker-field">
-          <span className="engineer-picker-field__label">{card.engineer?.id ? "Кому передать" : "Кого назначить"}</span>
-          {suggestions.length === 0 ? <p className="form-hint">Активных инженеров нет. Добавьте их в разделе «Инженеры».</p> : (
-            <div aria-label="Инженеры" className="engineer-picker" role="listbox">
-              {suggestions.map((item) => {
-                const selected = item.engineerId === engineerId;
-                const hints = [
-                  item.previouslyWorkedWithEquipment ? "работал с таким прибором" : null,
-                  item.load ? periodLoadText(item.load) : item.isAvailable ? "свободен" : "занят"
-                ].filter(Boolean).join(" · ");
-                return (
-                  <button
-                    aria-selected={selected}
-                    className={`engineer-picker__option${selected ? " is-selected" : ""}${item.load?.isOverloaded ? " engineer-picker__option--overloaded" : ""}`}
-                    key={item.engineerId}
-                    onClick={() => setEngineerId(item.engineerId)}
-                    role="option"
-                    type="button"
-                  >
-                    <strong>{item.fullName}</strong>
-                    <span>{hints}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )}
+          <span className="engineer-picker-field__label">{card.canReassign === true ? "Кому передать" : "Кого назначить"}</span>
+          <EngineerPicker items={suggestions} onChange={setEngineerId} state={suggestionsState} value={engineerId} />
           <p className="form-hint">Подсказка считает занятость на срок этой задачи и ничего не запрещает: решение за вами.</p>
         </div> : <p className="form-hint">{assignRefusal(card)}</p>}
       </div> : null}
@@ -316,7 +318,11 @@ export function EngineerCalendar() {
   const [range, setRange] = useState<CalendarRange>(() => calendarRange("week", today));
   // Свой период набирают в двух полях: показываем его, только когда обе даты заданы.
   const [customDraft, setCustomDraft] = useState<CalendarRange>(() => calendarRange("week", today));
-  const [data, setData] = useState<EngineerCalendarData>(EMPTY_CALENDAR);
+  // Данные храним вместе с периодом, за который они пришли: пока летит запрос нового
+  // периода, сетка должна показывать прежний, а не раскладывать старые задачи по новым дням.
+  const [data, setData] = useState<{ readonly range: CalendarRange; readonly loaded: EngineerCalendarData }>(
+    () => ({ range: calendarRange("week", today), loaded: EMPTY_CALENDAR })
+  );
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   // Отказ по своему периоду показываем прямо у полей: иначе человек меняет дату, а сетка молчит.
@@ -331,13 +337,13 @@ export function EngineerCalendar() {
     try {
       const loaded = await m2Api.engineerCalendar(next.from, next.to);
       if (turn !== loadTurn.current) return;
-      setData(loaded);
+      setData({ range: next, loaded });
       setLoadError(null);
     } catch (error) {
       if (turn !== loadTurn.current) return;
       const message = error instanceof Error ? error.message : "Не получилось загрузить календарь загрузки";
       setLoadError(message);
-      setData(EMPTY_CALENDAR);
+      setData({ range: next, loaded: EMPTY_CALENDAR });
       toast.error(message);
     } finally {
       if (turn === loadTurn.current) setLoading(false);
@@ -345,6 +351,14 @@ export function EngineerCalendar() {
   };
 
   useEffect(() => { void load(range); }, [range.from, range.to]);
+
+  // Период и поля «С»/«По» меняются вместе: иначе стрелки двигают сетку, а поля врут,
+  // и следующая правка даты собирает период из устаревшего черновика.
+  const showRange = (next: CalendarRange) => {
+    setRange(next);
+    setCustomDraft(next);
+    setPeriodError(null);
+  };
 
   const changeMode = (next: CalendarMode) => {
     setMode(next);
@@ -354,7 +368,7 @@ export function EngineerCalendar() {
       return;
     }
     // Остаёмся около уже показанного периода, а не прыгаем на сегодня.
-    setRange(calendarRange(next, range.from));
+    showRange(calendarRange(next, range.from));
   };
 
   const applyCustom = (draft: CalendarRange) => {
@@ -372,15 +386,20 @@ export function EngineerCalendar() {
     }
   };
 
-  const calendar = buildEngineerCalendar({ engineers: data.engineers, tasks: data.tasks, range, today });
+  // Пересобираем раскладку только когда меняются данные или день: на каждое открытие
+  // окна задачи заново раскладывать месяц на двадцать инженеров незачем.
+  const calendar = useMemo(
+    () => buildEngineerCalendar({ engineers: data.loaded.engineers, tasks: data.loaded.tasks, range: data.range, today }),
+    [data, today]
+  );
   const showToday = today >= range.from && today <= range.to;
   return <>
     <div className="engineer-calendar-toolbar">
       <div className="engineer-calendar-toolbar__period" role="group" aria-label="Период календаря">
-        <Button aria-label="Предыдущий период" onClick={() => setRange(shiftCalendarRange(range, mode, -1))} variant="secondary">‹</Button>
+        <Button aria-label="Предыдущий период" onClick={() => showRange(shiftCalendarRange(range, mode, -1))} variant="secondary">‹</Button>
         <strong className="engineer-calendar-toolbar__title">{calendarRangeTitle(range, mode)}</strong>
-        <Button aria-label="Следующий период" onClick={() => setRange(shiftCalendarRange(range, mode, 1))} variant="secondary">›</Button>
-        <Button disabled={showToday && mode !== "custom"} onClick={() => { setRange(calendarRange(mode === "custom" ? "week" : mode, today)); if (mode === "custom") setMode("week"); }} variant="ghost">Сегодня</Button>
+        <Button aria-label="Следующий период" onClick={() => showRange(shiftCalendarRange(range, mode, 1))} variant="secondary">›</Button>
+        <Button disabled={showToday} onClick={() => showRange(mode === "custom" ? { from: today, to: today } : calendarRange(mode, today))} variant="ghost">Сегодня</Button>
       </div>
       <ViewSwitch
         items={[{ value: "week", label: "Неделя" }, { value: "month", label: "Месяц" }, { value: "custom", label: "Свой период" }]}
@@ -403,21 +422,25 @@ export function EngineerCalendar() {
       <MetricCard icon="engineers" label="Свободны весь период" tone="purple" value={String(calendar.totals.freeEngineerCount)} />
     </div>
 
-    <section className="card card--table engineer-calendar">
+    <section aria-labelledby="engineer-calendar-title" className="card card--table engineer-calendar">
       <CardHeader
         headingId="engineer-calendar-title"
         meta={`${formatRussianCount(calendar.days.length, ["день", "дня", "дней"])} · ${formatRussianCount(calendar.totals.taskCount, ["задача", "задачи", "задач"])}${calendar.totals.undatedTaskCount ? ` · без срока: ${calendar.totals.undatedTaskCount}` : ""}`}
         title="Календарь загрузки"
       />
       {loadError && calendar.rows.length === 0
-        ? <ResourceState description={loadError} status="error" title="Календарь не загрузился" />
+        ? <ResourceState description={loadError} onRetry={() => void load(range)} status="error" title="Календарь не загрузился" />
         : loading && calendar.rows.length === 0
           ? <ResourceState description="Подождите, сетка сейчас появится." status="loading" title="Загружаем календарь" />
           : calendar.rows.length === 0
             ? <ResourceState description="Когда появятся сотрудники с ролью инженера, их загрузка отобразится здесь." status="empty" title="Инженеров пока нет" />
-            : <EngineerCalendarGrid calendar={calendar} onOpenTask={setOpenTaskId} title={calendarRangeTitle(range, mode)} />}
-      {calendar.unassignedTasks.length > 0 ? <div className="engineer-calendar__unassigned">
-        <h3>Ещё не назначены · {calendar.unassignedTasks.length}</h3>
+            : <div aria-busy={loading} className={loading ? "engineer-calendar__pending" : undefined}>
+              {/* Пока летит запрос нового периода, показываем прежний и помечаем ожидание:
+                  раскладывать старые задачи по новым дням нельзя. */}
+              <EngineerCalendarGrid calendar={calendar} onOpenTask={setOpenTaskId} title={calendarRangeTitle(calendar.range, mode)} />
+            </div>}
+      {calendar.totals.unassignedTaskCount > 0 ? <div className="engineer-calendar__unassigned">
+        <h3>Ещё не назначены · {calendar.totals.unassignedTaskCount}</h3>
         <p>Задачи периода без инженера. Откройте задачу и выберите, кому её отдать.</p>
         <div className="engineer-calendar__unassigned-list">
           {calendar.unassignedTasks.map((task) => <button

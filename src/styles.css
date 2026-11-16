@@ -8900,6 +8900,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .engineer-calendar-toolbar__custom .form-error { flex-basis: 100%; margin: 0; font-size: 13px; }
 
 .engineer-calendar__scroll { overflow: auto; }
+.engineer-calendar__scroll:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+/* Период переключили, данные ещё летят: показываем прежние, но видно, что они устаревают. */
+.engineer-calendar__pending { opacity: 0.55; transition: opacity 120ms ease-out; }
 .engineer-calendar__grid {
   --calendar-name-width: 230px;
   --calendar-day-width: minmax(76px, 1fr);
@@ -8957,6 +8960,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   flex-direction: column;
   gap: 2px;
   min-height: 46px;
+  /* День с десятком задач не должен раздувать всю строку: лишнее прокручивается внутри клетки. */
+  max-height: 132px;
+  overflow-y: auto;
   padding: 3px 2px;
   border-top: 1px solid var(--color-border-soft);
   border-left: 1px solid var(--color-border-soft);
@@ -8990,6 +8996,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .calendar-task--continued { min-height: 16px; opacity: 0.7; }
 .calendar-task--continued .calendar-task__number { min-height: 10px; text-align: center; }
 .calendar-task--start { border-left-width: 3px; }
+/* Период начался раньше или кончается позже показанного: в плотном режиме подписи нет,
+   поэтому продолжение видно по рваной границе клетки, а не по стрелке в тексте. */
+.calendar-task--from-before { border-left: 2px dashed currentColor; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.calendar-task--to-after { border-right: 2px dashed currentColor; border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .calendar-task--visit { box-shadow: inset 0 -2px 0 var(--color-accent); }
 .calendar-task--urgent { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--color-border)); }
 .calendar-task--overdue {
