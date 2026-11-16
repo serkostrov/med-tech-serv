@@ -266,6 +266,10 @@ INSERT INTO protected_tables VALUES
   ('site_contacts', 'контакты площадок'), ('payers', 'плательщиков'), ('users', 'сотрудников');
 GRANT SELECT ON protected_tables TO authenticated;
 
+-- Данные готовит владелец схемы: метку вошедшего пользователя снимаем, иначе страж
+-- позиций счёта (0040) примет подготовку за правку из интерфейса.
+SELECT set_config('request.jwt.claims', '', true), set_config('request.jwt.claim.sub', '', true);
+
 DO $$
 DECLARE
   org uuid; site uuid; payer uuid; contact uuid; eq uuid; task uuid; draft uuid; issued uuid; wt text;
@@ -328,10 +332,11 @@ SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM site_payers WHERE
 -- Черновик счёта собирается и правится, выставленный — нет. Здесь проверяются только права:
 -- отложенные проверки (задача закрыта, снимок плательщика) срабатывают при COMMIT, а файл
 -- откатывается. Их проверяет invoice_create.sql через create_invoice.
-SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 500 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
-  (SELECT id FROM ids WHERE k = 'del_draft'), 'work', 'Строка черновика')) = 1, 'координатор добавляет строку в черновик счёта');
-SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_items WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_draft'))) = 1,
-  'координатор убирает строку из черновика счёта');
+-- (0040) Строки счёта собираются сами: прямая запись в invoice_items закрыта стражем
+-- и в черновике. Что строки появляются и пересобираются через функции счёта,
+-- проверяет invoice_items.sql.
+SELECT pg_temp.expect_forbidden(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 500 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
+  (SELECT id FROM ids WHERE k = 'del_draft'), 'work', 'Строка черновика'), 'строку в черновик счёта напрямую не дописать');
 SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO invoice_tasks (invoice_id, task_id) VALUES (%L, %L)',
   (SELECT id FROM ids WHERE k = 'del_draft'), (SELECT id FROM ids WHERE k = 't1'))) = 1, 'координатор добавляет задачу в черновик счёта');
 SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_tasks WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_draft'))) = 1,
@@ -340,6 +345,7 @@ SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_tasks WHE
   'задачу из выставленного счёта не убрать');
 SELECT pg_temp.check(pg_temp.rows_affected(format('UPDATE invoice_tasks SET invoice_id = %L WHERE invoice_id = %L',
   (SELECT id FROM ids WHERE k = 'del_draft'), (SELECT id FROM ids WHERE k = 'del_issued'))) = 0, 'задачу из выставленного счёта не перенести в другой');
+-- Правила строк 0024 отсекают строки выставленного счёта раньше стража: удалять нечего.
 SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_items WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_issued'))) = 0,
   'строку выставленного счёта не удалить');
 SELECT pg_temp.expect_forbidden(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 1 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
@@ -416,7 +422,11 @@ SELECT pg_temp.check(NOT EXISTS (
        'change_equipment_site', 'change_equipment_payer', 'set_my_telegram_chat_id',
        -- 0028: отметку установки пишет в резервы, инженеру туда по политикам склада
        -- нельзя, поэтому функция работает от владельца схемы и проверяет права сама.
-       'set_task_parts_installed')
+       'set_task_parts_installed',
+       -- 0040: сборка позиций счёта читает резервы склада и цены прихода, а роль
+       -- с finance.write может быть без warehouse.read — тогда счёт собрался бы молча
+       -- без запчастей. Поэтому от владельца схемы с проверкой finance.write внутри.
+       'rebuild_invoice_items')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');
