@@ -8695,3 +8695,56 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 @media (max-width: 760px) {
   .engineer-reservations__list li { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* ===== Прайс: цены по видам работ ===== */
+.price-table td.numeric strong { white-space: nowrap; }
+.price-history-row td { padding: 0 14px 12px; background: #f8fafb; }
+.data-table tbody tr.price-history-row:hover td { background: #f8fafb; }
+.price-history__empty { margin: 10px 0 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
+.price-history__list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.price-history__list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--color-border-soft);
+  font-size: 13px;
+}
+.price-history__list strong { min-width: 120px; font-variant-numeric: tabular-nums; }
+.price-history__list span { color: var(--color-ink-soft); }
+.price-history__list small { color: var(--color-muted); font-size: 12.5px; }
+
+/* Что получится после массового изменения: видно до применения */
+.price-preview { display: grid; gap: 6px; }
+.price-preview__label { color: var(--color-ink); font-size: 14px; font-weight: 650; }
+.price-preview__list {
+  display: grid;
+  gap: 0;
+  max-height: 260px;
+  margin: 0;
+  padding: 0 10px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  list-style: none;
+}
+.price-preview__list li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 2px 12px;
+  padding: 8px 0;
+  border-top: 1px solid var(--color-border-soft);
+  font-size: 13px;
+}
+.price-preview__list li:first-child { border-top: 0; }
+.price-preview__name { display: grid; gap: 2px; min-width: 0; }
+.price-preview__name small { color: var(--color-muted); font-size: 12.5px; }
+.price-preview__amounts { color: var(--color-ink-soft); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.price-preview__skip { flex-basis: 100%; color: var(--color-muted); font-size: 12.5px; }
+@media (max-width: 620px) {
+  .price-history__list li, .price-preview__list li { align-items: flex-start; }
+  .price-preview__amounts { white-space: normal; }
+}

@@ -66,6 +66,7 @@ import { EngineerPickupNote, ResultReservationChecks, TaskReservationsSection } 
 import { installedReservationNumbers } from "./reservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
+import { PricePage } from "./PricePage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { preselectedEngineerId } from "./engineer-competencies.js";
@@ -2995,6 +2996,7 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
     case "customers": return <CustomersPage />;
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
+    case "price": return <PricePage />;
     default: return <CoordinatorTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
   }
 }
@@ -3263,7 +3265,7 @@ const navigationPermission: Partial<Record<NavigationId, string>> = {
   tasks: "tasks.read", maintenance: "tasks.assign", equipment: "equipment.read", engineers: "tasks.assign",
   warehouse: "warehouse.read", reservations: "warehouse.read", inventory: "warehouse.read", handoff: "warehouse.write",
   notifications: "notifications.read", reports: "reports.read", customers: "references.read", references: "references.read", finance: "finance.read",
-  access: "users.read"
+  price: "price.read", access: "users.read"
 };
 
 function navigationForSession(role: AppRole, user: ApiSessionUser | null | undefined): readonly NavigationItem[] {
@@ -3271,6 +3273,8 @@ function navigationForSession(role: AppRole, user: ApiSessionUser | null | undef
   return items.filter((item) => {
     if (!user?.permissions) return true;
     if (item.id === "access") return user.permissions.some((permission) => permission === "users.read" || permission === "roles.write");
+    // Прайс смотрят и те, кто ведёт цены, и те, кто выставляет счета: так же устроено правило строк в базе.
+    if (item.id === "price") return user.permissions.some((permission) => permission === "price.read" || permission === "finance.read");
     return user.permissions.includes(navigationPermission[item.id] ?? "");
   });
 }
