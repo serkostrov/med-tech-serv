@@ -51,7 +51,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
-import { companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, taskCalendarDate } from "./task-dates.js";
+import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
@@ -498,6 +498,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
     }
     if (!periodFrom || !periodTo) return fail("Укажите период выполнения: даты «с» и «по»");
     if (periodFrom > periodTo) return fail("Начало периода не может быть позже конца");
+    if (callDate && isFutureCompanyDate(callDate)) return fail("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
     const comment = String(data.get("comment") ?? "").trim();
     setBusy(true);
     try {
@@ -620,7 +621,8 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
       <label className="field-wide">Причина вызова (со слов клиента)<AutoTextarea defaultValue={initialComment} maxLength={2000} name="comment" placeholder="Что случилось с прибором. Инженер увидит это в акте и сможет уточнить" rows={3} /></label>
       <h3 className="task-form-step field-wide"><span>4</span>Сроки и исполнитель</h3>
       <div className="dialog-form-row-3">
-        <label>Дата вызова<DatePicker onChange={setCallDate} value={callDate} /></label>
+        {/* Заявка не могла поступить завтра: дальше сегодняшнего дня календарь не пускает (миграция 0037). */}
+        <label>Дата вызова<DatePicker max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" onChange={setCallDate} value={callDate} /></label>
         <label>Выполнить с *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodFrom(value); }} required value={periodFrom} /></label>
         <label>Выполнить до *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodTo(value); }} required value={periodTo} /></label>
       </div>
@@ -840,6 +842,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       const callDate = taskCalendarDate(String(data.get("callDate") ?? ""));
       const visitValue = String(data.get("visitDate") ?? "").trim();
       const visitDate = visitValue ? taskCalendarDate(visitValue) : undefined;
+      if (isFutureCompanyDate(callDate)) throw new Error("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
       if (visitDate && visitDate < callDate) throw new Error("Дата выезда не может быть раньше даты вызова");
       // Время работ из акта относится к дню выезда: при смене даты переносим его на новый день.
       const hasActTimes = Boolean(task.workStartedAt || task.workFinishedAt);
@@ -1265,7 +1268,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео). Можно выбрать сразу несколько.`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
     {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
-    <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
+    <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}
@@ -1969,11 +1972,13 @@ function EquipmentAssignmentForm({
     }
     setBusy(true);
     try {
+      const occurredAt = localDateTimeToIso(String(data.get("occurredAt") ?? ""));
+      assertNotFutureCompanyMoment(occurredAt, "Дата перемещения");
       await onApply({
         kind,
         targetId: target.id,
         targetName: target.name,
-        occurredAt: localDateTimeToIso(String(data.get("occurredAt") ?? "")),
+        occurredAt,
         comment: String(data.get("comment") ?? "")
       });
     } catch (changeError) {
@@ -1994,7 +1999,7 @@ function EquipmentAssignmentForm({
       title={kind === "site_change" ? "Смена места установки" : "Смена плательщика"}
     >
       <label>{kind === "site_change" ? "Новая площадка" : "Новый плательщик"} *<Select defaultValue={available[0]?.id} name="targetId" required>{available.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</Select></label>
-      <label>Когда произошло *<DateTimePicker defaultValue={localDateTimeInputValue()} name="occurredAt" required /></label>
+      <label>Когда произошло *<DateTimePicker defaultValue={localDateTimeInputValue()} max={companyToday()} maxMessage="Событие не могло произойти позже сегодняшнего дня" name="occurredAt" required /></label>
       <label className="field-wide">Комментарий *<AutoTextarea maxLength={2000} name="comment" placeholder="Причина перемещения или смены плательщика" required rows={3} /></label>
     </DialogForm>
   );
@@ -2018,8 +2023,10 @@ function ManualEquipmentHistoryForm({
     const data = new FormData(event.currentTarget);
     setBusy(true);
     try {
+      const occurredAt = localDateTimeToIso(String(data.get("occurredAt") ?? ""));
+      assertNotFutureCompanyMoment(occurredAt, "Дата события");
       await onAdd({
-        occurredAt: localDateTimeToIso(String(data.get("occurredAt") ?? "")),
+        occurredAt,
         summary: String(data.get("summary") ?? ""),
         client: String(data.get("client") ?? ""),
         description: String(data.get("description") ?? "")
@@ -2042,7 +2049,7 @@ function ManualEquipmentHistoryForm({
       submitLabel="Добавить в историю"
       title="Прошлое событие прибора"
     >
-      <label>Дата и время события *<DateTimePicker name="occurredAt" required /></label>
+      <label>Дата и время события *<DateTimePicker max={companyToday()} maxMessage="Событие не могло произойти позже сегодняшнего дня" name="occurredAt" required /></label>
       <label>Вид / название события *<input maxLength={200} name="summary" placeholder="Например, диагностика" required /></label>
       <label className="field-wide">Клиент на дату события *<input defaultValue={record.place} maxLength={500} name="client" required /></label>
       <label className="field-wide">Исходное описание<AutoTextarea maxLength={50000} name="description" placeholder="Можно оставить пустым, если описания в источнике не было" rows={7} /></label>

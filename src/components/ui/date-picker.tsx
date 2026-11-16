@@ -79,6 +79,10 @@ export interface DatePickerProps {
   readonly allowClear?: boolean;
   readonly id?: string;
   readonly "aria-label"?: string;
+  /** Не позже этого дня, «ГГГГ-ММ-ДД». Нужен датам, которые не бывают из будущего (миграция 0037). */
+  readonly max?: string;
+  /** Что сказать, когда дата позже предела. */
+  readonly maxMessage?: string;
 }
 
 export function DatePicker({
@@ -90,7 +94,9 @@ export function DatePicker({
   disabled = false,
   allowClear,
   id,
-  "aria-label": ariaLabel
+  "aria-label": ariaLabel,
+  max,
+  maxMessage = "Эта дата ещё не наступила"
 }: DatePickerProps) {
   const generatedId = useId();
   const inputId = id ?? generatedId;
@@ -126,6 +132,11 @@ export function DatePicker({
         return true;
       }
       inputRef.current?.setCustomValidity("Укажите дату в формате дд.мм.гггг");
+      inputRef.current?.reportValidity();
+      return false;
+    }
+    if (max && parsed > max) {
+      inputRef.current?.setCustomValidity(maxMessage);
       inputRef.current?.reportValidity();
       return false;
     }
@@ -235,15 +246,17 @@ export function DatePicker({
                 aria-current={day === today ? "date" : undefined}
                 aria-pressed={day === iso}
                 className={cn("date-picker-popover__day", day === iso && "is-selected", day === today && "is-today")}
+                disabled={Boolean(max) && day > (max ?? "")}
                 key={day}
                 onClick={() => { commit(day); setOpen(false); }}
                 onMouseDown={(event) => event.preventDefault()}
+                title={Boolean(max) && day > (max ?? "") ? maxMessage : undefined}
                 type="button"
               >{Number(day.slice(8))}</button>
             : <span className="date-picker-popover__empty" key={`empty-${index}`} />)}
         </div>
         <div className="date-picker-popover__footer">
-          <button onMouseDown={(event) => event.preventDefault()} onClick={() => { commit(today); setCursor(monthCursorFromIso(today)); setOpen(false); }} type="button">Сегодня</button>
+          <button disabled={Boolean(max) && today > (max ?? "")} onMouseDown={(event) => event.preventDefault()} onClick={() => { commit(today); setCursor(monthCursorFromIso(today)); setOpen(false); }} type="button">Сегодня</button>
           {canClear ? <button onMouseDown={(event) => event.preventDefault()} onClick={() => { commit(""); setOpen(false); }} type="button">Очистить</button> : null}
         </div>
       </div>,
@@ -311,6 +324,9 @@ export interface DateTimePickerProps {
   readonly onChange?: (value: string) => void;
   readonly required?: boolean;
   readonly disabled?: boolean;
+  /** Не позже этого дня, «ГГГГ-ММ-ДД»: время внутри дня любое. */
+  readonly max?: string;
+  readonly maxMessage?: string;
 }
 
 export function DateTimePicker({
@@ -319,7 +335,9 @@ export function DateTimePicker({
   defaultValue = "",
   onChange,
   required = false,
-  disabled = false
+  disabled = false,
+  max,
+  maxMessage
 }: DateTimePickerProps) {
   const controlled = value !== undefined;
   const [internal, setInternal] = useState(defaultValue);
@@ -343,6 +361,8 @@ export function DateTimePicker({
     <div className="date-time-picker" data-date-picker="">
       <DatePicker
         disabled={disabled}
+        {...(max ? { max } : {})}
+        {...(maxMessage ? { maxMessage } : {})}
         onChange={(date) => {
           const typed = parseDisplayTime(timeDraftRef.current);
           const time = typed || parts.time || (date ? currentTime() : "");
