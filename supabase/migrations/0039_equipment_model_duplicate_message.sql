@@ -35,7 +35,9 @@ BEGIN
      AND model.id <> NEW.id
    LIMIT 1;
 
-  IF existing IS NOT NULL THEN
+  -- FOUND, а не «existing IS NOT NULL»: для составного значения второе истинно,
+  -- только когда непусты все поля, и сломалось бы от любого нового столбца в SELECT.
+  IF FOUND THEN
     RAISE EXCEPTION 'Модель «%» у производителя «%» уже есть в справочнике%. Регистр и пробелы при проверке не учитываются',
       btrim(NEW.name), existing.manufacturer_name,
       CASE WHEN existing.is_active THEN '' ELSE ', но скрыта: верните её кнопкой «Показать»' END
