@@ -160,6 +160,19 @@ SELECT pg_temp.check((SELECT money_hidden FROM audit_log_journal WHERE entity_ty
 SELECT pg_temp.check((SELECT after_data ->> 'status' FROM audit_log_journal
                        WHERE entity_type = 'invoice' AND table_name = 'invoices' ORDER BY id DESC LIMIT 1) IS NOT NULL,
   'неденежные поля счёта аудитору видны');
+-- Список изменённых полей идёт рядом со снимком: названий вырезанных полей в нём быть не должно.
+SELECT pg_temp.check(NOT EXISTS (
+  SELECT 1 FROM audit_log_journal AS event
+   WHERE event.entity_type = 'invoice'
+     AND 'total_amount' = ANY (event.changed_fields)),
+  'без права на финансы в списке изменённых полей нет даже названий денежных');
+SELECT pg_temp.act_as_nobody();
+SELECT pg_temp.act_as(pg_temp.uid('coordinator'));
+SELECT pg_temp.check(EXISTS (
+  SELECT 1 FROM audit_log_journal AS event
+   WHERE event.entity_type = 'invoice' AND event.table_name = 'invoices'
+     AND 'total_amount' = ANY (event.changed_fields)),
+  'с правом на финансы изменённые денежные поля в списке остаются');
 SELECT pg_temp.act_as_nobody();
 -- В событиях задачи и прибора денег нет с самой записи: вырезает audit_sanitize_jsonb.
 SELECT pg_temp.check(NOT EXISTS (
@@ -274,18 +287,30 @@ SELECT pg_temp.check((SELECT NOT success AND user_id IS NULL AND user_agent IS N
                         FROM login_events WHERE ip_address = inet '203.0.113.9'),
   'присланные успех, автор, время, адрес и браузер отброшены, остался только набранный адрес');
 
--- Завалить журнал потоком попыток не выйдет: сверх предела строки не пишутся.
+-- Завалить журнал потоком попыток не выйдет: сверх предела строки не пишутся,
+-- но и затереть журнал потоком тоже нельзя — предел считается по паре
+-- «адрес + набранный логин», а обрыв счёта виден отметкой.
 SELECT pg_temp.act_as_anon();
 SELECT pg_temp.from_ip('198.51.100.4');
 DO $$
 BEGIN
   FOR i IN 1..25 LOOP
-    PERFORM public.record_failed_login(format('flood%s@journal.test', i), 'invalid_credentials');
+    PERFORM public.record_failed_login('flood@journal.test', 'invalid_credentials');
   END LOOP;
 END $$;
+-- Настоящая попытка с того же адреса, но под другим адресом входа: поток её не вытеснил.
+SELECT public.record_failed_login('coordinator@journal.test', 'invalid_credentials');
 SELECT pg_temp.act_as_nobody();
-SELECT pg_temp.check((SELECT count(*) FROM login_events WHERE ip_address = inet '198.51.100.4') = 20,
-  'больше 20 попыток в минуту с одного адреса в журнал не попадают');
+SELECT pg_temp.check((SELECT count(*) FROM login_events
+                       WHERE ip_address = inet '198.51.100.4' AND attempted_login = 'flood@journal.test') = 21,
+  'сверх 20 попыток в минуту с пары «адрес и логин» пишется одна отметка и всё');
+SELECT pg_temp.check((SELECT count(*) FROM login_events
+                       WHERE ip_address = inet '198.51.100.4' AND attempted_login = 'flood@journal.test'
+                         AND failure_reason = 'too_many_attempts') = 1,
+  'обрыв счёта попыток виден в журнале отметкой «слишком много попыток»');
+SELECT pg_temp.check((SELECT count(*) FROM login_events
+                       WHERE ip_address = inet '198.51.100.4' AND attempted_login = 'coordinator@journal.test') = 1,
+  'поток попыток под одним адресом не мешает записать попытку под другим');
 
 -- Строка журнала входов не меняется и не удаляется.
 SELECT pg_temp.act_as(pg_temp.uid('coordinator'));
@@ -296,14 +321,14 @@ SELECT pg_temp.act_as_nobody();
 
 -- ---------------------------------------------------------------- Журнал входов: чтение
 SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
-SELECT pg_temp.check((public.login_journal() -> 'total')::bigint = 23, 'в журнале входов все записанные попытки');
+SELECT pg_temp.check((public.login_journal() -> 'total')::bigint = 25, 'в журнале входов все записанные попытки');
 SELECT pg_temp.check(jsonb_array_length(public.login_journal(NULL, NULL, NULL, NULL, NULL, 5, 0) -> 'items') = 5,
   'журнал входов отдаётся страницей, а не целиком');
 SELECT pg_temp.check((public.login_journal() -> 'successSourceAvailable')::boolean = false,
   'пока журнала входа GoTrue нет, журнал честно говорит, что удачные входы взять негде');
 SELECT pg_temp.check((public.login_journal(pg_temp.uid('engineer')) -> 'total')::bigint = 1,
   'журнал входов отбирается по человеку');
-SELECT pg_temp.check((public.login_journal(NULL, 'failure') -> 'total')::bigint = 23
+SELECT pg_temp.check((public.login_journal(NULL, 'failure') -> 'total')::bigint = 25
   AND (public.login_journal(NULL, 'success') -> 'total')::bigint = 0,
   'журнал входов отбирается по исходу');
 SELECT pg_temp.check((public.login_journal(NULL, NULL, '203.0.113.7') -> 'total')::bigint = 2,
@@ -311,7 +336,7 @@ SELECT pg_temp.check((public.login_journal(NULL, NULL, '203.0.113.7') -> 'total'
 SELECT pg_temp.check((public.login_journal(NULL, NULL, 'Журнал engineer') -> 'total')::bigint = 1,
   'журнал входов ищется по имени сотрудника');
 SELECT pg_temp.check((public.login_journal(NULL, NULL, NULL, now() + interval '1 hour') -> 'total')::bigint = 0
-  AND (public.login_journal(NULL, NULL, NULL, now() - interval '1 hour') -> 'total')::bigint = 23,
+  AND (public.login_journal(NULL, NULL, NULL, now() - interval '1 hour') -> 'total')::bigint = 25,
   'журнал входов отбирается по дате');
 SELECT pg_temp.check((public.login_journal() -> 'items' -> 0 ->> 'ipAddress') IS NOT NULL
   AND (public.login_journal() -> 'items' -> 0 ->> 'occurredAt') IS NOT NULL
@@ -341,7 +366,7 @@ SELECT pg_temp.check((public.login_journal() -> 'successSourceAvailable')::boole
   'журнал входа GoTrue найден: удачные входы есть откуда взять');
 SELECT pg_temp.check((public.login_journal(NULL, 'success') -> 'total')::bigint = 2,
   'удачные входы в журнале: ровно входы, выходы не считаются входом');
-SELECT pg_temp.check((public.login_journal() -> 'total')::bigint = 25, 'в журнале входов и удачные, и неудачные');
+SELECT pg_temp.check((public.login_journal() -> 'total')::bigint = 27, 'в журнале входов и удачные, и неудачные');
 SELECT pg_temp.check((public.login_journal(pg_temp.uid('engineer')) -> 'total')::bigint = 2,
   'по сотруднику видно и его удачный вход, и неудачную попытку');
 SELECT pg_temp.check((public.login_journal(NULL, NULL, '203.0.113.11') -> 'items' -> 0 ->> 'userName') = 'Журнал coordinator',

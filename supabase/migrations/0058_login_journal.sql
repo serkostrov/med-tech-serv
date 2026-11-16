@@ -19,8 +19,14 @@
 -- Почему запись неудачной попытки открыта без входа. У неудачной попытки сессии нет,
 -- значит писать её может только анонимное обращение. Чтобы этим нельзя было
 -- воспользоваться, строку формирует не браузер, а сама база: триггер подставляет время,
--- адрес и сотрудника, приводит причину к списку и отбрасывает всё остальное. Больше
--- 20 попыток в минуту с одного адреса в журнал не попадают: заваливать журнал бесполезно.
+-- адрес и сотрудника, приводит причину к списку и отбрасывает всё остальное.
+-- Поток попыток журнал не раздувает и не вытесняет из него чужие записи — как это
+-- устроено, написано у самого предела в fill_login_event.
+--
+-- Чего журнал не доказывает. Набранный адрес в неудачной попытке — это то, что ввели
+-- в поле входа, а не подтверждённый сотрудник: совпадение с e-mail сотрудника находит
+-- база, но набрать чужой адрес может кто угодно. Адрес обращения приходит из заголовка
+-- обратного прокси. Экран об этом говорит прямо, чтобы журнал не читали как доказательство.
 --
 -- Миграцию можно применить повторно.
 
@@ -132,7 +138,12 @@ AS $$
 DECLARE
   login text := lower(btrim(coalesce(NEW.attempted_login, '')));
   caller_ip inet := public.request_ip_address();
+  -- Предел на пару «адрес + набранный логин»: столько попыток в минуту ещё пишем.
+  pair_limit constant integer := 20;
+  -- Общий предел на журнал: даёт потолок росту, если адреса и логины перебирают.
+  total_limit constant integer := 500;
   recent integer;
+  marked boolean;
 BEGIN
   -- Запись о входе всегда в тот момент, когда она случилась.
   NEW.occurred_at := now();
@@ -141,8 +152,9 @@ BEGIN
   NEW.user_agent := NULL;
   NEW.session_id := NULL;
 
-  -- Из запроса принимается только набранный адрес и причина отказа.
-  IF login !~ '^[^[:space:]@]+@[^[:space:]@]+$' OR length(login) > 320 THEN
+  -- Из запроса принимается только набранный адрес и причина отказа. Длиннее
+  -- почтового адреса (254 знака по RFC 5321) это уже не адрес, а мусор в журнале.
+  IF login !~ '^[^[:space:]@]+@[^[:space:]@]+$' OR length(login) > 254 THEN
     login := NULL;
   END IF;
   NEW.attempted_login := login;
@@ -161,24 +173,55 @@ BEGIN
     SELECT person.id FROM public.users AS person WHERE lower(person.email) = login LIMIT 1
   ) END;
 
-  -- Журнал нельзя завалить потоком попыток: сверх предела строка просто не пишется,
-  -- а те, что уже записаны, остаются. Считаем по адресу, а без адреса — по логину.
+  -- Журнал нельзя завалить потоком попыток, но и затереть потоком — тоже.
+  --
+  -- Предел считается по паре «адрес + набранный логин», а не по одному адресу:
+  -- адрес приходит из заголовка обратного прокси, и если его подменить на адрес
+  -- офиса, предел по адресу погасил бы запись настоящих попыток из этого офиса
+  -- (а на общем адресе офиса предел достижим и без подмены). По паре вытеснить
+  -- чужую попытку можно, только зная и адрес, и логин, и в журнале это всё равно
+  -- останется видно.
+  --
+  -- Сверх предела строка не теряется молча: один раз на минуту и пару пишется
+  -- отметка «слишком много попыток», и по ней видно, что счёт попыток оборвался.
+  -- Параллельные попытки считаются по очереди: без блокировки предел можно было бы
+  -- проскочить несколькими запросами разом.
+  PERFORM pg_advisory_xact_lock(hashtextextended(
+    'medtechservice:login-journal:' || coalesce(host(caller_ip), '') || '|' || coalesce(login, ''), 0));
+
   SELECT count(*) INTO recent
     FROM public.login_events AS earlier
    WHERE earlier.occurred_at > now() - interval '1 minute'
-     AND (CASE WHEN caller_ip IS NULL
-            THEN earlier.ip_address IS NULL AND earlier.attempted_login IS NOT DISTINCT FROM login
-            ELSE earlier.ip_address = caller_ip END);
-  IF recent >= 20 THEN
-    RETURN NULL;
+     AND earlier.ip_address IS NOT DISTINCT FROM caller_ip
+     AND earlier.attempted_login IS NOT DISTINCT FROM login;
+  IF recent < pair_limit THEN
+    -- Общий потолок журнала: перебор адресов и логинов мимо парного предела
+    -- не должен раздувать таблицу без конца.
+    SELECT count(*) INTO recent
+      FROM public.login_events AS earlier
+     WHERE earlier.occurred_at > now() - interval '1 minute';
+    IF recent < total_limit THEN
+      RETURN NEW;
+    END IF;
   END IF;
 
+  SELECT EXISTS (
+    SELECT 1 FROM public.login_events AS earlier
+     WHERE earlier.occurred_at > now() - interval '1 minute'
+       AND earlier.ip_address IS NOT DISTINCT FROM caller_ip
+       AND earlier.attempted_login IS NOT DISTINCT FROM login
+       AND earlier.failure_reason = 'too_many_attempts')
+    INTO marked;
+  IF marked THEN
+    RETURN NULL;
+  END IF;
+  NEW.failure_reason := 'too_many_attempts';
   RETURN NEW;
 END
 $$;
 
 COMMENT ON FUNCTION public.fill_login_event() IS
-  'Строка журнала входов (0058): время, адрес и сотрудника подставляет база, причину приводит к списку, удачный вход через API не пишется, сверх 20 попыток в минуту с адреса строка не добавляется.';
+  'Строка журнала входов (0058): время, адрес и сотрудника подставляет база, причину приводит к списку, удачный вход через API не пишется. Сверх 20 попыток в минуту с одной пары «адрес + логин» (или 500 на весь журнал) пишется одна отметка «слишком много попыток», дальше строки не добавляются.';
 
 REVOKE EXECUTE ON FUNCTION public.fill_login_event() FROM PUBLIC, anon, authenticated;
 

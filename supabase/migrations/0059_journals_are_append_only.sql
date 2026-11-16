@@ -78,6 +78,9 @@ DECLARE
 BEGIN
   FOREACH tbl IN ARRAY ARRAY['audit_log', 'login_events'] LOOP
     EXECUTE format('REVOKE UPDATE, DELETE, TRUNCATE ON TABLE public.%I FROM PUBLIC, anon, authenticated', tbl);
+    -- Обращению без входа журналы не читаются и по правилам строк, но право ему
+    -- тоже ни к чему: отказ должен приходить от прав, а не только от правил.
+    EXECUTE format('REVOKE SELECT ON TABLE public.%I FROM anon', tbl);
     IF NOT (SELECT c.relrowsecurity FROM pg_class AS c WHERE c.oid = format('public.%I', tbl)::regclass) THEN
       RAISE EXCEPTION 'Миграция 0059: у таблицы % выключены правила строк (RLS), журнал не закрыть', tbl;
     END IF;

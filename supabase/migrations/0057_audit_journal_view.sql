@@ -49,6 +49,35 @@ $$;
 COMMENT ON FUNCTION public.audit_event_snapshot(jsonb, text, boolean) IS
   'Снимок события журнала для экрана (0057): без finance.read денежные поля события счёта вырезаются ещё раз, остальные события от этого не меняются.';
 
+-- Список изменённых полей идёт рядом со снимком и должен ему соответствовать: иначе
+-- у события счёта смотрящий без права на финансы видел бы названия денежных полей
+-- («Сумма счёта», «Корректировка суммы»), которых в снимке уже нет.
+CREATE OR REPLACE FUNCTION public.audit_visible_changed_fields(
+  p_changed_fields text[],
+  p_before jsonb,
+  p_after jsonb,
+  p_entity_type text,
+  p_with_money boolean
+)
+RETURNS text[]
+LANGUAGE sql
+IMMUTABLE
+SET search_path = public, pg_temp
+AS $$
+  SELECT CASE
+    WHEN p_with_money OR p_entity_type <> 'invoice' THEN coalesce(p_changed_fields, ARRAY[]::text[])
+    ELSE ARRAY(
+      SELECT changed.field
+        FROM unnest(coalesce(p_changed_fields, ARRAY[]::text[])) WITH ORDINALITY AS changed(field, position)
+       WHERE coalesce(public.audit_sanitize_jsonb(p_before), '{}'::jsonb) ? changed.field
+          OR coalesce(public.audit_sanitize_jsonb(p_after), '{}'::jsonb) ? changed.field
+       ORDER BY changed.position)
+  END
+$$;
+
+COMMENT ON FUNCTION public.audit_visible_changed_fields(text[], jsonb, jsonb, text, boolean) IS
+  'Изменённые поля события для экрана (0057): без finance.read у события счёта остаются только те, что видны в снимке.';
+
 -- Экранный журнал изменений. Правами вызывающего: правило строк audit_log (audit.read)
 -- остаётся единственным решением о доступе.
 DROP VIEW IF EXISTS public.audit_log_journal;
@@ -67,7 +96,7 @@ SELECT
   event.outcome,
   event.entity_type,
   event.entity_id,
-  event.changed_fields,
+  public.audit_visible_changed_fields(event.changed_fields, event.before_data, event.after_data, event.entity_type, (SELECT public.app_has_permission('finance.read'))) AS changed_fields,
   nullif(btrim(coalesce(event.metadata ->> 'table_name', '')), '') AS table_name,
   public.audit_event_snapshot(event.before_data, event.entity_type, (SELECT public.app_has_permission('finance.read'))) AS before_data,
   public.audit_event_snapshot(event.after_data, event.entity_type, (SELECT public.app_has_permission('finance.read'))) AS after_data,
@@ -86,8 +115,10 @@ COMMENT ON VIEW public.audit_log_journal IS
 -- Представление работает правами вызывающего, поэтому вызывающему нужны и функции,
 -- которыми он смотрит: проверка права и вырезание денег.
 GRANT EXECUTE ON FUNCTION public.audit_event_snapshot(jsonb, text, boolean) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.audit_visible_changed_fields(text[], jsonb, jsonb, text, boolean) TO authenticated;
 GRANT EXECUTE ON FUNCTION public.audit_sanitize_jsonb(jsonb) TO authenticated;
 REVOKE ALL ON FUNCTION public.audit_event_snapshot(jsonb, text, boolean) FROM PUBLIC, anon;
+REVOKE ALL ON FUNCTION public.audit_visible_changed_fields(text[], jsonb, jsonb, text, boolean) FROM PUBLIC, anon;
 
 -- Представление только читают: запись в журнал идёт служебными триггерами.
 -- Простое представление по одной таблице PostgreSQL считает изменяемым, поэтому
@@ -96,12 +127,16 @@ REVOKE ALL ON public.audit_log_journal FROM PUBLIC, anon;
 REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON public.audit_log_journal FROM authenticated;
 GRANT SELECT ON public.audit_log_journal TO authenticated;
 
--- Поиск по журналу идёт по номеру объекта и действию: на стенде это десятки тысяч
--- строк, и отбирать их браузером нельзя. Индексы под фильтры «кто» и «объект» уже
--- есть (audit_log_actor_timeline_idx, audit_log_entity_timeline_idx, 0001).
-CREATE INDEX IF NOT EXISTS audit_log_entity_id_trgm_idx
-  ON public.audit_log USING gin (entity_id gin_trgm_ops);
-CREATE INDEX IF NOT EXISTS audit_log_action_trgm_idx
-  ON public.audit_log USING gin (action gin_trgm_ops);
+-- Экран открывается последними событиями и листает их страницами, поэтому индекс
+-- нужен именно под этот порядок: без него каждая страница читает весь журнал.
+-- Индексы под фильтры «кто» и «объект» уже есть (audit_log_actor_timeline_idx,
+-- audit_log_entity_timeline_idx, 0001). Отдельных индексов под поиск не заводим:
+-- поиск идёт по нескольким столбцам сразу (OR), из них один — имя автора из
+-- соседней таблицы, и ни один индекс такой запрос не ускорит, а писались бы они
+-- при каждом изменении в системе.
+CREATE INDEX IF NOT EXISTS audit_log_timeline_idx
+  ON public.audit_log (occurred_at DESC, id DESC);
+DROP INDEX IF EXISTS public.audit_log_entity_id_trgm_idx;
+DROP INDEX IF EXISTS public.audit_log_action_trgm_idx;
 
 NOTIFY pgrst, 'reload schema';
