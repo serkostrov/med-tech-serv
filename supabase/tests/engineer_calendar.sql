@@ -13,6 +13,11 @@ BEGIN
   EXECUTE 'SET LOCAL ROLE authenticated';
 END $$;
 
+-- Та же подготовка, что в invoice_create.sql: закрытие в обход проверок.
+SET session_replication_role = replica;
+UPDATE tasks SET status_code = 'closed' WHERE title = 'Календарь: закрытая';
+SET session_replication_role = DEFAULT;
+
 CREATE FUNCTION pg_temp.check(p_ok boolean, p_label text) RETURNS void LANGUAGE plpgsql AS $$
 BEGIN
   IF NOT coalesce(p_ok, false) THEN
@@ -111,16 +116,22 @@ BEGIN
   -- поэтому такие строки бывают только историческими — из данных до этого ограничения.
   -- Ограничение заведено NOT VALID, то есть старые строки оно пропускает, а новые нет;
   -- чтобы завести такие строки в тесте, снимаем его на время транзакции (ROLLBACK вернёт).
+  -- Отложенные триггеры задач должны сработать до ALTER TABLE: иначе Postgres
+  -- откажет словами «cannot ALTER TABLE because it has pending trigger events».
+  SET CONSTRAINTS ALL IMMEDIATE;
   EXECUTE 'ALTER TABLE public.tasks DROP CONSTRAINT tasks_execution_period_required';
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, visit_date, status_code)
   VALUES ('Календарь: только выезд', wt, eq, site, payer, e2, coord, '2026-11-10', '2026-11-19', 'assigned') RETURNING id INTO t_visit;
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, status_code)
   VALUES ('Календарь: без срока', wt, eq, site, payer, e2, coord, '2026-11-10', 'assigned') RETURNING id INTO t_undated;
+  SET CONSTRAINTS ALL IMMEDIATE;
   EXECUTE 'ALTER TABLE public.tasks ADD CONSTRAINT tasks_execution_period_required CHECK (deadline_from IS NOT NULL AND deadline_to IS NOT NULL) NOT VALID';
 
   -- Неактивный инженер: закрытая задача в дне периода (день она всё-таки заняла).
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, deadline_from, deadline_to, status_code, work_completed, apparatus_approved, customer_has_no_claims, call_reason, work_description)
-  VALUES ('Календарь: закрытая', wt, eq, site, payer, e3, coord, '2026-11-10', '2026-11-20', '2026-11-20', 'closed', true, true, true, 'Не включается', 'Заменён блок питания') RETURNING id INTO t_closed;
+  -- Закрываем ниже, в обход проверок закрытия: акт и фото здесь не проверяем,
+  -- важно только то, что закрытая задача всё равно занимает свой день в календаре.
+  VALUES ('Календарь: закрытая', wt, eq, site, payer, e3, coord, '2026-11-10', '2026-11-20', '2026-11-20', 'assigned', true, true, true, 'Не включается', 'Заменён блок питания') RETURNING id INTO t_closed;
 
   -- Задача периода без инженера: её назначают из календаря.
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, call_date, deadline_from, deadline_to, status_code)
