@@ -71,6 +71,18 @@ export function canChangeEmployeeRole(employeeId: string, viewerId: string): boo
   return employeeId !== viewerId;
 }
 
+/**
+ * Можно ли менять права этой роли.
+ *
+ * Свою роль человек не правит: сняв с неё «Изменение сотрудников», он теряет доступ
+ * к учётным записям, а матрица прав сохраняется как «удалить все и записать заново» —
+ * после первого запроса прав уже нет, и второй не разрешат, роль осталась бы пустой.
+ * Запрет держит база (миграция 0035). Название роли правится по-прежнему.
+ */
+export function canChangeRolePermissions(roleKey: string, viewerRoleKey: string | undefined): boolean {
+  return roleKey !== viewerRoleKey;
+}
+
 /** Сколько администраторов сейчас могут войти: по этому числу решается запрет выше. */
 export function activeAdminCount(employees: readonly DisableCandidate[]): number {
   return employees.filter((employee) => employee.isActive && employee.role === "admin").length;

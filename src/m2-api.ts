@@ -1575,6 +1575,12 @@ export class M2ApiClient {
       throwIfError(error);
     }
     if (Array.isArray(input.permissions)) {
+      // Права своей роли не меняют (миграция 0035): сказать это надо до удаления строк,
+      // иначе половина правки уйдёт на сервер и вернётся отказом на середине.
+      const session = await this.cachedSession();
+      if (key === (session.accessRoleKey ?? session.role)) {
+        throw new M2ApiError(400, "Права своей роли менять нельзя: так можно остаться без доступа к системе. Попросите другого администратора");
+      }
       const { error: delError } = await this.db().from("access_role_permissions").delete().eq("role_key", key);
       throwIfError(delError);
       const permissions = input.permissions as readonly string[];

@@ -211,6 +211,83 @@ UPDATE tasks SET status_code = 'closed' WHERE id = pg_temp.uid('task_second');
 SELECT pg_temp.check((SELECT last_meter_reading FROM equipment WHERE id = pg_temp.uid('fresh')) = 1200,
   'после правки наряд принят, в паспорте 1200');
 
+-- ---------------------------------------------------------------- Обратный порядок приёмки
+-- Порядок приёмки от порядка сдачи не зависит: ранний наряд мог ждать доснятых фото.
+-- Поэтому проверка смотрит на время измерения, а не на самое большое число в журнале.
+DO $$
+DECLARE
+  eq uuid; early uuid; late uuid; act_a uuid; act_b uuid; wt text; manuf uuid; model uuid;
+BEGIN
+  SELECT code INTO wt FROM work_types WHERE is_active ORDER BY code LIMIT 1;
+  SELECT manufacturer_id, model_id INTO manuf, model FROM equipment WHERE id = (SELECT id FROM ids WHERE k = 'fresh');
+  INSERT INTO equipment (serial_number, manufacturer_id, model_id, current_site_id, current_payer_id)
+  SELECT 'SN-ORDER', manuf, model, current_site_id, current_payer_id FROM equipment WHERE id = (SELECT id FROM ids WHERE k = 'fresh')
+  RETURNING id INTO eq;
+
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by,
+                     call_date, deadline_from, deadline_to, status_code, call_reason, work_description, visit_date)
+  SELECT 'Ранний наряд', wt, eq, task.site_id, task.payer_id, task.engineer_id, task.created_by,
+         current_date, current_date, current_date + 7, 'in_progress', 'Шум', 'Заменён узел', current_date
+    FROM tasks AS task WHERE task.id = (SELECT id FROM ids WHERE k = 'task')
+  RETURNING id INTO early;
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by,
+                     call_date, deadline_from, deadline_to, status_code, call_reason, work_description, visit_date)
+  SELECT 'Поздний наряд', wt, eq, task.site_id, task.payer_id, task.engineer_id, task.created_by,
+         current_date, current_date, current_date + 7, 'in_progress', 'ТО', 'Плановое ТО', current_date
+    FROM tasks AS task WHERE task.id = (SELECT id FROM ids WHERE k = 'task')
+  RETURNING id INTO late;
+
+  INSERT INTO files (task_id, kind, original_name, content_type, byte_size, storage_key, uploaded_by)
+  SELECT t.id, 'photo', 'order' || t.id || g || '.jpg', 'image/jpeg', 10, 'k/order/' || t.id || '/' || g,
+         (SELECT id FROM ids WHERE k = 'coord')
+    FROM (VALUES (early), (late)) AS t(id), generate_series(1, 3) AS g;
+  INSERT INTO files (task_id, kind, original_name, content_type, byte_size, storage_key, uploaded_by)
+  VALUES (early, 'act', 'order-a.jpg', 'image/jpeg', 10, 'k/order/a', (SELECT id FROM ids WHERE k = 'coord'))
+  RETURNING id INTO act_a;
+  INSERT INTO files (task_id, kind, original_name, content_type, byte_size, storage_key, uploaded_by)
+  VALUES (late, 'act', 'order-b.jpg', 'image/jpeg', 10, 'k/order/b', (SELECT id FROM ids WHERE k = 'coord'))
+  RETURNING id INTO act_b;
+  -- Ранний наряд сдан три часа назад, поздний — час назад.
+  INSERT INTO task_closures (task_id, act_file_id, submitted_by, submitted_at) VALUES
+    (early, act_a, (SELECT id FROM ids WHERE k = 'eng'), now() - interval '3 hours'),
+    (late, act_b, (SELECT id FROM ids WHERE k = 'eng'), now() - interval '1 hour');
+  INSERT INTO ids VALUES ('order_eq', eq), ('order_early', early), ('order_late', late);
+END $$;
+
+SELECT pg_temp.act_as(pg_temp.uid('eng'));
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.tasks SET meter_reading = 1000 WHERE id = %L', (SELECT id FROM ids WHERE k = 'order_early'))) = 1,
+  'ранний наряд: показание 1000');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.tasks SET meter_reading = 500 WHERE id = %L', (SELECT id FROM ids WHERE k = 'order_late'))) = 1,
+  'поздний наряд: ошибочное показание 500 на вводе ещё не с чем сравнить');
+SELECT pg_temp.act_as_nobody();
+
+UPDATE tasks SET status_code = 'under_review' WHERE id = pg_temp.uid('order_early');
+UPDATE tasks SET status_code = 'under_review' WHERE id = pg_temp.uid('order_late');
+-- Принимаем поздний наряд первым: именно этот порядок обходил прежнюю проверку.
+UPDATE tasks SET status_code = 'closed' WHERE id = pg_temp.uid('order_late');
+SELECT pg_temp.expect_russian_refusal(
+  format('UPDATE public.tasks SET status_code = ''closed'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'order_early')),
+  'ранний наряд с большим показанием не принять после позднего с меньшим');
+SELECT pg_temp.check(
+  (SELECT count(*) FROM equipment_meter_readings WHERE equipment_id = pg_temp.uid('order_eq')) = 1,
+  'в журнале осталась одна запись: убывающий ряд не сложился ни при каком порядке');
+
+-- Обратная сторона: верные данные в обратном порядке приёмки должны проходить.
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.tasks SET meter_reading = 400 WHERE id = %L', (SELECT id FROM ids WHERE k = 'order_early'))) = 1,
+  'в раннем наряде показание поправили на 400: оно меньше позднего, и это верно');
+SELECT pg_temp.act_as_nobody();
+UPDATE tasks SET status_code = 'closed' WHERE id = pg_temp.uid('order_early');
+SELECT pg_temp.check(
+  (SELECT string_agg(trim_scale(reading)::text, ' -> ' ORDER BY measured_at)
+     FROM equipment_meter_readings WHERE equipment_id = pg_temp.uid('order_eq')) = '400 -> 500',
+  'журнал по времени измерения растёт, хотя приняли наряды в обратном порядке');
+SELECT pg_temp.check((SELECT last_meter_reading FROM equipment WHERE id = pg_temp.uid('order_eq')) = 500,
+  'в паспорте последнее по времени показание, а не последнее принятое');
+
 -- Служебное: запрет работает от владельца схемы и напрямую не вызывается.
 SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'guard_task_meter_reading_growth'),
   'запрет работает от владельца схемы');

@@ -10,8 +10,8 @@
 -- Что теперь.
 -- 1. Свой вход отключить нельзя: ни строкой сотрудника, ни сменой себе роли доступа
 --    на более слабую, ни отключением своей роли (роль с выключенным признаком не даёт
---    прав вовсе, см. app_has_permission). Отключает и переназначает другой администратор —
---    это и есть разделение обязанностей.
+--    прав вовсе, см. app_has_permission), ни снятием прав со своей роли. Отключает
+--    и переназначает другой администратор — это и есть разделение обязанностей.
 -- 2. Отказ по последнему администратору написан под то действие, которое делают:
 --    отключение, смена роли или удаление, — и подсказывает, что сделать сначала.
 -- Служебные операции без входа (импорт, миграции, служба уведомлений) работают как раньше.
@@ -124,3 +124,49 @@ DROP TRIGGER IF EXISTS access_roles_preserve_own ON access_roles;
 CREATE TRIGGER access_roles_preserve_own
   BEFORE UPDATE OF is_active ON access_roles
   FOR EACH ROW EXECUTE FUNCTION public.preserve_own_access_role();
+
+-- ---------------------------------------------------------------------------
+-- 3. Права своей роли меняет тоже не её владелец
+-- ---------------------------------------------------------------------------
+
+-- Сама роль может остаться включённой и назначенной, а прав в ней не остаться: снять
+-- «Изменение сотрудников» и «Управление ролями» со своей же роли — тот же запертый вход,
+-- только третьей кнопкой. Хуже того, матрица прав сохраняется как «удалить все и записать
+-- заново», и это два отдельных запроса: после первого человек уже без прав, и второй
+-- ему не разрешат — роль осталась бы пустой совсем.
+-- Поэтому права своей роли не меняет никто: ни убрать, ни добавить. Название роли
+-- по-прежнему правится, чужие роли — как раньше.
+CREATE OR REPLACE FUNCTION public.preserve_own_role_permissions()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+DECLARE
+  touched_role constant text := CASE WHEN TG_OP = 'DELETE' THEN OLD.role_key ELSE NEW.role_key END;
+  role_name text;
+BEGIN
+  IF auth.uid() IS NULL THEN
+    RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+  END IF;
+  IF EXISTS (
+    SELECT 1 FROM users
+     WHERE id = auth.uid()
+       AND coalesce(access_role_key, CASE WHEN role::text = 'manager' THEN 'initiator' ELSE role::text END) = touched_role
+  ) THEN
+    SELECT name INTO role_name FROM access_roles WHERE key = touched_role;
+    RAISE EXCEPTION 'Права своей роли «%» менять нельзя: так можно остаться без доступа к системе. Попросите другого администратора', coalesce(role_name, touched_role)
+      USING ERRCODE = '23514', CONSTRAINT = 'access_role_permissions_no_self_lockout';
+  END IF;
+  RETURN CASE WHEN TG_OP = 'DELETE' THEN OLD ELSE NEW END;
+END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.preserve_own_role_permissions() FROM PUBLIC, anon, authenticated;
+COMMENT ON FUNCTION public.preserve_own_role_permissions() IS
+  'Права своей роли её владелец не меняет (0035): иначе два щелчка в матрице прав оставляют систему без управления учётными записями.';
+
+DROP TRIGGER IF EXISTS access_role_permissions_preserve_own ON access_role_permissions;
+CREATE TRIGGER access_role_permissions_preserve_own
+  BEFORE INSERT OR UPDATE OR DELETE ON access_role_permissions
+  FOR EACH ROW EXECUTE FUNCTION public.preserve_own_role_permissions();
