@@ -137,16 +137,26 @@ SELECT pg_temp.expect_error(format('UPDATE invoices SET status = %L WHERE id = %
 INSERT INTO v SELECT 'inv_t1', invoice_id FROM invoice_tasks WHERE task_id = (SELECT id FROM v WHERE k = 't1') AND invoice_active;
 
 -- Строка счёта по задаче — только по задаче этого счёта: второй раз задачу строкой не выставить.
+-- (0040) Позиции счёта собираются сами, и вошедшему сотруднику прямая запись в них закрыта
+-- стражем. Здесь проверяются ограничения самих строк из 0024, поэтому идём служебной
+-- операцией без входа: страж её пропускает, а ограничения 0024 работают по-прежнему.
+-- Сам страж проверяется в invoice_items.sql.
+RESET ROLE;
+SELECT set_config('request.jwt.claims', '', true), set_config('request.jwt.claim.sub', '', true);
 SELECT pg_temp.expect_error(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, task_id, description, quantity, unit_price) SELECT %L, %L, code, %L, %L, 1, 100 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
   (SELECT id FROM v WHERE k = 'inv_direct'), 'work', (SELECT id FROM v WHERE k = 't1'), 'Работа по задаче из другого счёта'),
   'строку по задаче из другого счёта не добавить');
 INSERT INTO invoice_items (invoice_id, item_type, work_type_code, task_id, description, quantity, unit_price)
 SELECT (SELECT id FROM v WHERE k = 'inv_t1'), 'work', code, (SELECT id FROM v WHERE k = 't1'), 'Работа по задаче', 1, 100
   FROM work_types WHERE is_active ORDER BY code LIMIT 1;
-SELECT pg_temp.check((SELECT count(*) FROM invoice_items WHERE invoice_id = (SELECT id FROM v WHERE k = 'inv_t1')) = 1, 'строка по задаче своего счёта добавляется');
+-- Счёт уже собран сам (0040), поэтому ищем именно эту строку, а не считаем все.
+SELECT pg_temp.check((SELECT count(*) FROM invoice_items
+   WHERE invoice_id = (SELECT id FROM v WHERE k = 'inv_t1') AND description = 'Работа по задаче') = 1,
+  'строка по задаче своего счёта добавляется');
 SELECT pg_temp.expect_error(format('DELETE FROM invoice_tasks WHERE invoice_id = %L AND task_id = %L', (SELECT id FROM v WHERE k = 'inv_t1'), (SELECT id FROM v WHERE k = 't1')),
   'задачу со строками счёта из него не убрать');
 DELETE FROM invoice_items WHERE invoice_id = (SELECT id FROM v WHERE k = 'inv_t1');
+SELECT pg_temp.act_as((SELECT id FROM v WHERE k = 'coord'));
 -- Перенос задачи между черновиками: прежняя версия строки не считается вторым счётом.
 UPDATE invoice_tasks SET invoice_id = (SELECT id FROM v WHERE k = 'inv_direct')
  WHERE invoice_id = (SELECT id FROM v WHERE k = 'inv_t1') AND task_id = (SELECT id FROM v WHERE k = 't1');
@@ -173,6 +183,8 @@ SELECT pg_temp.check(position('invoice_tasks_one_active_invoice_uq' IN pg_temp.e
 SET session_replication_role = origin;
 
 -- Владелец схемы удаляет счёт целиком (вручную, не через API): строки и связи уходят вместе с ним.
+-- (0040) Вход снимаем: это служебная операция без пользователя, страж позиций её пропускает.
+SELECT set_config('request.jwt.claims', '', true), set_config('request.jwt.claim.sub', '', true);
 INSERT INTO invoice_items (invoice_id, item_type, work_type_code, task_id, description, quantity, unit_price)
 SELECT (SELECT id FROM v WHERE k = 'inv_t1'), 'work', code, (SELECT id FROM v WHERE k = 't1'), 'Работа по задаче', 1, 100
   FROM work_types WHERE is_active ORDER BY code LIMIT 1;
