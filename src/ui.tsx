@@ -716,7 +716,8 @@ export function DialogForm({
   error,
   size = "md",
   danger = false,
-  submitDisabled = false
+  submitDisabled = false,
+  onChange
 }: Omit<DialogProps, "children" | "footer"> & {
   readonly children: ReactNode;
   readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
@@ -724,6 +725,8 @@ export function DialogForm({
   readonly error?: string | null;
   readonly danger?: boolean;
   readonly submitDisabled?: boolean;
+  /** Поля изменились: длинные формы складывают черновик в браузер, чтобы не терять набранное. */
+  readonly onChange?: (event: FormEvent<HTMLFormElement>) => void;
 }) {
   const formId = useId();
   return (
@@ -744,6 +747,7 @@ export function DialogForm({
       <form
         className="dialog-form"
         id={formId}
+        {...(onChange ? { onChange } : {})}
         onSubmit={(event) => {
           event.preventDefault();
           event.stopPropagation();

@@ -6789,6 +6789,9 @@ td .resource-state {
 .form-hint { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
 /* Подсказка, которую нужно прочитать до нажатия: не серая, а предупреждающая. */
 .form-hint--warning { color: var(--color-warning); font-weight: 600; }
+/* Действие внутри подсказки: читается как ссылка, но это кнопка, а не переход. */
+.link-button { padding: 0; border: 0; background: none; color: var(--color-link); font: inherit; text-decoration: underline; cursor: pointer; }
+.link-button:hover { text-decoration: none; }
 .dialog-form > .form-hint { grid-column: 1 / -1; }
 
 .invoice-form {

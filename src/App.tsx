@@ -54,6 +54,7 @@ import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate } from "./task-dates.js";
+import { clearClosureDraft, closureDraftChecked, closureDraftValue, closureDraftValues, readClosureDraft, saveClosureDraft } from "./closure-draft.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
@@ -673,6 +674,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [detailTab, setDetailTab] = useState<"work" | "parts" | "history">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : "work");
   const [resultCatalogs, setResultCatalogs] = useState<{ readonly reasons: readonly ReferenceCatalogValue[]; readonly workTypes: readonly ReferenceCatalogValue[] }>({ reasons: [], workTypes: [] });
   const task = card.task;
+  // Черновик результата работ читаем один раз на открытие окна: инженер заполняет его
+  // на выезде, и обрыв связи или перезагрузка страницы не должны стирать набранное.
+  const closureDraft = useMemo(() => (resultEditing ? readClosureDraft(task.id) : null), [resultEditing, task.id]);
   type PartDraft = Omit<TaskPartPosition, "id" | "quantity"> & { readonly key: string; readonly quantity: string };
   const toPartDrafts = (parts: readonly TaskPartPosition[]): readonly PartDraft[] => parts.map((part) => ({
     key: part.id,
@@ -961,8 +965,11 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         }
         if (photos.length) await m2Api.uploadTaskFiles(task.id, photos, "photo");
         if (videos.length) await m2Api.uploadTaskFiles(task.id, videos, "video");
+        clearClosureDraft(task.id);
       } catch (uploadError) {
         // Текст уже сохранён: закрываем форму и показываем, что есть, чтобы повтор не дублировал файлы.
+        // Черновик тоже убираем, иначе при следующем открытии он подставит старое поверх сохранённого.
+        clearClosureDraft(task.id);
         setResultEditing(false);
         toast.warning(`Результат сохранён, но часть файлов не загрузилась: ${uploadError instanceof Error ? uploadError.message : "ошибка"}. Проверьте вкладку «Работа и акт» и догрузите недостающие.`);
         await onChanged();
@@ -1243,6 +1250,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       description="Эти данные попадут в акт и нужны, чтобы передать задачу на проверку."
       error={formError}
       key={`result-edit-${task.id}-${resultEditing ? "open" : "closed"}`}
+      onChange={(event) => saveClosureDraft(task.id, closureDraftValues(new FormData(event.currentTarget)))}
       onOpenChange={setResultEditing}
       onSubmit={saveResult}
       open={resultEditing}
@@ -1250,26 +1258,27 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       submitLabel="Сохранить результат"
       title="Результат работ"
     >
-      <label className="field-wide">Причина вызова<AutoTextarea defaultValue={task.callReason ?? ""} maxLength={2000} name="callReason" required rows={3} /></label>
-      <label className="field-wide">Описание работ<AutoTextarea defaultValue={task.workDescription ?? ""} maxLength={4000} name="workDescription" required rows={4} /></label>
-      <label className="field-wide">Рекомендации<AutoTextarea defaultValue={task.recommendations ?? ""} maxLength={2000} name="recommendations" rows={3} /></label>
-      <label className="field-wide">Замечания пользователя<AutoTextarea defaultValue={task.userRemarks ?? ""} maxLength={2000} name="userRemarks" rows={3} /></label>
-      <label>Причина неисправности<Select defaultValue={task.reasonCode ?? card.reason?.code ?? ""} name="reasonCode"><option value="">Не выбрана</option>{card.reason && !resultCatalogs.reasons.some((item) => (item.code ?? item.id) === card.reason?.code) ? <option value={card.reason.code}>{card.reason.name}</option> : null}{resultCatalogs.reasons.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
-      {card.canSetWorkModifier ? <label>Гарантия или неправильная эксплуатация<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Обычная работа</option><option value="G">Г, гарантийная</option><option value="N">Н, неправильная эксплуатация</option></Select></label> : null}
-      <label>Дата выезда<DatePicker defaultValue={task.visitDate ?? (isTaskEngineer ? todayIsoDate() : "")} name="visitDate" /></label>
+      {closureDraft ? <div className="form-hint" role="status">Здесь то, что вы набрали {companyDateTimeText(closureDraft.savedAt)} и не успели сохранить. Исправьте и сохраните, либо <button className="link-button" onClick={() => { clearClosureDraft(task.id); setResultEditing(false); }} type="button">начните заново</button>.</div> : null}
+      <label className="field-wide">Причина вызова<AutoTextarea defaultValue={closureDraftValue(closureDraft, "callReason", task.callReason ?? "")} maxLength={2000} name="callReason" required rows={3} /></label>
+      <label className="field-wide">Описание работ<AutoTextarea defaultValue={closureDraftValue(closureDraft, "workDescription", task.workDescription ?? "")} maxLength={4000} name="workDescription" required rows={4} /></label>
+      <label className="field-wide">Рекомендации<AutoTextarea defaultValue={closureDraftValue(closureDraft, "recommendations", task.recommendations ?? "")} maxLength={2000} name="recommendations" rows={3} /></label>
+      <label className="field-wide">Замечания пользователя<AutoTextarea defaultValue={closureDraftValue(closureDraft, "userRemarks", task.userRemarks ?? "")} maxLength={2000} name="userRemarks" rows={3} /></label>
+      <label>Причина неисправности<Select defaultValue={closureDraftValue(closureDraft, "reasonCode", task.reasonCode ?? card.reason?.code ?? "")} name="reasonCode"><option value="">Не выбрана</option>{card.reason && !resultCatalogs.reasons.some((item) => (item.code ?? item.id) === card.reason?.code) ? <option value={card.reason.code}>{card.reason.name}</option> : null}{resultCatalogs.reasons.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
+      {card.canSetWorkModifier ? <label>Гарантия или неправильная эксплуатация<Select defaultValue={closureDraftValue(closureDraft, "workModifier", task.workModifier ?? "")} name="workModifier"><option value="">Обычная работа</option><option value="G">Г, гарантийная</option><option value="N">Н, неправильная эксплуатация</option></Select></label> : null}
+      <label>Дата выезда<DatePicker defaultValue={closureDraftValue(closureDraft, "visitDate", task.visitDate ?? (isTaskEngineer ? todayIsoDate() : ""))} name="visitDate" /></label>
       <div className="result-times">
-        <label>Начало работ<input autoComplete="off" defaultValue={companyTime(task.workStartedAt)} inputMode="decimal" name="workStartTime" placeholder="чч:мм, например 9:30" /></label>
-        <label>Окончание работ<input autoComplete="off" defaultValue={companyTime(task.workFinishedAt)} inputMode="decimal" name="workFinishTime" placeholder="чч:мм, например 13:15" /></label>
+        <label>Начало работ<input autoComplete="off" defaultValue={closureDraftValue(closureDraft, "workStartTime", companyTime(task.workStartedAt))} inputMode="decimal" name="workStartTime" placeholder="чч:мм, например 9:30" /></label>
+        <label>Окончание работ<input autoComplete="off" defaultValue={closureDraftValue(closureDraft, "workFinishTime", companyTime(task.workFinishedAt))} inputMode="decimal" name="workFinishTime" placeholder="чч:мм, например 13:15" /></label>
       </div>
       {/* Нижнюю границу браузеру не отдаём: он напишет отказ на своём языке, а наш — по-русски. */}
-      {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder={card.equipment?.lastMeterReading === undefined ? "Если есть на приборе" : `Не меньше ${formatMeterReading(card.equipment.lastMeterReading)}`} step="any" title={card.equipment?.lastMeterReading === undefined ? undefined : `Последнее показание прибора ${formatMeterReading(card.equipment.lastMeterReading)}: счётчик только растёт`} type="number" /></label> : null}
-      {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
+      {task.equipmentId ? <label>Показание счётчика<input defaultValue={closureDraftValue(closureDraft, "meterReading", task.meterReading === undefined || task.meterReading === null ? "" : String(task.meterReading))} inputMode="decimal" min="0" name="meterReading" placeholder={card.equipment?.lastMeterReading === undefined ? "Если есть на приборе" : `Не меньше ${formatMeterReading(card.equipment.lastMeterReading)}`} step="any" title={card.equipment?.lastMeterReading === undefined ? undefined : `Последнее показание прибора ${formatMeterReading(card.equipment.lastMeterReading)}: счётчик только растёт`} type="number" /></label> : null}
+      {hoursRequired ? <label>Часы работы<input defaultValue={closureDraftValue(closureDraft, "hours", task.hours === undefined || task.hours === null ? "" : String(task.hours))} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
       <ResultReservationChecks hasEquipment={Boolean(task.equipmentId)} reservations={reservations} />
       <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
-      <label className="field-check"><input defaultChecked={task.workCompleted ?? card.closure?.workCompleted === true} name="workCompleted" type="checkbox" /><span>Работы выполнены полностью</span></label>
-      <label className="field-check"><input defaultChecked={task.apparatusApproved ?? card.closure?.apparatusApproved === true} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>
-      <label className="field-check"><input defaultChecked={task.customerHasNoClaims ?? card.closure?.customerHasNoClaims === true} name="customerHasNoClaims" type="checkbox" /><span>Заказчик претензий не имеет</span></label>
-      <label className="field-check"><input defaultChecked={task.continuedInPrimary === true} name="continuedInPrimary" type="checkbox" /><span>Продолжение первичной заявки</span></label>
+      <label className="field-check"><input defaultChecked={closureDraftChecked(closureDraft, "workCompleted", task.workCompleted ?? card.closure?.workCompleted === true)} name="workCompleted" type="checkbox" /><span>Работы выполнены полностью</span></label>
+      <label className="field-check"><input defaultChecked={closureDraftChecked(closureDraft, "apparatusApproved", task.apparatusApproved ?? card.closure?.apparatusApproved === true)} name="apparatusApproved" type="checkbox" /><span>Аппарат исправен и допущен</span></label>
+      <label className="field-check"><input defaultChecked={closureDraftChecked(closureDraft, "customerHasNoClaims", task.customerHasNoClaims ?? card.closure?.customerHasNoClaims === true)} name="customerHasNoClaims" type="checkbox" /><span>Заказчик претензий не имеет</span></label>
+      <label className="field-check"><input defaultChecked={closureDraftChecked(closureDraft, "continuedInPrimary", task.continuedInPrimary === true)} name="continuedInPrimary" type="checkbox" /><span>Продолжение первичной заявки</span></label>
       </fieldset>
       <FileDropField accept="image/jpeg,image/png,image/webp,image/heic,image/heif" hint={hasActPhoto ? "Фото акта уже есть, можно заменить новым" : "Обязательно для передачи на проверку: JPEG, PNG, WebP или HEIC"} name="actPhoto" title="Фото подписанного акта" />
       <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео). Можно выбрать сразу несколько.`} multiple name="fieldMedia" title="Фото и видео с выезда" />
