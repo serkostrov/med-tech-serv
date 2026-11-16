@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { m2Api, type StockReservationRecord } from "./m2-api.js";
-import { Button, ConfirmationDialog, DataTableShell, FilterBar, MetricCard, PageIntro, PageTabs, ResourceState, Select, StatusBadge, toast } from "./ui.js";
+import { Button, ConfirmationDialog, DataTableShell, FilterBar, MetricCard, PageIntro, PageTabs, ResourceState, Select, StatusBadge, ViewSwitch, toast } from "./ui.js";
+import { ReservationBoard } from "./ReservationBoard.js";
 import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { companyDateTimeText } from "./task-dates.js";
@@ -26,6 +27,7 @@ import {
 } from "./reservations.js";
 
 type ReservationsTab = "active" | "closed" | "engineers";
+type ReservationsView = "board" | "list";
 type ConfirmedAction = Exclude<ReservationAction, "ready">;
 
 const ACTION_LABELS: Readonly<Record<ReservationAction, string>> = {
@@ -53,6 +55,9 @@ function confirmDescription(reservation: StockReservationRecord, action: Confirm
  * выдаёт её инженеру задачи и принимает обратно, если она не пригодилась.
  */
 export function ReservationsPage() {
+  // Доска или список, как у задач. На доске видны все состояния сразу, поэтому вкладок там нет.
+  const [view, setView] = useState<ReservationsView>("board");
+  const viewRef = useRef<ReservationsView>("board");
   const [tab, setTab] = useState<ReservationsTab>("active");
   // Вкладка для перезагрузки после действия: замыкание могло запомнить прежнюю.
   const tabRef = useRef<ReservationsTab>("active");
@@ -74,12 +79,18 @@ export function ReservationsPage() {
   // Ответ на старую вкладку не должен затереть список новой.
   const loadTurn = useRef(0);
 
-  const reload = async (nextTab = tabRef.current) => {
+  /**
+   * Доске нужны все состояния сразу: читаем действующие и закрытые резервы вместе.
+   * Списку хватает одной вкладки, как было.
+   */
+  const reload = async (nextTab = tabRef.current, nextView = viewRef.current) => {
     const turn = ++loadTurn.current;
     setLoading(true);
     setLoadError(null);
     try {
-      const next = await m2Api.stockReservations(nextTab === "closed" ? "closed" : "active");
+      const next = nextView === "board"
+        ? (await Promise.all([m2Api.stockReservations("active"), m2Api.stockReservations("closed")])).flat()
+        : await m2Api.stockReservations(nextTab === "closed" ? "closed" : "active");
       if (turn === loadTurn.current) setItems(next);
     } catch (error) {
       if (turn === loadTurn.current) setLoadError(error instanceof Error ? error.message : "Не получилось загрузить резервы");
@@ -92,14 +103,27 @@ export function ReservationsPage() {
     void m2Api.hasPermission("warehouse.write").then(setCanWrite).catch(() => setCanWrite(false));
   }, []);
 
+  const resetFilters = () => {
+    setFilters(EMPTY_RESERVATION_FILTERS);
+    setAppliedFilters(EMPTY_RESERVATION_FILTERS);
+  };
+
   const changeTab = (next: ReservationsTab) => {
     tabRef.current = next;
     setTab(next);
     setItems([]);
     // Условия сбрасываем: на другой вкладке и состояния, и задачи с инженерами уже другие.
-    setFilters(EMPTY_RESERVATION_FILTERS);
-    setAppliedFilters(EMPTY_RESERVATION_FILTERS);
+    resetFilters();
     void reload(next);
+  };
+
+  const changeView = (next: ReservationsView) => {
+    viewRef.current = next;
+    setView(next);
+    setItems([]);
+    // На доске и в списке наборы резервов разные: условия отбора начинаем заново.
+    resetFilters();
+    void reload(tabRef.current, next);
   };
 
   /** Действие, затем свежий список; кнопки снова доступны только после обновления списка. */
@@ -126,14 +150,15 @@ export function ReservationsPage() {
     void run(reservation, action).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Не получилось выполнить действие"));
   };
 
-  // Карточки сверху считаем по всей вкладке, а не по отбору: это сводка склада, как на «Складе».
-  const summary = reservationSummary(tab === "active" ? items : []);
+  // Карточки сверху считаем по всему загруженному, а не по отбору: это сводка склада, как на «Складе».
+  // Закрытые резервы в неё всё равно не попадают, поэтому на доске она считается так же.
+  const summary = reservationSummary(view === "board" || tab === "active" ? items : []);
   const showActions = canWrite && tab === "active";
   const counting = loading && items.length === 0;
   const options = useMemo(() => reservationFilterOptions(items), [items]);
   const visible = useMemo(() => filterReservations(items, appliedFilters), [items, appliedFilters]);
   const filtered = visible.length !== items.length;
-  const groups = tab === "engineers" ? reservationsByEngineer(visible) : [];
+  const groups = view === "list" && tab === "engineers" ? reservationsByEngineer(visible) : [];
   const issuedCount = groups.reduce((total, group) => total + group.items.length, 0);
 
   const applyFilters = (next = filters) => {
@@ -162,22 +187,33 @@ export function ReservationsPage() {
   };
 
   return <>
-    <PageIntro description="Запчасти под задачи: собрать, выдать инженеру, принять обратно." title="Резервы" />
-    {tab === "active" ? <div className="metric-grid metric-grid--three">
+    <PageIntro
+      description="Запчасти под задачи: собрать, выдать инженеру, принять обратно."
+      title="Резервы"
+      titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать резервы" onValueChange={changeView} value={view} />}
+    />
+    {view === "board" || tab === "active" ? <div className="metric-grid metric-grid--three">
       <MetricCard icon="inventory" label="Ждут сборки" tone="yellow" value={counting ? "…" : String(summary.toCollect)} />
       <MetricCard icon="reservations" label="Собраны, можно выдавать" value={counting ? "…" : String(summary.ready)} />
       <MetricCard icon="engineers" label="У инженеров" tone="purple" value={counting ? "…" : String(summary.withEngineers)} />
     </div> : null}
-    <PageTabs items={[{ value: "active", label: "Действующие" }, { value: "engineers", label: "У инженеров" }, { value: "closed", label: "Закрытые" }]} label="Резервы" onValueChange={changeTab} value={tab} />
+    {/* На доске все состояния стоят колонками, вкладки ей не нужны. */}
+    {view === "list" ? <PageTabs items={[{ value: "active", label: "Действующие" }, { value: "engineers", label: "У инженеров" }, { value: "closed", label: "Закрытые" }]} label="Резервы" onValueChange={changeTab} value={tab} /> : null}
     <FilterBar loading={loading} onReset={() => applyFilters(EMPTY_RESERVATION_FILTERS)} onSubmit={() => applyFilters()}>
       <label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Резерв, артикул, запчасть, задача" type="search" value={filters.search} /></label>
       {/* На вкладке «У инженеров» все резервы выданы: выбирать состояние там не из чего. */}
-      {tab === "engineers" ? null : <label>Состояние<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{options.statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>}
+      {view === "list" && tab === "engineers" ? null : <label>Состояние<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{options.statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>}
       <label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineer: event.target.value }))} value={filters.engineer}><option value="">Все</option>{options.engineers.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
       <label>Задача<Select onChange={(event) => setFilters((current) => ({ ...current, taskNumber: event.target.value }))} value={filters.taskNumber}><option value="">Все</option>{options.tasks.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
       <label>Запчасть<Select onChange={(event) => setFilters((current) => ({ ...current, partId: event.target.value }))} value={filters.partId}><option value="">Все</option>{options.parts.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
     </FilterBar>
-    {tab === "engineers" ? <DataTableShell
+    {view === "board" ? <>
+      {loadError ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Резервы не загрузились" />
+        : <>
+          <p className="reservation-board__note">Перенесите карточку в соседнюю колонку, чтобы собрать запчасть, выдать её инженеру или принять обратно. Снятые резервы видно в списке, на вкладке «Закрытые».</p>
+          <ReservationBoard busyId={busyId} canWrite={canWrite} items={visible} loading={loading} onAction={runFromRow} />
+        </>}
+    </> : tab === "engineers" ? <DataTableShell
       action={items.length ? <Button busy={exporting} busyLabel="Готовим файл…" disabled={issuedCount === 0} onClick={() => void exportEngineers()} variant="secondary">Скачать в Excel</Button> : undefined}
       meta={loading ? undefined : `${formatRussianCount(issuedCount, ["запчасть", "запчасти", "запчастей"])} у ${formatRussianCount(groups.length, ["инженера", "инженеров", "инженеров"])}`}
       title="Запчасти у инженеров"

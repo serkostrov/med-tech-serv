@@ -201,6 +201,58 @@ export function installedReservations(
 }
 
 /**
+ * Колонки доски резервов: состояния, через которые запчасть проходит на складе.
+ * Снятого резерва на доске нет: это не шаг запчасти, а отказ от неё, и такие резервы
+ * остаются в списке на вкладке «Закрытые».
+ */
+export const RESERVATION_BOARD_STATUSES: readonly StockReservationStatus[] = [
+  "created", "warehouse_notified", "issued", "installed", "returned"
+];
+
+/**
+ * Чем резерв переводится в это состояние. Те же действия, что кнопками в строке:
+ * других способов двигать резерв нет.
+ */
+const RESERVATION_DROP_STEPS: Readonly<Partial<Record<StockReservationStatus, { readonly from: StockReservationStatus; readonly action: ReservationAction }>>> = {
+  warehouse_notified: { from: "created", action: "ready" },
+  issued: { from: "warehouse_notified", action: "issue" },
+  returned: { from: "issued", action: "return" }
+};
+
+export type ReservationDropDecision =
+  | { readonly kind: "move"; readonly action: ReservationAction }
+  /** Перенести нельзя: reason объясняет почему. Пустой reason — переносить нечего (та же колонка). */
+  | { readonly kind: "no"; readonly reason: string };
+
+/**
+ * Что будет, если бросить карточку резерва в колонку: выполнить действие склада или
+ * отказать и объяснить. Вручную ставятся только те состояния, под которые есть кнопка:
+ * «Установлена» отмечает инженер при закрытии задачи, назад резерв не возвращают.
+ */
+export function reservationDropDecision(
+  reservation: Pick<StockReservationRecord, "status" | "taskStatus" | "engineerName" | "taskNumber">,
+  to: StockReservationStatus
+): ReservationDropDecision {
+  if (reservation.status === to) return { kind: "no", reason: "" };
+  const step = RESERVATION_DROP_STEPS[to];
+  if (!step) {
+    if (to === "installed") return { kind: "no", reason: "«Установлена» отмечает инженер, когда закрывает задачу: со склада это состояние не ставят" };
+    if (to === "created") return { kind: "no", reason: "Назад в «Ждёт сборки» резерв не возвращают" };
+    return { kind: "no", reason: `В «${RESERVATION_STATUS_LABELS[to]}» карточку не переносят` };
+  }
+  if (reservation.status !== step.from) {
+    return { kind: "no", reason: `Из «${RESERVATION_STATUS_LABELS[reservation.status]}» сразу в «${RESERVATION_STATUS_LABELS[to]}» нельзя, только в следующее состояние` };
+  }
+  // По отменённой и закрытой задаче запчасть не собирают и не выдают: остаётся снять резерв.
+  const note = reservationTaskNote(reservation);
+  if (note && !availableReservationActions(reservation).includes(step.action)) {
+    return { kind: "no", reason: `${note}: запчасть уже не нужна, снимите резерв в списке` };
+  }
+  const blocked = step.action === "issue" ? issueBlockReason(reservation) : undefined;
+  return blocked ? { kind: "no", reason: blocked } : { kind: "move", action: step.action };
+}
+
+/**
  * Условия отбора резервов в окне склада. Пустая строка значит «все», как в остальных реестрах.
  * Список резервов приходит целиком, поэтому отбираем на месте, а не запросом в базу.
  */

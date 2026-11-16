@@ -8300,6 +8300,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .task-board__column { width: auto; min-width: 0; }
 }
 
+/* ===== Доска резервов: та же доска, цвет колонки по состоянию запчасти (как бейджи в списке) ===== */
+.task-board__column--reservation-created { --stage-color: #d9a400; }
+.task-board__column--reservation-warehouse_notified { --stage-color: #2f86c4; }
+.task-board__column--reservation-issued { --stage-color: #5f4fa8; }
+.task-board__column--reservation-installed { --stage-color: #1f8a52; }
+.task-board__column--reservation-returned { --stage-color: #8a9aa3; }
+.reservation-board .task-board-card__open > small { overflow-wrap: break-word; }
+.reservation-board__note { margin: 0 0 8px; color: var(--color-muted); font-size: 13px; }
+
 /* ===== Приборы v2: строка поиска и фильтров, плотная таблица, паспорт в две колонки ===== */
 .registry-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
 .registry-toolbar__search { flex: 0 1 340px; min-width: 220px; }

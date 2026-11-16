@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient, stockReservationRecord } from "./m2-api.js";
-import { EMPTY_RESERVATION_FILTERS, RESERVATION_STATUS_LABELS, availableReservationActions, filterReservations, issueBlockReason, reservationActions, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
+import { EMPTY_RESERVATION_FILTERS, RESERVATION_BOARD_STATUSES, RESERVATION_STATUS_LABELS, availableReservationActions, filterReservations, issueBlockReason, reservationActions, reservationDropDecision, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
 
 /** Поддельный клиент Supabase: запоминает цепочку запроса к таблице и вызовы функций базы. */
 function fakeClient(response: { data?: unknown; error?: { message: string; code?: string } | null }) {
@@ -55,6 +55,33 @@ describe("резервы склада", () => {
     assert.equal(reservationStepText(step), "У инженера · Никитина Ольга Павловна · 10.11.2026 19:58");
     // Без автора остаётся только время, лишних разделителей нет.
     assert.equal(reservationStepAuthorText({ status: "issued", changedAt: "2026-11-10T16:58:00Z" }), "10.11.2026 19:58");
+  });
+
+  it("колонки доски идут по ходу жизни резерва, снятого резерва на доске нет", () => {
+    assert.deepEqual(RESERVATION_BOARD_STATUSES, ["created", "warehouse_notified", "issued", "installed", "returned"]);
+  });
+
+  it("переносом карточки делает ровно то, что кнопками, и объясняет отказ", () => {
+    const ready = { status: "created", taskStatus: "in_progress", engineerName: "Иванов", taskNumber: "З-1" } as const;
+    // Те же три действия, что у кнопок строки: собрать, выдать, принять обратно.
+    assert.deepEqual(reservationDropDecision(ready, "warehouse_notified"), { kind: "move", action: "ready" });
+    assert.deepEqual(reservationDropDecision({ ...ready, status: "warehouse_notified" }, "issued"), { kind: "move", action: "issue" });
+    assert.deepEqual(reservationDropDecision({ ...ready, status: "issued" }, "returned"), { kind: "move", action: "return" });
+    // Своя колонка: переносить нечего, молча.
+    assert.deepEqual(reservationDropDecision(ready, "created"), { kind: "no", reason: "" });
+    /** Причина отказа: на перенос, который разрешён, тест и не должен попадать. */
+    const refusal = (reservation: Parameters<typeof reservationDropDecision>[0], to: Parameters<typeof reservationDropDecision>[1]) => {
+      const decision = reservationDropDecision(reservation, to);
+      assert.equal(decision.kind, "no");
+      return decision.kind === "no" ? decision.reason : "";
+    };
+    // Установку отмечает инженер, назад резерв не возвращают, через состояние не прыгают.
+    assert.match(refusal(ready, "installed"), /отмечает инженер/u);
+    assert.match(refusal({ ...ready, status: "issued" }, "created"), /не возвращают/u);
+    assert.match(refusal(ready, "issued"), /только в следующее состояние/u);
+    // Нельзя выдать: причина та же, что в подсказке неактивной кнопки.
+    assert.match(refusal({ status: "warehouse_notified", taskStatus: "in_progress", taskNumber: "З-1" }, "issued"), /не назначен инженер/u);
+    assert.match(refusal({ status: "created", taskStatus: "cancelled", engineerName: "Иванов", taskNumber: "З-1" }, "warehouse_notified"), /Задача отменена.*снимите резерв/u);
   });
 
   it("отбирает резервы по состоянию, инженеру, задаче, запчасти и словам поиска", () => {
