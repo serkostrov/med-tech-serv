@@ -6,7 +6,7 @@ import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistory
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
-import { loginFailureReason, type AuditJournalPage, type LoginJournalPage } from "./audit-journal.js";
+import { auditActionCodesForSearch, loginFailureReason, type AuditJournalPage, type LoginJournalPage } from "./audit-journal.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
@@ -1822,9 +1822,13 @@ export class M2ApiClient {
     // Поиск по номеру объекта, действию, таблице и автору: всё это столбцы, отбор в базе.
     const search = escapePostgrestSearchTerm(query.search ?? "");
     if (search) {
+      // В журнале действия лежат кодами (updated), а на экране написано «Изменено»:
+      // ищем и по коду, и по тому слову, которое человек видит в списке.
+      const actionCodes = auditActionCodesForSearch(query.search ?? "");
       request = request.or([
         `entity_id.ilike.*${search}*`,
         `action.ilike.*${search}*`,
+        ...(actionCodes.length > 0 ? [`action.in.(${actionCodes.join(",")})`] : []),
         `table_name.ilike.*${search}*`,
         `actor_name.ilike.*${search}*`
       ].join(","));

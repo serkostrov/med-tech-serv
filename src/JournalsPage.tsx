@@ -22,6 +22,7 @@ import {
   auditEntityLabel,
   auditPlaceLabel,
   loginOutcomeText,
+  loginWhoHint,
   loginWhoText,
   type AuditJournalEvent,
   type LoginJournalEntry
@@ -232,6 +233,9 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
     {successSourceAvailable
       ? null
       : <Notice tone="warning">Удачные входы ведёт служба входа, и её журнал сейчас недоступен: ниже только неудачные попытки.</Notice>}
+    {/* Журнал входов легко прочитать как доказательство, а он им не является:
+        в неудачной попытке записан набранный адрес, а адрес обращения передаёт прокси. */}
+    <Notice tone="info">В неудачной попытке записан набранный адрес: набрать чужой адрес может кто угодно, поэтому имя сотрудника рядом с ним — только подсказка. Адрес обращения приходит от обратного прокси.</Notice>
     <section className="card card--table" aria-label="Журнал входов">
       <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Кто входил в систему" />
       {loading && items.length === 0
@@ -251,12 +255,15 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
                 <th scope="col">Чем закончилось</th>
               </tr></thead>
               <tbody>
-                {items.map((entry) => <tr key={entry.id}>
-                  <td className="journal-table__when">{whenText(entry.occurredAt)}</td>
-                  <td>{loginWhoText(entry)}{entry.userName && entry.login ? <small>{entry.login}</small> : null}</td>
-                  <td>{entry.ipAddress ?? "не определён"}</td>
-                  <td><StatusBadge tone={entry.success ? "success" : "danger"}>{loginOutcomeText(entry)}</StatusBadge></td>
-                </tr>)}
+                {items.map((entry) => {
+                  const hint = loginWhoHint(entry);
+                  return <tr key={entry.id}>
+                    <td className="journal-table__when">{whenText(entry.occurredAt)}</td>
+                    <td>{loginWhoText(entry)}{hint ? <small>{hint}</small> : null}</td>
+                    <td className="journal-table__ip">{entry.ipAddress ?? "не определён"}</td>
+                    <td><StatusBadge tone={entry.success ? "success" : "danger"}>{loginOutcomeText(entry)}</StatusBadge></td>
+                  </tr>;
+                })}
               </tbody>
             </table></div>}
       <RegistryPagination ariaLabel="Страницы журнала входов" onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />

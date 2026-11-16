@@ -234,6 +234,19 @@ export function auditActionLabel(action: string): string {
   return ACTION_LABELS[action] ?? action;
 }
 
+/**
+ * Коды действий, чьё русское название похоже на строку поиска. В журнале лежат коды
+ * (updated), а на экране написано «Изменено»: без этого поиск по тому, что человек
+ * видит, не находил бы ничего.
+ */
+export function auditActionCodesForSearch(search: string): readonly string[] {
+  const needle = search.trim().toLocaleLowerCase("ru-RU");
+  if (!needle) return [];
+  return Object.entries(ACTION_LABELS)
+    .filter(([code, label]) => label.toLocaleLowerCase("ru-RU").includes(needle) || code.includes(needle))
+    .map(([code]) => code);
+}
+
 /** Объект события по-русски. */
 export function auditEntityLabel(entityType: string): string {
   return ENTITY_LABELS[entityType] ?? entityType;
@@ -281,7 +294,14 @@ export interface AuditChangeLine {
 }
 
 /**
- * Как изменилось: по полям из changed_fields, а если их нет — по снимку.
+ * Как изменилось: по полям из changed_fields.
+ *
+ * Если списка полей нет, а снимка «до» тоже нет, это создание записи: показываем
+ * весь снимок «после». А вот у правки пустой список полей значит «в видимых полях
+ * не изменилось ничего» — так бывает, когда поменялось вырезанное поле (сумма,
+ * цена, реквизиты). Показывать в таком случае весь снимок нельзя: получился бы
+ * список из двух десятков полей, где «было» и «стало» совпадают.
+ *
  * Служебные поля и поля, которых нет ни в одном снимке, не показываются:
  * денежные поля счёта могли быть вырезаны по праву смотрящего.
  */
@@ -292,7 +312,9 @@ export function auditChangeLines(
   const after = event.afterData ?? {};
   const fields = event.changedFields.length > 0
     ? event.changedFields
-    : [...new Set([...Object.keys(before), ...Object.keys(after)])];
+    : event.beforeData
+      ? []
+      : Object.keys(after);
   return fields
     .filter((field) => !HIDDEN_FIELDS.includes(field))
     .filter((field) => field in before || field in after)
@@ -334,9 +356,23 @@ export function loginOutcomeText(entry: Pick<LoginJournalEntry, "success" | "fai
   return entry.success ? "Вход выполнен" : loginFailureLabel(entry.failureReason);
 }
 
-/** Кто входил: имя сотрудника, иначе набранный адрес, иначе неизвестно. */
-export function loginWhoText(entry: Pick<LoginJournalEntry, "userName" | "login">): string {
-  return entry.userName ?? entry.login ?? "Неизвестный вход";
+/**
+ * Кто входил.
+ *
+ * У удачного входа это запись службы входа: там сотрудник подтверждён, показываем имя.
+ * У неудачной попытки подтверждать нечего: в журнале лежит набранный адрес, а набрать
+ * чужой адрес может кто угодно. Поэтому у попытки первым идёт адрес, а имя сотрудника,
+ * которому этот адрес принадлежит, — подписью (loginWhoHint).
+ */
+export function loginWhoText(entry: Pick<LoginJournalEntry, "userName" | "login" | "success">): string {
+  if (entry.success) return entry.userName ?? entry.login ?? "Неизвестный вход";
+  return entry.login ?? entry.userName ?? "Адрес не набран";
+}
+
+/** Подпись под «кто»: у входа — адрес, у попытки — чей это адрес, если он чей-то. */
+export function loginWhoHint(entry: Pick<LoginJournalEntry, "userName" | "login" | "success">): string {
+  if (entry.success) return entry.userName && entry.login ? entry.login : "";
+  return entry.userName ? `адрес сотрудника: ${entry.userName}` : "";
 }
 
 /**

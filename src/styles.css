@@ -8497,7 +8497,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .journal-table--logins { min-width: 620px; }
 .journal-table td strong { display: block; color: var(--color-ink); font-weight: 600; }
 .journal-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; word-break: break-word; }
-.journal-table__when { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-ink-soft); }
+/* Дату и адрес не переносим по словам: «217.118.92. / 40» читается как другой адрес,
+   а «11.11.2026, / 13:12» — как две разные записи. Селектор с td, иначе общее
+   правило .data-table td (white-space: normal) оказывается сильнее. */
+.journal-table td.journal-table__when { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-ink-soft); }
+.journal-table td.journal-table__ip { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .journal-table__toggle { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .journal-table__toggle:hover strong { color: var(--color-accent-dark); text-decoration: underline; }
 .journal-table__toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }

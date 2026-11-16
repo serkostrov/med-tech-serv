@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import {
   JOURNAL_PERMISSION,
+  auditActionCodesForSearch,
   auditActionLabel,
   auditActorLabel,
   auditChangeLines,
@@ -15,6 +16,7 @@ import {
   loginFailureLabel,
   loginFailureReason,
   loginOutcomeText,
+  loginWhoHint,
   loginWhoText
 } from "./audit-journal.js";
 
@@ -109,6 +111,23 @@ describe("журнал изменений", () => {
     assert.deepEqual(lines, [{ field: "title", label: "Название", before: "не задано", after: "Новая задача" }]);
   });
 
+  it("не выдаёт правку без видимых изменений за изменение всех полей", () => {
+    // Поменялось только вырезанное поле (сумма, цена, реквизиты): снимки совпали,
+    // changed_fields пуст. Показывать весь снимок нельзя — вышел бы список полей,
+    // где «было» и «стало» одинаковые.
+    const lines = auditChangeLines({
+      changedFields: [],
+      beforeData: { status: "draft", payer_name: "ГКБ № 1" },
+      afterData: { status: "draft", payer_name: "ГКБ № 1" }
+    });
+    assert.deepEqual(lines, []);
+    assert.equal(auditChangeSummary({
+      changedFields: [],
+      beforeData: { status: "draft" },
+      afterData: { status: "draft" }
+    }), "");
+  });
+
   it("сжимает длинный список полей в подпись строки", () => {
     const summary = auditChangeSummary({
       changedFields: ["title", "status_code", "notes", "priority", "engineer_id"],
@@ -128,10 +147,26 @@ describe("журнал входов", () => {
     assert.equal(loginFailureLabel("свой_код"), "свой_код");
   });
 
-  it("показывает, кто входил: имя, иначе набранный адрес", () => {
-    assert.equal(loginWhoText({ userName: "Белов Андрей", login: "a.belov@mts.example" }), "Белов Андрей");
-    assert.equal(loginWhoText({ login: "кто-то@example.com" }), "кто-то@example.com");
-    assert.equal(loginWhoText({}), "Неизвестный вход");
+  it("у входа показывает сотрудника, а у попытки — набранный адрес", () => {
+    // Удачный вход подтвердила служба входа: там сотрудник настоящий.
+    assert.equal(loginWhoText({ success: true, userName: "Белов Андрей", login: "a.belov@mts.example" }), "Белов Андрей");
+    assert.equal(loginWhoHint({ success: true, userName: "Белов Андрей", login: "a.belov@mts.example" }), "a.belov@mts.example");
+    assert.equal(loginWhoText({ success: true }), "Неизвестный вход");
+    // Неудачную попытку записывает экран входа: набрать чужой адрес может кто угодно,
+    // поэтому сначала адрес, а имя сотрудника — подсказкой.
+    assert.equal(loginWhoText({ success: false, userName: "Белов Андрей", login: "a.belov@mts.example" }), "a.belov@mts.example");
+    assert.equal(loginWhoHint({ success: false, userName: "Белов Андрей", login: "a.belov@mts.example" }), "адрес сотрудника: Белов Андрей");
+    assert.equal(loginWhoText({ success: false, login: "кто-то@example.com" }), "кто-то@example.com");
+    assert.equal(loginWhoHint({ success: false, login: "кто-то@example.com" }), "");
+    assert.equal(loginWhoText({ success: false }), "Адрес не набран");
+  });
+
+  it("ищет действия журнала и по русскому названию, и по коду", () => {
+    assert.deepEqual(auditActionCodesForSearch("Изменено"), ["updated"]);
+    assert.deepEqual(auditActionCodesForSearch("статус"), ["status_changed", "status_transition"]);
+    assert.deepEqual(auditActionCodesForSearch("updated"), ["updated"]);
+    assert.deepEqual(auditActionCodesForSearch("  "), []);
+    assert.deepEqual(auditActionCodesForSearch("З-001258"), []);
   });
 
   it("превращает ошибку входа в короткий код причины, не передавая её текст в журнал", () => {
