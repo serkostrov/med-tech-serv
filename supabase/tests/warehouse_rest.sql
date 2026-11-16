@@ -70,9 +70,19 @@ BEGIN
   RAISE EXCEPTION 'ПРОВАЛ: % — команда прошла, а должна быть запрещена', p_label;
 END $$;
 
+-- Сколько строк изменила команда: правку и удаление движений политики не запрещают
+-- ошибкой, а просто не дают ни одной строки — проверяем именно это.
+CREATE FUNCTION pg_temp.rows_affected(p_sql text) RETURNS integer LANGUAGE plpgsql AS $$
+DECLARE n integer;
+BEGIN
+  EXECUTE p_sql;
+  GET DIAGNOSTICS n = ROW_COUNT;
+  RETURN n;
+END $$;
+
 GRANT EXECUTE ON FUNCTION pg_temp.act_as(uuid), pg_temp.as_owner(), pg_temp.check(boolean, text),
   pg_temp.expect_denied(text, text), pg_temp.expect_forbidden(text, text),
-  pg_temp.expect_message(text, text, text) TO authenticated, anon;
+  pg_temp.expect_message(text, text, text), pg_temp.rows_affected(text) TO authenticated, anon;
 
 -- Данные (от владельца, RLS не действует)
 CREATE TEMP TABLE ids (k text PRIMARY KEY, id uuid);
@@ -117,14 +127,27 @@ BEGIN
   INSERT INTO stock_lots (part_id, part_condition) VALUES (part_a, 'N') RETURNING id INTO lot_an;
   INSERT INTO stock_lots (part_id, part_condition) VALUES (part_a, 'G') RETURNING id INTO lot_ag;
   INSERT INTO stock_lots (part_id, part_condition) VALUES (part_b, 'N') RETURNING id INTO lot_bn;
-  INSERT INTO stock_movements (idempotency_key, movement_type, lot_id, part_id, part_condition, quantity, on_hand_delta, performed_by)
-  VALUES ('receipt:an', 'receipt', lot_an, part_a, 'N', 10, 10, (SELECT id FROM ids WHERE k = 'warehouse')),
-         ('receipt:ag', 'receipt', lot_ag, part_a, 'G', 4, 4, (SELECT id FROM ids WHERE k = 'warehouse')),
-         ('receipt:bn', 'receipt', lot_bn, part_b, 'N', 6, 6, (SELECT id FROM ids WHERE k = 'warehouse'));
+  -- Приход тремя днями раньше: в тесте всё остальное происходит «сейчас», и порядок
+  -- истории (сначала свежее) проверяется по-настоящему.
+  INSERT INTO stock_movements (idempotency_key, movement_type, lot_id, part_id, part_condition, quantity, on_hand_delta, performed_by, occurred_at, comment)
+  VALUES ('receipt:an', 'receipt', lot_an, part_a, 'N', 10, 10, (SELECT id FROM ids WHERE k = 'warehouse'), now() - interval '3 days', 'Накладная 77 от поставщика'),
+         ('receipt:ag', 'receipt', lot_ag, part_a, 'G', 4, 4, (SELECT id FROM ids WHERE k = 'warehouse'), now() - interval '3 days', NULL),
+         ('receipt:bn', 'receipt', lot_bn, part_b, 'N', 6, 6, (SELECT id FROM ids WHERE k = 'warehouse'), now() - interval '3 days', NULL);
 
   INSERT INTO ids VALUES ('t1', t1), ('part_a', part_a), ('part_b', part_b), ('part_off', part_c),
     ('lot_an', lot_an), ('lot_ag', lot_ag), ('lot_bn', lot_bn), ('equipment', eq);
 END $$;
+
+-- Создание резерва через RPC с запоминанием id (как в warehouse_chain.sql)
+CREATE FUNCTION pg_temp.make_reservation(p_key text, p_task uuid, p_part uuid, p_condition part_condition, p_quantity numeric)
+RETURNS uuid LANGUAGE plpgsql AS $$
+DECLARE new_id uuid;
+BEGIN
+  SELECT created.id INTO new_id FROM public.create_task_part_reservation(p_task, p_part, p_condition, p_quantity) AS created;
+  INSERT INTO ids VALUES (p_key, new_id);
+  RETURN new_id;
+END $$;
+GRANT EXECUTE ON FUNCTION pg_temp.make_reservation(text, uuid, uuid, part_condition, numeric) TO authenticated;
 
 -- =========================================================================
 -- 0047. Псевдонимы артикулов
@@ -180,5 +203,185 @@ SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.guard_p
   'страж псевдонимов напрямую не вызывается');
 SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'guard_part_alias'),
   'страж псевдонимов работает от владельца схемы');
+
+-- =========================================================================
+-- 0049. Списание и корректировка остатка
+-- =========================================================================
+
+SELECT pg_temp.check(has_function_privilege('authenticated', 'public.write_off_stock(uuid, public.part_condition, numeric, text)', 'EXECUTE')
+                 AND NOT has_function_privilege('anon', 'public.write_off_stock(uuid, public.part_condition, numeric, text)', 'EXECUTE'),
+  'списание доступно вошедшему сотруднику и закрыто без входа');
+SELECT pg_temp.check(NOT (SELECT prosecdef FROM pg_proc WHERE proname = 'write_off_stock')
+                 AND NOT (SELECT prosecdef FROM pg_proc WHERE proname = 'adjust_stock'),
+  'списание и корректировка работают с правами вызывающего');
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT pg_temp.expect_message(
+  $$SELECT public.write_off_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 1, 'Разбил')$$,
+  'Списывать запчасти со склада может только склад', 'инженер не списывает запчасти');
+SELECT pg_temp.expect_message(
+  $$SELECT public.adjust_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 9, 'Пересчёт')$$,
+  'Править остаток на складе может только склад', 'инженер не правит остаток');
+SELECT pg_temp.as_owner();
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.expect_message(
+  $$SELECT public.write_off_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 1, '   ')$$,
+  'Укажите причину списания: брак, утеря, бой — она останется в истории позиции',
+  'списание без причины не проводится');
+SELECT pg_temp.expect_message(
+  $$SELECT public.write_off_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 0, 'Брак')$$,
+  'Количество для списания должно быть больше нуля', 'нулевое списание не проводится');
+SELECT pg_temp.expect_message(
+  $$SELECT public.write_off_stock((SELECT id FROM ids WHERE k = 'part_a'), 'B', 1, 'Брак')$$,
+  'На складе нет этой запчасти в состоянии «б/у»: списывать нечего',
+  'списание из пустого состояния отказывается с названием состояния');
+SELECT pg_temp.expect_message(
+  $$SELECT public.write_off_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 11, 'Брак')$$,
+  'На складе 10 шт. в состоянии «новая»: списать можно не больше 10',
+  'больше, чем на складе, не списать');
+
+-- Под задачу зарезервировано 3 новых лампы: списать можно только остальные 7.
+SELECT pg_temp.check(pg_temp.make_reservation('res_a', (SELECT id FROM ids WHERE k = 't1'),
+    (SELECT id FROM ids WHERE k = 'part_a'), 'N', 3) IS NOT NULL,
+  'кладовщик заказал 3 шт. под задачу');
+SELECT pg_temp.expect_message(
+  $$SELECT public.write_off_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 8, 'Бой при перевозке')$$,
+  'На складе 10 шт. в состоянии «новая», из них 3 под задачи в резерве: списать можно не больше 7',
+  'зарезервированное под задачи не списывается');
+
+SELECT pg_temp.check(public.write_off_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 2, 'Бой при перевозке') = 8,
+  'кладовщик списал 2 шт. и получил новый остаток');
+SELECT pg_temp.check((SELECT on_hand_quantity = 8 AND reserved_quantity = 3 AND available_quantity = 5
+                        FROM stock_balances WHERE part_id = (SELECT id FROM ids WHERE k = 'part_a') AND part_condition = 'N'),
+  'остаток, резерв и доступное сошлись после списания');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_movements
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_a') AND movement_type = 'writeoff'
+                         AND quantity = 2 AND on_hand_delta = -2 AND comment = 'Бой при перевозке'
+                         AND performed_by = (SELECT id FROM ids WHERE k = 'warehouse')),
+  'списание записано движением с причиной и автором');
+
+-- Корректировка: фактически на полке 6 новых ламп вместо восьми учётных.
+SELECT pg_temp.expect_message(
+  $$SELECT public.adjust_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 6, '')$$,
+  'Укажите причину корректировки: номер инвентаризации или что именно разошлось',
+  'корректировка без причины не проводится');
+SELECT pg_temp.expect_message(
+  $$SELECT public.adjust_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 8, 'Инвентаризация 11/2026')$$,
+  'В состоянии «новая» на складе уже 8 шт.: корректировать нечего',
+  'корректировка без разницы не проводится');
+SELECT pg_temp.expect_message(
+  $$SELECT public.adjust_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 2, 'Инвентаризация 11/2026')$$,
+  'Под задачи зарезервировано 3 шт. в состоянии «новая», а по факту насчитали 2: снимите лишние резервы или проверьте пересчёт',
+  'корректировка ниже резерва не проводится');
+SELECT pg_temp.expect_message(
+  $$SELECT public.adjust_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', -1, 'Инвентаризация 11/2026')$$,
+  'Фактический остаток не может быть отрицательным', 'отрицательный факт не принимается');
+
+SELECT pg_temp.check(public.adjust_stock((SELECT id FROM ids WHERE k = 'part_a'), 'N', 6, 'Инвентаризация 11/2026') = 6,
+  'кладовщик выставил фактический остаток 6 шт.');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_movements
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_a') AND movement_type = 'adjustment'
+                         AND quantity = 2 AND on_hand_delta = -2
+                         AND comment = 'Инвентаризация: было 8, стало 6. Инвентаризация 11/2026'),
+  'корректировка проведена встречным движением с разницей в причине');
+-- Корректировка в плюс по состоянию, которого на складе ещё не было: партия заводится сама.
+SELECT pg_temp.check(public.adjust_stock((SELECT id FROM ids WHERE k = 'part_a'), 'B', 3, 'Нашли на полке') = 3,
+  'корректировка в плюс по пустому состоянию заводит партию');
+SELECT pg_temp.check((SELECT on_hand_quantity = 3 FROM stock_balances
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_a') AND part_condition = 'B'),
+  'найденные б/у встали в остаток');
+-- Снятая с учёта позиция: брак в ней тоже находят, инвентаризация считает всё.
+SELECT pg_temp.check(public.adjust_stock((SELECT id FROM ids WHERE k = 'part_off'), 'N', 1, 'Нашли при инвентаризации') = 1,
+  'снятая с учёта позиция корректируется');
+
+-- Движения только добавляются: правка и удаление закрыты (0014), причина обязательна.
+SELECT pg_temp.check(pg_temp.rows_affected($$UPDATE stock_movements SET quantity = 1 WHERE movement_type = 'writeoff'$$) = 0,
+  'движение склада не исправить');
+SELECT pg_temp.check(pg_temp.rows_affected($$DELETE FROM stock_movements WHERE movement_type = 'writeoff'$$) = 0,
+  'движение склада не удалить');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_movements WHERE movement_type = 'writeoff' AND quantity = 2),
+  'списание осталось в истории как было');
+SELECT pg_temp.expect_message(
+  $$INSERT INTO stock_movements (idempotency_key, movement_type, lot_id, part_id, part_condition, quantity, on_hand_delta)
+    VALUES ('direct:writeoff', 'writeoff', (SELECT id FROM ids WHERE k = 'lot_an'),
+            (SELECT id FROM ids WHERE k = 'part_a'), 'N', 1, -1)$$,
+  'У списания и корректировки причина обязательна: без неё движение по складу не проводится',
+  'прямое списание без причины не проводится');
+SELECT pg_temp.as_owner();
+
+-- =========================================================================
+-- 0048. История движений по позиции
+-- =========================================================================
+
+SELECT pg_temp.check(has_function_privilege('authenticated', 'public.inventory_part_movements(uuid, integer, integer)', 'EXECUTE')
+                 AND NOT has_function_privilege('anon', 'public.inventory_part_movements(uuid, integer, integer)', 'EXECUTE'),
+  'история движений доступна вошедшему сотруднику и закрыта без входа');
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.check((SELECT count(*) = 5 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))),
+  'история показывает все движения позиции по всем состояниям');
+SELECT pg_temp.check((SELECT movement_type <> 'receipt' FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a')) LIMIT 1)
+                 AND (SELECT movement_type = 'receipt' FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'), 1, 4)),
+  'история идёт от свежего к старому: приход трёхдневной давности в конце');
+SELECT pg_temp.check((SELECT performed_by_name = 'Тест warehouse' AND comment LIKE 'Инвентаризация: было 8, стало 6.%'
+                        FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE movement_type = 'adjustment' AND part_condition = 'N'),
+  'у корректировки видны автор и причина');
+SELECT pg_temp.check((SELECT comment = 'Накладная 77 от поставщика' AND task_number IS NULL AND reservation_number IS NULL
+                        FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE movement_type = 'receipt' AND part_condition = 'N'),
+  'у прихода видно, по какой накладной он пришёл');
+-- Остаток после движения считается по своему состоянию, а не по всей позиции: у последнего
+-- движения в состоянии он совпадает с остатком склада (10 − 2 − 2 = 6 новых, 4 гарантийных,
+-- 3 найденных б/у). Списание и корректировка в тесте идут одной транзакцией, то есть в одну
+-- и ту же секунду: что из них считать первым, порядок не определяет, поэтому проверяем итог.
+SELECT pg_temp.check((SELECT on_hand_after = 6 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE part_condition = 'N' LIMIT 1)
+                 AND (SELECT on_hand_after = 10 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE movement_type = 'receipt' AND part_condition = 'N')
+                 AND (SELECT on_hand_after = 4 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE part_condition = 'G' LIMIT 1)
+                 AND (SELECT on_hand_after = 3 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE part_condition = 'B' LIMIT 1),
+  'остаток после движения посчитан по состоянию, а не по всей позиции');
+SELECT pg_temp.check((SELECT total_count = 5 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'), 2, 0) LIMIT 1)
+                 AND (SELECT count(*) = 2 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'), 2, 0)),
+  'история листается страницами, общее число рядом со строкой');
+SELECT pg_temp.expect_message(
+  $$SELECT * FROM public.inventory_part_movements('00000000-0000-4000-8000-000000000000')$$,
+  'Запчасть не найдена в справочнике', 'история несуществующей позиции отказывается понятно');
+SELECT pg_temp.as_owner();
+
+-- Инженеру склад открыт на чтение: историю он видит, цены прихода в ней нет ни у кого.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT pg_temp.check((SELECT count(*) = 5 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))),
+  'инженер видит историю движений');
+SELECT pg_temp.as_owner();
+SELECT pg_temp.check(NOT EXISTS (
+  SELECT 1 FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+   WHERE n.nspname = 'public' AND p.proname = 'inventory_part_movements'
+     AND pg_get_function_result(p.oid) ILIKE '%price%'
+), 'история движений не отдаёт цену прихода');
+
+-- Выдача и возврат в истории: номер задачи остаётся виден и после того, как задача
+-- перестала быть доступна кладовщику (ради этого 0048 и работает от владельца схемы).
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+UPDATE stock_reservations SET status = 'warehouse_notified' WHERE id = (SELECT id FROM ids WHERE k = 'res_a');
+SELECT public.issue_stock_reservation((SELECT id FROM ids WHERE k = 'res_a'));
+SELECT pg_temp.check((SELECT task_number LIKE 'З-%' AND reservation_number LIKE 'Р-%'
+                        AND equipment_serial_number = 'SN-TEST-1' AND quantity = 3
+                        FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE movement_type = 'issue'),
+  'у выдачи в истории видны задача, резерв и прибор');
+SELECT public.return_stock_reservation((SELECT id FROM ids WHERE k = 'res_a'));
+SELECT pg_temp.check(NOT public.app_can_read_task((SELECT id FROM ids WHERE k = 't1')),
+  'после возврата задача кладовщику уже не видна');
+SELECT pg_temp.check((SELECT task_number LIKE 'З-%' FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE movement_type = 'issue'),
+  'номер задачи в истории виден и после того, как задача закрылась для склада');
+SELECT pg_temp.check((SELECT count(*) = 7 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))),
+  'выдача и возврат встали в историю позиции');
+SELECT pg_temp.as_owner();
 
 ROLLBACK;
