@@ -146,9 +146,11 @@ if (intakeSettings) {
 }
 
 // Ответы координатора из карточки задачи уходят, пока работает почта: по старой
-// переписке ответить нужно и тогда, когда забор новых писем выключен.
+// переписке ответить нужно и тогда, когда забор новых писем выключен. Если почта
+// настроена только под заявки (канал уведомлений e-mail выключен), ответы всё равно
+// уходят: иначе они копились бы в очереди молча.
 let taskReplySender: TaskMailReplySender | undefined;
-if (enabled.email) {
+if (enabled.email || intakeSettings) {
   taskReplySender = mailSender({ letter: "ответ клиенту", disabled: "Ответы клиентам по задачам выключены" }, intakeSettings?.onlyTo);
 }
 const planner = new CompositeEventDeliveryPlanner(planners);
