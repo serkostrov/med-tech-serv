@@ -439,7 +439,11 @@ SELECT pg_temp.check(NOT EXISTS (
        -- 0040: сборка позиций счёта читает резервы склада и цены прихода, а роль
        -- с finance.write может быть без warehouse.read — тогда счёт собрался бы молча
        -- без запчастей. Поэтому от владельца схемы с проверкой finance.write внутри.
-       'rebuild_invoice_items')
+       'rebuild_invoice_items',
+       -- 0058: удачные входы лежат в схеме auth (журнал GoTrue), сотруднику её читать
+       -- нельзя — досталась бы вся служебная история входа. Поэтому от владельца схемы
+       -- с проверкой audit.read первой же строкой.
+       'login_journal')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');
