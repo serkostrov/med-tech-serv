@@ -14,7 +14,7 @@ import {
   toast
 } from "./ui.js";
 import { formatIsoCalendarDate } from "./date-format.js";
-import { formatRussianCount } from "./equipment-changes.js";
+import { formatRussianCount, russianCountForm } from "./equipment-changes.js";
 import { companyToday } from "./task-dates.js";
 import {
   ALL_CATEGORIES_LABEL,
@@ -29,6 +29,8 @@ import {
   nextPriceAfter,
   parseAmount,
   parseSignedNumber,
+  zeroPriceCount,
+  zeroPriceWarning,
   previewBulkPrices,
   priceLineAmountText,
   priceLineNextText,
@@ -166,6 +168,8 @@ export function PricePage() {
   const bulkNumber = bulkMode === "fixed" ? parseAmount(bulkValue) : parseSignedNumber(bulkValue);
   const changes = bulkNumber === null ? [] : previewBulkPrices(selectedLines, { mode: bulkMode, value: bulkNumber });
   const items = bulkPriceItems(changes);
+  // Ноль разрешён, но пачкой он должен быть осознанным: про него говорим отдельно.
+  const zeroCount = zeroPriceCount(changes);
   const withPrice = lines.filter((line) => line.current).length;
   const withoutPrice = lines.length - withPrice;
   const planned = lines.filter((line) => line.next).length;
@@ -357,7 +361,7 @@ export function PricePage() {
                         onChange={(event) => toggleSelected(line.key, event.target.checked)}
                         type="checkbox"
                       /></td> : null}
-                      <td><strong>{line.workTypeName}</strong><small>{line.guaranteeCategoryName} · {line.workTypeCode}</small></td>
+                      <td><strong>{line.workTypeName}</strong><small>{line.guaranteeCategoryName}</small><code className="price-code" title="Код вида работ: по нему сверяют позицию со складом и бухгалтерией">{line.workTypeCode}</code></td>
                       <td className="numeric">{line.current
                         ? <strong>{priceLineAmountText(line)}</strong>
                         : <span className="is-empty">{priceLineAmountText(line)}</span>}</td>
@@ -406,7 +410,9 @@ export function PricePage() {
           placeholder="1 500,50"
           required
           value={amountDraft}
-        /></label>
+        />
+          {parseAmount(amountDraft) === 0 ? <span className="form-hint form-hint--warning">Ноль — работа бесплатная: в счёт такая работа не попадёт. Если это не так, укажите цену.</span> : null}
+        </label>
         <label>Действует с *<DatePicker aria-label="Дата начала действия цены" onChange={setValidFromDraft} required value={validFromDraft} />
           {laterPrice ? <span className="form-hint">Позже уже есть цена {formatMoney(laterPrice.amount)} с {formatIsoCalendarDate(laterPrice.validFrom)}: новая будет действовать только до неё.</span> : null}
         </label>
@@ -466,14 +472,15 @@ export function PricePage() {
               <span className="price-preview__name"><strong>{change.workTypeName}</strong><small>{change.guaranteeCategoryName}</small></span>
               <span className="price-preview__amounts">
                 {change.before === undefined ? <span className="is-empty">{PRICE_NOT_SET_LABEL}</span> : formatMoney(change.before)}
-                {change.after === undefined ? null : <> → <strong>{formatMoney(change.after)}</strong></>}
+                {change.after === undefined ? null : <> → {change.skipReason ? <span className="is-empty">{formatMoney(change.after)}</span> : <strong>{formatMoney(change.after)}</strong>}</>}
               </span>
               {change.skipReason ? <small className="price-preview__skip">{change.skipReason}</small> : null}
             </li>)}</ul>}
+        {zeroCount === 0 ? null : <p className="form-hint form-hint--warning">{zeroPriceWarning(zeroCount)}</p>}
         {bulkNumber === null ? null : <p className="form-hint">
           {items.length === 0
             ? "Ни одна строка не изменится."
-            : `Изменится ${formatRussianCount(items.length, ["строка", "строки", "строк"])} из ${selectedLines.length}.`}
+            : `${russianCountForm(items.length, ["Изменится", "Изменятся", "Изменятся"])} ${formatRussianCount(items.length, ["строка", "строки", "строк"])} из ${selectedLines.length}.`}
         </p>}
       </div>
     </DialogForm>

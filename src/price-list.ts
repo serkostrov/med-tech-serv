@@ -1,4 +1,5 @@
 import { formatIsoCalendarDate } from "./date-format.js";
+import { russianCountForm } from "./equipment-changes.js";
 
 /**
  * Строка прайса: цена вида работ, действующая с `validFrom` по `validTo`
@@ -180,13 +181,14 @@ export interface BulkPriceInput {
 /**
  * Новая цена строки: процентом от действующей, прибавкой к ней или одной суммой на все
  * строки. Процентом и прибавкой считать не из чего, пока цены нет, — тогда пусто.
- * Ниже нуля цена не опускается: база такую не примет.
+ * Результат ниже нуля к нулю не прижимаем: это ошибка в проценте или прибавке, и строку
+ * надо не менять, а объяснить в предпросмотре, почему она пропущена.
  */
 export function nextPriceAmount(current: number | undefined, input: BulkPriceInput): number | undefined {
-  if (input.mode === "fixed") return Math.max(0, roundToKopecks(input.value));
+  if (input.mode === "fixed") return roundToKopecks(input.value);
   if (current === undefined) return undefined;
   const raw = input.mode === "percent" ? current * (1 + input.value / 100) : current + input.value;
-  return Math.max(0, roundToKopecks(raw));
+  return roundToKopecks(raw);
 }
 
 /** Что получится у строки после массового изменения. */
@@ -209,6 +211,13 @@ const NO_BASE_PRICE_REASON = "Цены ещё нет: процентом и пр
 const SAME_PRICE_REASON = "Цена и так такая";
 const TOO_LARGE_REASON = "Цена слишком большая";
 
+/** Почему строка с отрицательным результатом не изменится: причина зависит от способа счёта. */
+const NEGATIVE_PRICE_REASON: Readonly<Record<BulkPriceMode, string>> = {
+  percent: "Цена ушла ниже нуля: снизить больше чем на 100 % нельзя",
+  delta: "Цена ушла ниже нуля: проверьте прибавку",
+  fixed: "Цена ниже нуля: укажите сумму от нуля"
+};
+
 /**
  * Предел столбца `numeric(14, 2)` в базе. Больше неё база отвергает весь вызов целиком,
  * не называя строку, поэтому такие строки отсекаем здесь и показываем это в предпросмотре.
@@ -222,7 +231,8 @@ export function previewBulkPrices(lines: readonly PriceLine[], input: BulkPriceI
     const after = nextPriceAmount(before, input);
     const skipReason = after === undefined
       ? NO_BASE_PRICE_REASON
-      : after === before ? SAME_PRICE_REASON : after > MAX_PRICE ? TOO_LARGE_REASON : undefined;
+      : after < 0 ? NEGATIVE_PRICE_REASON[input.mode]
+        : after === before ? SAME_PRICE_REASON : after > MAX_PRICE ? TOO_LARGE_REASON : undefined;
     return {
       key: line.key,
       workTypeCode: line.workTypeCode,
@@ -244,6 +254,27 @@ export interface BulkPriceItem {
   readonly guaranteeCategoryId: string | null;
   readonly amount: number;
   readonly includeGuaranteeWork: boolean;
+}
+
+/**
+ * Сколько строк из применяемых станут нулевыми. Ноль разрешён — бывает работа, которая
+ * в счёт не попадает, — но пачкой он должен быть осознанным, поэтому о нём предупреждаем.
+ */
+export function zeroPriceCount(changes: readonly BulkPriceChange[]): number {
+  return changes.filter((change) => !change.skipReason && change.after === 0).length;
+}
+
+/**
+ * Предупреждение о нулевых ценах: согласовано целиком, а не только числом.
+ * «Станет бесплатной 1 строка: в счёт такая работа не попадёт.»
+ */
+export function zeroPriceWarning(count: number): string {
+  if (count === 0) return "";
+  return russianCountForm(count, [
+    `Станет бесплатной ${count} строка: в счёт такая работа не попадёт.`,
+    `Станут бесплатными ${count} строки: в счёт такие работы не попадут.`,
+    `Станут бесплатными ${count} строк: в счёт такие работы не попадут.`
+  ]);
 }
 
 /** Строки, которые уйдут в базу: без пропущенных и без тех, где цена не меняется. */

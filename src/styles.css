@@ -6497,23 +6497,38 @@ td .resource-state {
 }
 
 .maintenance-schedule {
+  /* Одна раскладка на шкалу месяцев и на строки графика: иначе подписи и полоски
+     считают проценты от разной ширины и ТО показывается не в своём месяце. */
+  --maintenance-grid: 26px 245px minmax(260px, 1fr) 130px;
+  --maintenance-gap: 10px;
+  --maintenance-pad: 14px;
   overflow-x: auto;
 }
 
 .maintenance-months,
 .maintenance-group {
-  min-width: 920px;
+  min-width: 760px;
 }
 
 .maintenance-months {
   display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  margin: 8px 145px 2px 305px;
+  grid-template-columns: var(--maintenance-grid);
+  gap: var(--maintenance-gap);
+  margin: 8px 0 2px;
+  padding: 0 var(--maintenance-pad);
   color: var(--color-ink-soft);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
   text-align: center;
+}
+
+/* Шкала стоит ровно в той же колонке, что и дорожка с полосками, поэтому
+   «сегодня» и подпись месяца всегда совпадают с полоской на любой ширине. */
+.maintenance-months__scale {
+  display: grid;
+  grid-column: 3;
+  grid-template-columns: repeat(12, 1fr);
 }
 
 .maintenance-group {
@@ -6543,11 +6558,11 @@ td .resource-state {
 
 .maintenance-row {
   display: grid;
-  grid-template-columns: 26px 245px minmax(320px, 1fr) 130px;
+  grid-template-columns: var(--maintenance-grid);
   align-items: center;
-  gap: 10px;
+  gap: var(--maintenance-gap);
   min-height: 48px;
-  padding: 6px 14px;
+  padding: 6px var(--maintenance-pad);
   border-top: 1px solid var(--color-border-soft);
 }
 
@@ -6772,6 +6787,8 @@ td .resource-state {
 .dialog-form > .invoice-form,
 .dialog-form > .maintenance-plan-form { grid-column: 1 / -1; }
 .form-hint { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
+/* Подсказка, которую нужно прочитать до нажатия: не серая, а предупреждающая. */
+.form-hint--warning { color: var(--color-warning); font-weight: 600; }
 .dialog-form > .form-hint { grid-column: 1 / -1; }
 
 .invoice-form {
@@ -8359,8 +8376,24 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 .equipment-registry-table td strong { display: block; color: var(--color-ink); font-weight: 650; }
 .equipment-registry-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; }
-.equipment-registry-table__serial { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Серийный номер не рвётся: иначе «0971-12» на телефоне раскладывался на четыре строки.
+   Селектор с таблицей, чтобы перебить общее `white-space: normal` у `.data-table td`. */
+.equipment-registry-table td.equipment-registry-table__serial { font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
 .equipment-registry-actions { gap: 4px; }
+/* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана. */
+.equipment-registry-scroll { container-type: inline-size; }
+/* Карточки включаются ровно там, где таблица перестаёт помещаться (её min-width 760px),
+   иначе осталась бы полоса ширин, где реестр ездит вбок внутри карточки раздела. */
+@container (max-width: 760px) {
+  .equipment-registry-table { min-width: 0; }
+  .equipment-registry-table thead { display: none; }
+  .equipment-registry-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 14px; padding: 14px 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .equipment-registry-table tbody td { display: block; padding: 0; border: 0; overflow-wrap: break-word; }
+  .equipment-registry-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .equipment-registry-table td.equipment-registry-table__wide { grid-column: 1 / -1; }
+  .equipment-registry-table .equipment-registry-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .equipment-registry-table .equipment-registry-empty { grid-column: 1 / -1; }
+}
 
 .equipment-tasks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .equipment-tasks__item {
@@ -8392,7 +8425,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .year-stepper button { display: inline-grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 6px; color: var(--color-muted); background: transparent; font-size: 18px; line-height: 1; cursor: pointer; }
 .year-stepper button:hover { color: var(--color-ink); background: #eef2f5; }
 .year-stepper strong { min-width: 46px; color: var(--color-ink); font-size: 14px; font-variant-numeric: tabular-nums; text-align: center; }
-.maintenance-months { position: relative; }
+.maintenance-months__scale { position: relative; }
 .maintenance-today-label { position: absolute; top: -16px; transform: translateX(-50%); color: var(--color-danger); font-size: 11px; font-style: normal; font-weight: 700; white-space: nowrap; }
 .maintenance-today { position: absolute; top: -2px; bottom: -2px; z-index: 1; width: 2px; margin-left: -1px; background: var(--color-danger); opacity: .7; }
 .maintenance-group > header h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
@@ -8516,9 +8549,28 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* ===== Компетенции инженера: теги «производитель · линейка» ===== */
 .competency-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .competency-tags .tag { max-width: 100%; padding: 3px 8px; overflow-wrap: break-word; white-space: normal; }
-/* Таблица инженеров на телефоне прокручивается вбок: имена и теги не рвутся посреди слова. */
 .engineer-load-table td:first-child { min-width: 140px; }
-.engineer-load-table .competency-tags { min-width: 200px; }
+/* 200px здесь не давали таблице уместиться на ноутбуке 1280: карточка раздела там 985
+   точек, а таблице нужно было 992, и она ездила вбок на семь точек. Теги и так переносятся. */
+.engineer-load-table .competency-tags { min-width: 160px; }
+/* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана. */
+.engineer-load-scroll { container-type: inline-size; }
+/* Узко (телефон): инженер карточкой. Раньше «Загрузка», «Открытые», «В работе»,
+   «Просрочено» и «Состояние» уезжали вправо, и цифр не было видно вообще. */
+@container (max-width: 760px) {
+  .engineer-load-table { min-width: 0; }
+  .engineer-load-table thead { display: none; }
+  .engineer-load-table tbody tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; padding: 14px 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .engineer-load-table tbody td { display: block; padding: 0; border: 0; overflow-wrap: break-word; }
+  .engineer-load-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .engineer-load-table td.engineer-load-table__wide { grid-column: 1 / -1; }
+  .engineer-load-table td:first-child { min-width: 0; }
+  .engineer-load-table .competency-tags { min-width: 0; }
+  /* Цифры читаются как цифры: подпись слева, значение под ней. */
+  .engineer-load-table td.numeric { text-align: left; }
+  .engineer-load-table tbody tr > td:last-child { grid-column: 1 / -1; }
+  .engineer-load-table tbody tr > td:last-child .table-actions { justify-content: flex-start; }
+}
 .competency-field { display: grid; gap: 6px; min-width: 0; }
 .competency-field__label { color: var(--color-ink); font-size: 12px; font-weight: 600; }
 .competency-editor {
@@ -8739,6 +8791,21 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* ===== Прайс: цены по видам работ ===== */
 .price-table td.numeric strong { white-space: nowrap; }
+/* Код вида работ нужен для сверки со складом и бухгалтерией, но читаться он
+   должен как код, а не как продолжение названия: отдельная строка-плашка. */
+.price-code {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 5px;
+  color: var(--color-muted);
+  background: #f4f7f9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
 .price-history-row td { padding: 0 14px 12px; background: #f8fafb; }
 .data-table tbody tr.price-history-row:hover td { background: #f8fafb; }
 .price-history__empty { margin: 10px 0 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
