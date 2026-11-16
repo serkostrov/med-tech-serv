@@ -429,7 +429,7 @@ export interface ReportEngineerLoadItem {
 export interface ReportSpendItem {
   readonly id: string;
   readonly name: string;
-  /** Уточнение в строке: заводской номер прибора, площадка и плательщик. */
+  /** Вторая строка в ячейке: у прибора — его площадка и плательщик. */
   readonly detail?: string;
   readonly taskCount: number;
   readonly invoiceCount: number;
