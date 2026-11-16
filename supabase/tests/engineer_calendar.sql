@@ -66,7 +66,7 @@ DECLARE
   r text; uid uuid; base text;
   org uuid; site uuid; payer uuid; manuf uuid; model uuid; eq uuid; wt text;
   coord uuid; e1 uuid; e2 uuid; e3 uuid;
-  t_long uuid; t_day1 uuid; t_day2 uuid; t_visit uuid; t_undated uuid; t_cancelled uuid; t_outside uuid; t_closed uuid;
+  t_long uuid; t_day1 uuid; t_day2 uuid; t_visit uuid; t_undated uuid; t_cancelled uuid; t_outside uuid; t_closed uuid; t_free uuid;
 BEGIN
   FOREACH r IN ARRAY roles LOOP
     uid := gen_random_uuid();
@@ -104,18 +104,29 @@ BEGIN
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, deadline_from, deadline_to, status_code)
   VALUES ('Календарь: декабрь', wt, eq, site, payer, e1, coord, '2026-11-10', '2026-12-01', '2026-12-02', 'assigned') RETURNING id INTO t_outside;
 
-  -- Второй инженер: задача без периода, но с датой выезда 19.11, и открытая задача без срока.
+  -- Второй инженер: задача без периода, но с датой выезда 19.11, и задача совсем без срока.
+  -- У новых задач период обязателен (ограничение tasks_execution_period_required, 0001),
+  -- поэтому такие строки бывают только историческими — из данных до этого ограничения.
+  -- Ограничение заведено NOT VALID, то есть старые строки оно пропускает, а новые нет;
+  -- чтобы завести такие строки в тесте, снимаем его на время транзакции (ROLLBACK вернёт).
+  EXECUTE 'ALTER TABLE public.tasks DROP CONSTRAINT tasks_execution_period_required';
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, visit_date, status_code)
   VALUES ('Календарь: только выезд', wt, eq, site, payer, e2, coord, '2026-11-10', '2026-11-19', 'assigned') RETURNING id INTO t_visit;
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, status_code)
   VALUES ('Календарь: без срока', wt, eq, site, payer, e2, coord, '2026-11-10', 'assigned') RETURNING id INTO t_undated;
+  EXECUTE 'ALTER TABLE public.tasks ADD CONSTRAINT tasks_execution_period_required CHECK (deadline_from IS NOT NULL AND deadline_to IS NOT NULL) NOT VALID';
 
   -- Неактивный инженер: закрытая задача в дне периода (день она всё-таки заняла).
   INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by, call_date, deadline_from, deadline_to, status_code, work_completed, apparatus_approved, customer_has_no_claims, work_description)
   VALUES ('Календарь: закрытая', wt, eq, site, payer, e3, coord, '2026-11-10', '2026-11-20', '2026-11-20', 'closed', true, true, true, 'сделано') RETURNING id INTO t_closed;
 
+  -- Задача периода без инженера: её назначают из календаря.
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, created_by, call_date, deadline_from, deadline_to, status_code)
+  VALUES ('Календарь: без инженера', wt, eq, site, payer, coord, '2026-11-10', '2026-11-18', '2026-11-18', 'new') RETURNING id INTO t_free;
+
   INSERT INTO ids VALUES ('t_long', t_long), ('t_day1', t_day1), ('t_day2', t_day2), ('t_visit', t_visit),
-    ('t_undated', t_undated), ('t_cancelled', t_cancelled), ('t_outside', t_outside), ('t_closed', t_closed);
+    ('t_undated', t_undated), ('t_cancelled', t_cancelled), ('t_outside', t_outside), ('t_closed', t_closed),
+    ('t_free', t_free);
 END $$;
 
 -- ----------------------------------------------------------------- Координатор
@@ -125,8 +136,15 @@ SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'coordinator'));
 -- закрытая у неактивного. Отменённая и декабрьская не попали.
 SELECT pg_temp.check(
   (SELECT count(*) FROM public.engineer_calendar('2026-11-16', '2026-11-22') AS c
-    WHERE c.task_id IN (SELECT id FROM ids WHERE k LIKE 't\_%')) = 6,
+    WHERE c.task_id IN (SELECT id FROM ids WHERE k LIKE 't\_%')) = 7,
   'координатор видит задачи периода, кроме отменённой и задач вне периода');
+
+-- Задача без инженера приходит строкой без инженера: из календаря её назначают.
+SELECT pg_temp.check(
+  (SELECT count(*) = 1 AND bool_and(c.engineer_id IS NULL AND c.engineer_name IS NULL)
+     FROM public.engineer_calendar('2026-11-16', '2026-11-22') AS c
+    WHERE c.task_id = (SELECT id FROM ids WHERE k = 't_free')),
+  'задача без инженера приходит координатору строкой с пустым инженером');
 
 SELECT pg_temp.check(
   (SELECT count(*) FROM public.engineer_calendar('2026-11-16', '2026-11-22') AS c
@@ -244,6 +262,10 @@ SELECT pg_temp.check(
   (SELECT count(*) FROM public.engineer_calendar('2026-11-16', '2026-11-22') AS c
     WHERE c.task_id = (SELECT id FROM ids WHERE k = 't_visit')) = 0,
   'инженер не видит задачу коллеги даже в своей строке');
+SELECT pg_temp.check(
+  (SELECT count(*) FROM public.engineer_calendar('2026-11-16', '2026-11-22') AS c
+    WHERE c.task_id = (SELECT id FROM ids WHERE k = 't_free')) = 0,
+  'инженер не видит нераспределённых задач');
 RESET ROLE;
 
 -- ----------------------------------------------------------------- Кладовщику календарь не положен

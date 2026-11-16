@@ -12,13 +12,17 @@
  *    но есть дата выезда, задача занимает один этот день.
  * 2. Задача без периода и без даты выезда ни на какой день не раскладывается: она попадает
  *    в отдельный список «Без срока» у инженера. Иначе её пришлось бы молча ставить на
- *    сегодня и календарь показывал бы занятость, которой нет.
+ *    сегодня и календарь показывал бы занятость, которой нет. У новых задач период
+ *    обязателен (ограничение tasks_execution_period_required, миграция 0001), поэтому
+ *    такие задачи бывают только из старых данных — и терять их в календаре нельзя.
  * 3. «Перегружен» — три и более задачи в один день (OVERLOADED_TASKS_PER_DAY): столько
  *    выездов в день по городу уже не успеть. Один-два дня — норма, ноль — окно.
  * 4. Нерабочий день — суббота и воскресенье: графика работ и отпусков в системе нет,
  *    поэтому другой источник «не работает» взять негде. Неактивный инженер не работает
  *    совсем, его строка в календаре помечена и в подсказке он не предлагается.
  */
+
+import { formatRussianCount } from "./equipment-changes.js";
 
 const CALENDAR_DATE = /^(\d{4})-(\d{2})-(\d{2})$/u;
 const MS_IN_DAY = 86_400_000;
@@ -462,29 +466,39 @@ export function engineerPeriodLoad(input: {
   });
 }
 
+/**
+ * Занятость из чисел базы (функция engineer_period_load, миграция 0051). База считает
+ * только количества, а «свободен», «перегружен» и «не работает» решаются здесь, по тем же
+ * правилам, что и при расчёте из задач: порог перегруза живёт в одном месте.
+ */
+export function periodLoadFromCounts(input: {
+  readonly engineerId: string;
+  readonly taskCount: number;
+  readonly busiestDayCount: number;
+  readonly busiestDay?: string;
+  readonly freeWorkdayCount: number;
+  readonly workdayCount: number;
+  readonly overdueTaskCount: number;
+}): EngineerPeriodLoad {
+  return {
+    engineerId: input.engineerId,
+    taskCount: input.taskCount,
+    busiestDayCount: input.busiestDayCount,
+    ...(input.busiestDay && input.busiestDayCount > 0 ? { busiestDay: input.busiestDay } : {}),
+    freeWorkdayCount: input.freeWorkdayCount,
+    workdayCount: input.workdayCount,
+    isFree: input.taskCount === 0,
+    isOverloaded: input.busiestDayCount >= OVERLOADED_TASKS_PER_DAY,
+    worksNoDay: input.workdayCount === 0,
+    overdueTaskCount: input.overdueTaskCount
+  };
+}
+
 /** «16 ноября»: день в подсказке пишем словами, без года — период всегда рядом. */
 export function calendarDayTitle(date: string): string {
   const match = CALENDAR_DATE.exec(date.trim());
   if (!match) return "";
   return `${Number(match[3])} ${MONTH_IN_CASE[Number(match[2]) - 1] ?? ""}`.trim();
-}
-
-function tasksWord(count: number): string {
-  const tail = count % 100;
-  if (tail >= 11 && tail <= 14) return "задач";
-  const last = count % 10;
-  if (last === 1) return "задача";
-  if (last >= 2 && last <= 4) return "задачи";
-  return "задач";
-}
-
-function daysWord(count: number): string {
-  const tail = count % 100;
-  if (tail >= 11 && tail <= 14) return "дней";
-  const last = count % 10;
-  if (last === 1) return "день";
-  if (last >= 2 && last <= 4) return "дня";
-  return "дней";
 }
 
 /**
@@ -493,9 +507,9 @@ function daysWord(count: number): string {
  */
 export function periodLoadText(load: EngineerPeriodLoad): string {
   if (load.worksNoDay) return "В эти дни не работает: только выходные";
-  if (load.isFree) return `Свободен все ${load.workdayCount} ${daysWord(load.workdayCount)} периода`;
+  if (load.isFree) return `Свободен все ${formatRussianCount(load.workdayCount, ["день", "дня", "дней"])} периода`;
   const busiest = load.busiestDay ? ` ${calendarDayTitle(load.busiestDay)}` : "";
-  const peak = `${load.busiestDayCount} ${tasksWord(load.busiestDayCount)}${busiest}`;
+  const peak = `${formatRussianCount(load.busiestDayCount, ["задача", "задачи", "задач"])}${busiest}`;
   const free = load.freeWorkdayCount > 0 ? `, свободных дней ${load.freeWorkdayCount}` : ", свободных дней нет";
   const overdue = load.overdueTaskCount > 0 ? `, просрочек ${load.overdueTaskCount}` : "";
   return `${load.isOverloaded ? `Перегружен: ${peak}` : `Занят: ${peak}`}${free}${overdue}`;

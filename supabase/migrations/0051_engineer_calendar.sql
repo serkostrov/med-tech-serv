@@ -116,6 +116,10 @@ GRANT EXECUTE ON FUNCTION public.engineer_calendar_scope() TO authenticated;
 --
 -- Неактивный инженер попадает в календарь только с задачами: пустые строки уволившихся
 -- сетку не занимают.
+--
+-- Задачи без инженера приходят строками с пустым engineer_id и только тому, кто видит
+-- всех инженеров: из календаря их и назначают. Инженеру чужих нераспределённых задач
+-- не видно — он отвечает за свои выезды.
 CREATE OR REPLACE FUNCTION public.engineer_calendar(p_from date, p_to date)
 RETURNS TABLE (
   engineer_id uuid,
@@ -139,6 +143,8 @@ STABLE
 SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
+DECLARE
+  v_all boolean := public.app_has_permission('tasks.read_all');
 BEGIN
   PERFORM public.assert_engineer_calendar_period(p_from, p_to);
   RETURN QUERY
@@ -161,41 +167,75 @@ BEGIN
       public.service_task_is_overdue(t.deadline_to, t.status_code, public.company_today()) AS overdue,
       (t.deadline_from IS NULL AND t.deadline_to IS NULL AND t.visit_date IS NULL) AS no_dates
     FROM public.tasks AS t
-    WHERE t.engineer_id IN (SELECT s.id FROM scope AS s)
+    WHERE (t.engineer_id IN (SELECT s.id FROM scope AS s)
+        -- Нераспределённые задачи периода — только тому, кто видит всех инженеров.
+        OR (v_all AND t.engineer_id IS NULL))
       AND (
         -- Задача занимает хотя бы один день периода: пересечение по дням задачи.
         (t.status_code <> 'cancelled'
           AND coalesce(t.deadline_from, t.deadline_to, t.visit_date) <= p_to
           AND coalesce(t.deadline_to, t.deadline_from, t.visit_date) >= p_from)
-        -- Открытая задача без срока: дня у неё нет, но инженеру её уже отдали.
+        -- Открытая задача без срока: дня у неё нет, но она уже ждёт выезда.
         OR (t.deadline_from IS NULL AND t.deadline_to IS NULL AND t.visit_date IS NULL
           AND t.status_code NOT IN ('closed', 'cancelled'))
       )
+  ), decorated AS (
+    SELECT
+      p.id,
+      p.owner_id,
+      p.number,
+      p.title,
+      p.status_code,
+      p.priority_text,
+      p.deadline_from,
+      p.deadline_to,
+      p.visit_date,
+      site.name AS site_name,
+      nullif(concat_ws(' · ', nullif(btrim(concat_ws(' ', manufacturer.name, model.name)), ''), equipment.serial_number), '') AS equipment_label,
+      p.overdue,
+      p.no_dates
+    FROM picked AS p
+    LEFT JOIN public.sites AS site ON site.id = p.site_id
+    LEFT JOIN public.equipment AS equipment ON equipment.id = p.equipment_id
+    LEFT JOIN public.manufacturers AS manufacturer ON manufacturer.id = equipment.manufacturer_id
+    LEFT JOIN public.equipment_models AS model ON model.id = equipment.model_id
+  ), calendar_rows AS (
+    SELECT
+      s.id AS engineer_id,
+      s.full_name AS engineer_name,
+      s.is_active AS engineer_is_active,
+      d.id AS task_id,
+      d.number AS task_number,
+      d.title AS task_title,
+      d.status_code AS task_status,
+      d.priority_text AS priority_code,
+      d.deadline_from AS period_from,
+      d.deadline_to AS period_to,
+      d.visit_date AS visit_date,
+      d.site_name AS site_name,
+      d.equipment_label AS equipment_label,
+      coalesce(d.overdue, false) AS is_overdue,
+      coalesce(d.no_dates, false) AS has_no_dates
+    FROM scope AS s
+    LEFT JOIN decorated AS d ON d.owner_id = s.id
+    WHERE s.is_active OR d.id IS NOT NULL
+    UNION ALL
+    SELECT
+      NULL::uuid, NULL::text, NULL::boolean,
+      d.id, d.number, d.title, d.status_code, d.priority_text,
+      d.deadline_from, d.deadline_to, d.visit_date, d.site_name, d.equipment_label,
+      coalesce(d.overdue, false), coalesce(d.no_dates, false)
+    FROM decorated AS d
+    WHERE d.owner_id IS NULL
   )
+  -- Нераспределённые задачи (без имени инженера) идут последними.
   SELECT
-    s.id,
-    s.full_name,
-    s.is_active,
-    p.id,
-    p.number,
-    p.title,
-    p.status_code,
-    p.priority_text,
-    p.deadline_from,
-    p.deadline_to,
-    p.visit_date,
-    site.name,
-    nullif(concat_ws(' · ', nullif(btrim(concat_ws(' ', manufacturer.name, model.name)), ''), equipment.serial_number), ''),
-    coalesce(p.overdue, false),
-    coalesce(p.no_dates, false)
-  FROM scope AS s
-  LEFT JOIN picked AS p ON p.owner_id = s.id
-  LEFT JOIN public.sites AS site ON site.id = p.site_id
-  LEFT JOIN public.equipment AS equipment ON equipment.id = p.equipment_id
-  LEFT JOIN public.manufacturers AS manufacturer ON manufacturer.id = equipment.manufacturer_id
-  LEFT JOIN public.equipment_models AS model ON model.id = equipment.model_id
-  WHERE s.is_active OR p.id IS NOT NULL
-  ORDER BY s.full_name, p.deadline_from NULLS LAST, p.number;
+    r.engineer_id, r.engineer_name, r.engineer_is_active,
+    r.task_id, r.task_number, r.task_title, r.task_status, r.priority_code,
+    r.period_from, r.period_to, r.visit_date, r.site_name, r.equipment_label,
+    r.is_overdue, r.has_no_dates
+  FROM calendar_rows AS r
+  ORDER BY r.engineer_name NULLS LAST, r.period_from NULLS LAST, r.task_number;
 END
 $$;
 
