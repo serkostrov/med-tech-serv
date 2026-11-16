@@ -3,7 +3,11 @@ import { describe, it } from "node:test";
 import { M2ApiClient } from "./m2-api.js";
 import {
   canExportInvoice,
-  invoiceActions,
+  invoiceCardActions,
+  invoiceLineSource,
+  invoiceMissingPriceHint,
+  invoiceModifierLabel,
+  invoiceWorkDate,
   invoiceAmounts,
   invoiceFileName,
   invoiceHistorySteps,
@@ -105,15 +109,21 @@ describe("карточка счёта", () => {
     assert.equal(invoicePreviewTotal(1000, -5000), 0);
   });
 
-  it("показывает кнопки по статусу", () => {
-    const kinds = (status: string, canWrite = true) => invoiceActions({ status, canWrite }).map((action) => action.kind);
-    assert.deepEqual(kinds("draft"), ["issue", "rebuild", "correct", "cancel"]);
-    assert.deepEqual(kinds("issued"), ["transfer", "correct", "cancel"]);
-    // Передан в 1С и отменён: менять нечего.
-    assert.deepEqual(kinds("transferred_to_1c"), []);
-    assert.deepEqual(kinds("cancelled"), []);
-    // Пересобрать по прайсу можно только черновик, скорректировать — пока счёт не в 1С.
-    assert.ok(!kinds("issued").includes("rebuild"));
+  it("главный шаг один и зависит от статуса: черновик выставляют, выставленный передают в 1С", () => {
+    assert.equal(invoiceCardActions({ status: "draft", canWrite: true }).next?.kind, "issue");
+    assert.equal(invoiceCardActions({ status: "issued", canWrite: true }).next?.kind, "transfer");
+    // Передан в 1С и отменён: дальше шагов нет.
+    assert.equal(invoiceCardActions({ status: "transferred_to_1c", canWrite: true }).next, null);
+    assert.equal(invoiceCardActions({ status: "cancelled", canWrite: true }).next, null);
+  });
+
+  it("обновить строки можно только у черновика, скидку и отмену — пока счёт не в 1С", () => {
+    const draft = invoiceCardActions({ status: "draft", canWrite: true });
+    const issued = invoiceCardActions({ status: "issued", canWrite: true });
+    const transferred = invoiceCardActions({ status: "transferred_to_1c", canWrite: true });
+    assert.deepEqual([draft.canRebuild, draft.canCorrect, draft.canCancel], [true, true, true]);
+    assert.deepEqual([issued.canRebuild, issued.canCorrect, issued.canCancel], [false, true, true]);
+    assert.deepEqual([transferred.canRebuild, transferred.canCorrect, transferred.canCancel], [false, false, false]);
   });
 
   it("выгрузку файлом даёт на любом статусе, но только если есть что выгружать", () => {
@@ -123,8 +133,42 @@ describe("карточка счёта", () => {
 
   it("без права finance.write кнопок нет ни на одном статусе", () => {
     for (const status of ["draft", "issued", "transferred_to_1c", "cancelled"]) {
-      assert.deepEqual(invoiceActions({ status, canWrite: false }), []);
+      assert.deepEqual(invoiceCardActions({ status, canWrite: false }), { next: null, canRebuild: false, canCorrect: false, canCancel: false });
     }
+  });
+
+  it("«Н» в счёте — неправильная эксплуатация, а не «не гарантия»", () => {
+    assert.equal(invoiceModifierLabel("G"), "Гарантия");
+    assert.equal(invoiceModifierLabel("N"), "Неправильная эксплуатация");
+    assert.equal(invoiceModifierLabel(null), "");
+  });
+
+  it("день работ берётся так же, как в базе: окончание, иначе выезд, иначе закрытие — по Москве", () => {
+    // 22:30 UTC 11 ноября — это уже 12 ноября в Москве.
+    assert.equal(invoiceWorkDate({ workFinishedAt: "2026-11-11T22:30:00.000Z", visitDate: "2026-11-01" }), "2026-11-12");
+    assert.equal(invoiceWorkDate({ visitDate: "2026-11-05", completedAt: "2026-11-09T10:00:00.000Z" }), "2026-11-05");
+    assert.equal(invoiceWorkDate({ completedAt: "2026-11-09T10:00:00.000Z" }), "2026-11-09");
+    assert.equal(invoiceWorkDate({}), null);
+  });
+
+  it("под ценой видно, откуда она: прайс на день работ или цена прихода", () => {
+    assert.equal(invoiceLineSource({ itemType: "work", workDate: "2026-11-12" }), "по прайсу на 12.11.2026");
+    assert.equal(invoiceLineSource({ itemType: "work", workDate: null }), "по прайсу на день работ");
+    assert.equal(invoiceLineSource({ itemType: "part", workDate: "2026-11-12" }), "цена прихода со склада");
+  });
+
+  it("у строки без цены подпись говорит, чего не хватает, а подсказка — кому это вписать", () => {
+    assert.equal(invoiceLineSource({ itemType: "work", unitPrice: 0, workDate: "2026-10-30" }), "в прайсе на 30.10.2026 цены нет");
+    assert.equal(invoiceLineSource({ itemType: "part", unitPrice: 0 }), "цены прихода нет");
+    assert.equal(
+      invoiceMissingPriceHint([{ itemType: "part", unitPrice: 0 }, { itemType: "work", unitPrice: 5200 }]),
+      "Нет цены у запчасти — пусть кладовщик впишет цену прихода. Потом нажмите «Обновить по прайсу»."
+    );
+    assert.equal(
+      invoiceMissingPriceHint([{ itemType: "work", unitPrice: 0 }, { itemType: "work", unitPrice: 0 }, { itemType: "part", unitPrice: 0 }]),
+      "Нет цены у 2 работ — задайте цену в прайсе, у запчасти — пусть кладовщик впишет цену прихода. Потом нажмите «Обновить по прайсу»."
+    );
+    assert.equal(invoiceMissingPriceHint([{ itemType: "work", unitPrice: 100 }]), "");
   });
 
   it("подписывает статус, его тон и говорит, что со счётом дальше", () => {
@@ -133,7 +177,7 @@ describe("карточка счёта", () => {
     assert.equal(invoiceStatusLabel("paid"), "paid");
     assert.equal(invoiceStatusTone("draft"), "warning");
     assert.equal(invoiceStatusTone("transferred_to_1c"), "success");
-    assert.match(invoiceStatusNote("draft"), /пересобрать по прайсу/u);
+    assert.match(invoiceStatusNote("draft"), /ещё не выставлен/u);
     assert.equal(invoiceStatusNote("paid"), "");
   });
 

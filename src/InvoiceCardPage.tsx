@@ -17,7 +17,7 @@ import { XLSX_MIME } from "./xlsx.js";
 import { invoiceWorkbook } from "./invoice-export.js";
 import {
   canExportInvoice,
-  invoiceActions,
+  invoiceCardActions,
   invoiceAmounts,
   invoiceFileName,
   invoiceHistorySteps,
@@ -25,7 +25,9 @@ import {
   invoiceItemTypeLabel,
   invoiceItemsInOrder,
   invoiceLineAmount,
+  invoiceLineSource,
   invoiceLinesWithoutPrice,
+  invoiceMissingPriceHint,
   invoiceModifierLabel,
   invoicePreviewTotal,
   invoiceStatusLabel,
@@ -38,8 +40,6 @@ import {
 function message(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
 }
-
-const PRICE_MISSING_HINT = "Цены на дату работ не нашлось в прайсе";
 
 /** Количество: часы работ бывают дробными, лишние нули в хвосте не нужны. */
 function quantityText(quantity: number): string {
@@ -66,8 +66,9 @@ function InvoiceItemsTable({ items, guarantee = false }: { readonly items: reado
         </td>
         <td className="numeric">{quantityText(item.quantity)}</td>
         <td className="numeric">{item.unitPrice === 0
-          ? <span className="is-empty" title={PRICE_MISSING_HINT}>Нет цены</span>
-          : formatMoney(item.unitPrice)}</td>
+          ? <span className="is-empty">Нет цены</span>
+          : formatMoney(item.unitPrice)}
+          <small className="invoice-line__source">{invoiceLineSource(item)}</small></td>
         <td className="numeric">{guarantee
           ? <span className="muted">{formatMoney(invoiceLineAmount(item))}</span>
           : <strong>{formatMoney(invoiceLineAmount(item))}</strong>}</td>
@@ -124,7 +125,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
   const amounts = invoiceAmounts(card ?? { items: [], subtotal: 0, adjustmentAmount: 0, totalAmount: 0 });
   const withoutPrice = invoiceLinesWithoutPrice(items);
   const steps = invoiceHistorySteps(card?.statusHistory ?? []);
-  const actions = invoiceActions({ status, canWrite });
+  const actions = invoiceCardActions({ status, canWrite });
   const adjustment = parseInvoiceAdjustment(adjustmentDraft);
 
   // Счёт меняет только база, поэтому после каждого действия перечитываем карточку целиком.
@@ -136,7 +137,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
     const done: Readonly<Record<string, string>> = {
       issue: `Счёт ${number} выставлен`,
       transfer: `Счёт ${number} передан в 1С`,
-      rebuild: `Позиции счёта ${number} пересобраны по прайсу`,
+      rebuild: `Строки счёта ${number} обновлены по прайсу`,
       cancel: `Счёт ${number} отменён`
     };
     toast.success(done[kind] ?? "Готово");
@@ -225,9 +226,9 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
       tone: "primary"
     },
     rebuild: {
-      title: `Пересобрать позиции счёта ${number}?`,
-      description: "Позиции соберутся заново по задачам счёта и действующему прайсу. Нынешние строки заменятся, корректировка останется.",
-      confirmLabel: "Пересобрать",
+      title: `Обновить строки счёта ${number} по прайсу?`,
+      description: "Строки соберутся заново: работы — по прайсу на день работ, запчасти — по цене прихода. Нужно, если поменяли цену в прайсе или результат задачи. Скидка останется.",
+      confirmLabel: "Обновить",
       tone: "primary"
     },
     cancel: {
@@ -259,10 +260,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
 
   return <div className="equipment-card-view">
     <EntityDetailToolbar
-      actions={<>
-        <Button busy={exporting} disabled={!canExportInvoice({ itemCount: items.length })} onClick={() => void exportFile()} variant="secondary">Выгрузить в Excel</Button>
-        {actions.map((action) => <Button key={action.kind} onClick={() => start(action.kind)} variant={action.variant}>{action.label}</Button>)}
-      </>}
+      actions={<Button busy={exporting} disabled={!canExportInvoice({ itemCount: items.length })} onClick={() => void exportFile()} variant="secondary">Выгрузить в Excel</Button>}
       backLabel="К счетам"
       onBack={onBack}
     />
@@ -272,19 +270,28 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
         <StatusBadge tone={invoiceStatusTone(status)}>{invoiceStatusLabel(status)}</StatusBadge>
       </div>
       <h1>{invoice.payer.name || "Плательщик не указан"}</h1>
-      <p>{[inn ? `ИНН ${inn}` : null, kpp ? `КПП ${kpp}` : null, invoiceStatusNote(status)].filter(Boolean).join(" · ")}</p>
+      <p>{[inn ? `ИНН ${inn}` : null, kpp ? `КПП ${kpp}` : null, actions.next ? null : invoiceStatusNote(status)].filter(Boolean).join(" · ")}</p>
     </header>
+    {actions.next ? <section aria-label="Следующий шаг" className="task-next-step">
+      <div className="task-next-step__text"><strong>{actions.next.title}</strong><span>{actions.next.hint}</span></div>
+      <div className="task-next-step__actions">
+        <Button onClick={() => start(actions.next!.kind)}>{actions.next.label}</Button>
+      </div>
+    </section> : null}
     <div className="task-layout">
       <div className="task-layout__main">
         <section aria-labelledby="invoice-items-title" className="task-section">
           <header className="task-section__head">
             <h3 id="invoice-items-title">Позиции счёта</h3>
-            <span className="muted">{formatRussianCount(groups.billable.length, ["строка", "строки", "строк"])}</span>
+            <div className="task-section__actions">
+              <span className="muted">{formatRussianCount(groups.billable.length, ["строка", "строки", "строк"])}</span>
+              {actions.canRebuild ? <Button className="button--compact" onClick={() => start("rebuild")} variant="secondary">Обновить по прайсу</Button> : null}
+            </div>
           </header>
           {groups.billable.length === 0
             ? <ResourceState
               description={status === "draft"
-                ? "Позиции заполняются при создании счёта: работа по задаче и установленные запчасти. Если их нет, счёт создан до обновления базы на сервере — после обновления нажмите «Пересобрать по прайсу»."
+                ? "Позиции заполняются при создании счёта: работа по задаче и установленные запчасти. Если их нет, счёт создан до обновления базы на сервере — после обновления нажмите «Обновить по прайсу»."
                 : "В счёте нет строк, которые идут в сумму."}
               status="empty"
               title="Позиций пока нет"
@@ -292,7 +299,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
             : <>
               <InvoiceItemsTable items={groups.billable} />
               {withoutPrice.length > 0
-                ? <p className="form-hint">Без цены {formatRussianCount(withoutPrice.length, ["строка", "строки", "строк"])}: цены на дату работ не нашлось в прайсе. Задайте её в прайсе и пересоберите черновик.</p>
+                ? <p className="form-hint">{invoiceMissingPriceHint(withoutPrice)}</p>
                 : null}
             </>}
         </section>
@@ -325,9 +332,10 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
           <header className="task-props__head"><h2>Итог</h2></header>
           <dl>
             <div><dt>Позиции</dt><dd>{formatMoney(amounts.subtotal)}</dd></div>
-            <div><dt>Корректировка</dt><dd>
+            <div><dt>Скидка или надбавка</dt><dd>
               {amounts.adjustment === 0 ? <span className="is-empty">Нет</span> : formatMoney(amounts.adjustment)}
               {card.correctionReason ? <small>{card.correctionReason}</small> : null}
+              {actions.canCorrect ? <button className="link-button invoice-correct-link" onClick={() => start("correct")} type="button">{amounts.adjustment === 0 ? "Добавить" : "Изменить"}</button> : null}
             </dd></div>
             <div><dt>К оплате</dt><dd><strong>{formatMoney(amounts.total)}</strong></dd></div>
             {groups.guarantee.length > 0
@@ -341,6 +349,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
             <div><dt>Передан в 1С</dt><dd>{invoice.transferredAt ? formatDisplayDateTime(invoice.transferredAt) : <span className="is-empty">Ещё нет</span>}</dd></div>
             <div><dt>Задач в счёте</dt><dd>{invoice.taskIds.length === 0 ? <span className="is-empty">Нет</span> : String(invoice.taskIds.length)}</dd></div>
           </dl>
+          {actions.canCancel ? <button className="task-props__cancel" onClick={() => start("cancel")} type="button">Отменить счёт</button> : null}
         </section>
       </aside>
     </div>
@@ -358,13 +367,13 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
 
     <DialogForm
       busy={saving}
-      description="Корректировка меняет итог счёта, а не его позиции. Причина останется в счёте и в истории."
+      description="Скидка или надбавка меняет итог счёта, а не его строки. Причина останется в счёте и в истории."
       error={formError}
       onOpenChange={(open) => { if (!open) setCorrecting(false); }}
       onSubmit={correct}
       open={correcting}
-      submitLabel="Сохранить корректировку"
-      title={`Корректировка счёта ${number}`}
+      submitLabel="Сохранить"
+      title={`Скидка или надбавка · ${number}`}
     >
       <div className="dialog-form-grid">
         <label>Сумма, ₽ *<input

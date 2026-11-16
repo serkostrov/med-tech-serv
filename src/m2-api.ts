@@ -16,6 +16,7 @@ import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
+import { invoiceWorkDate } from "./invoice-card.js";
 import { taskMailReplyRefusal } from "./task-mail.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
@@ -286,6 +287,8 @@ export interface InvoiceItemApiRecord {
   readonly lineTotal: number;
   readonly modifier: "G" | "N" | null;
   readonly excludedFromTotal: boolean;
+  /** День работ по задаче, на который база взяла цену из прайса. Нет задачи — null. */
+  readonly workDate?: string | null;
 }
 
 export interface InvoiceCardResponse {
@@ -1489,7 +1492,7 @@ const INVOICE_CARD_SELECT = "id, number, status, created_at, updated_at, payer_i
 
 /** Позиция счёта с номером задачи: по нему строки группируются в карточке. */
 const INVOICE_ITEM_SELECT = "id, item_type, task_id, description, quantity, unit_price, line_total, modifier, "
-  + "excluded_from_total, task:tasks(number)";
+  + "excluded_from_total, task:tasks(number, work_finished_at, visit_date, completed_at, updated_at)";
 
 /** История статусов счёта: сначала с автором по связи changed_by → users, затем без него. */
 const INVOICE_HISTORY_SELECTS: readonly string[] = [
@@ -1499,6 +1502,7 @@ const INVOICE_HISTORY_SELECTS: readonly string[] = [
 
 function invoiceItemRecord(row: Row): InvoiceItemApiRecord {
   const modifier = text(row, "modifier");
+  const task = related(row, "task");
   return {
     id: text(row, "id"),
     itemType: text(row, "item_type") === "part" ? "part" : "work",
@@ -1509,7 +1513,13 @@ function invoiceItemRecord(row: Row): InvoiceItemApiRecord {
     unitPrice: numberValue(row.unit_price) ?? 0,
     lineTotal: numberValue(row.line_total) ?? 0,
     modifier: modifier === "G" || modifier === "N" ? modifier : null,
-    excludedFromTotal: row.excluded_from_total === true
+    excludedFromTotal: row.excluded_from_total === true,
+    workDate: invoiceWorkDate({
+      workFinishedAt: optionalText(task, "work_finished_at") ?? null,
+      visitDate: optionalText(task, "visit_date") ?? null,
+      completedAt: optionalText(task, "completed_at") ?? null,
+      updatedAt: optionalText(task, "updated_at") ?? null
+    })
   };
 }
 

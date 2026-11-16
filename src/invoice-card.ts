@@ -4,7 +4,9 @@
  * Суммы считает база (триггер пересчёта), здесь мы их только раскладываем по блокам
  * и сверяем со строками: если расходится, человеку надо сказать, а не показать молча.
  */
+import { formatIsoCalendarDate } from "./date-format.js";
 import { MAX_PRICE, roundToKopecks } from "./price-list.js";
+import { companyDay } from "./task-dates.js";
 
 export type InvoiceStatus = "cancelled" | "draft" | "issued" | "transferred_to_1c";
 
@@ -37,10 +39,13 @@ export function invoiceStatusTone(status: string): "neutral" | "purple" | "succe
   return "warning";
 }
 
-/** Одной фразой: что со счётом сейчас и что с ним можно делать дальше. */
+/**
+ * Одной фразой: что со счётом сейчас. Тому, кто ведёт счета, черновик и выставленный счёт
+ * объясняет плашка со следующим шагом, поэтому фраза нужна в основном остальным ролям.
+ */
 export function invoiceStatusNote(status: string): string {
   switch (status) {
-    case "draft": return "Черновик: позиции ещё можно пересобрать по прайсу, в 1С счёт не ушёл.";
+    case "draft": return "Черновик: клиенту счёт ещё не выставлен.";
     case "issued": return "Счёт выставлен и ждёт передачи в 1С.";
     case "transferred_to_1c": return "Счёт передан в 1С: менять его больше нельзя.";
     case "cancelled": return "Счёт отменён. Его задачи можно выставить в новый счёт.";
@@ -48,11 +53,58 @@ export function invoiceStatusNote(status: string): string {
   }
 }
 
-/** Г — работа по гарантии, Н — обычная. Остальное из базы показываем как есть. */
+/**
+ * Отметка работы из задачи. «Н» — это не «не гарантия», а неправильная эксплуатация:
+ * сломали сами, и такая работа оплачивается. Обычная работа отметки не имеет.
+ */
 export function invoiceModifierLabel(modifier: string | null): string {
   if (modifier === "G") return "Гарантия";
-  if (modifier === "N") return "Не гарантия";
+  if (modifier === "N") return "Неправильная эксплуатация";
   return "";
+}
+
+/**
+ * День работ по задаче — тот же, по которому база берёт цену из прайса (0023, 0040):
+ * окончание работ, иначе день выезда, иначе закрытие задачи. Сутки — по Москве.
+ */
+export function invoiceWorkDate(task: {
+  readonly workFinishedAt?: string | null;
+  readonly visitDate?: string | null;
+  readonly completedAt?: string | null;
+  readonly updatedAt?: string | null;
+}): string | null {
+  if (task.workFinishedAt) return companyDay(task.workFinishedAt) ?? null;
+  if (task.visitDate) return task.visitDate.slice(0, 10);
+  const fallback = task.completedAt ?? task.updatedAt;
+  return fallback ? companyDay(fallback) ?? null : null;
+}
+
+/**
+ * Откуда в строке цена — подпись под ценой. Без неё непонятно, почему у ремонта
+ * 7 800, а не 9 500: цена работы берётся на день работ, а не сегодняшняя.
+ */
+export function invoiceLineSource(item: {
+  readonly itemType: "part" | "work";
+  readonly unitPrice?: number;
+  readonly workDate?: string | null;
+}): string {
+  const day = item.workDate ? formatIsoCalendarDate(item.workDate) : null;
+  if (item.itemType === "part") return item.unitPrice === 0 ? "цены прихода нет" : "цена прихода со склада";
+  if (item.unitPrice === 0) return day ? `в прайсе на ${day} цены нет` : "в прайсе цены нет";
+  return day ? `по прайсу на ${day}` : "по прайсу на день работ";
+}
+
+/**
+ * Что сделать со строками без цены — у работы и у запчасти это разные люди:
+ * цену работы задают в прайсе, цену запчасти кладовщик вписывает при приходе.
+ */
+export function invoiceMissingPriceHint(items: readonly { readonly itemType: "part" | "work"; readonly unitPrice: number }[]): string {
+  const works = items.filter((item) => item.itemType === "work" && item.unitPrice === 0).length;
+  const parts = items.filter((item) => item.itemType === "part" && item.unitPrice === 0).length;
+  const steps: string[] = [];
+  if (works > 0) steps.push(`у ${works === 1 ? "работы" : `${works} работ`} — задайте цену в прайсе`);
+  if (parts > 0) steps.push(`у ${parts === 1 ? "запчасти" : `${parts} запчастей`} — пусть кладовщик впишет цену прихода`);
+  return steps.length === 0 ? "" : `Нет цены ${steps.join(", ")}. Потом нажмите «Обновить по прайсу».`;
 }
 
 export function invoiceItemTypeLabel(itemType: string): string {
@@ -155,28 +207,61 @@ export function invoicePreviewTotal(subtotal: number, adjustment: number): numbe
 
 export type InvoiceActionKind = "cancel" | "correct" | "issue" | "rebuild" | "transfer";
 
-export interface InvoiceActionButton {
-  readonly kind: InvoiceActionKind;
+/** Главный шаг по статусу: стоит плашкой над счётом, как следующий шаг в карточке задачи. */
+export interface InvoiceNextStep {
+  readonly kind: "issue" | "transfer";
   readonly label: string;
-  readonly variant: "danger" | "ghost" | "primary" | "secondary";
+  readonly title: string;
+  readonly hint: string;
 }
 
-const ISSUE: InvoiceActionButton = { kind: "issue", label: "Выставить", variant: "primary" };
-const TRANSFER: InvoiceActionButton = { kind: "transfer", label: "Передать в 1С", variant: "primary" };
-const REBUILD: InvoiceActionButton = { kind: "rebuild", label: "Пересобрать по прайсу", variant: "secondary" };
-const CORRECT: InvoiceActionButton = { kind: "correct", label: "Скорректировать", variant: "secondary" };
-const CANCEL: InvoiceActionButton = { kind: "cancel", label: "Отменить счёт", variant: "ghost" };
-
 /**
- * Кнопки карточки по статусу и праву `finance.write`. Переходы ровно те, что разрешает
- * база: черновик выставляют, выставленный передают в 1С, корректируют пока счёт не в 1С,
- * пересобирают только черновик. Переданный и отменённый счёт не трогают.
+ * Что можно сделать со счётом и где это стоит на экране. Каждое действие — рядом с тем,
+ * что оно меняет: выставить и передать — плашкой сверху, обновить строки — у строк,
+ * скидку — у итога, отмену — внизу итога, как отмену задачи. Пять кнопок в ряд
+ * читались как равные, и было непонятно, что нажимать.
+ *
+ * Переходы ровно те, что разрешает база: черновик выставляют, выставленный передают в 1С,
+ * корректируют и отменяют, пока счёт не в 1С, строки обновляют только у черновика.
  */
-export function invoiceActions(input: { readonly status: string; readonly canWrite: boolean }): readonly InvoiceActionButton[] {
-  if (!input.canWrite) return [];
-  if (input.status === "draft") return [ISSUE, REBUILD, CORRECT, CANCEL];
-  if (input.status === "issued") return [TRANSFER, CORRECT, CANCEL];
-  return [];
+export interface InvoiceCardActions {
+  readonly next: InvoiceNextStep | null;
+  readonly canRebuild: boolean;
+  readonly canCorrect: boolean;
+  readonly canCancel: boolean;
+}
+
+const NO_ACTIONS: InvoiceCardActions = { next: null, canRebuild: false, canCorrect: false, canCancel: false };
+
+export function invoiceCardActions(input: { readonly status: string; readonly canWrite: boolean }): InvoiceCardActions {
+  if (!input.canWrite) return NO_ACTIONS;
+  if (input.status === "draft") {
+    return {
+      next: {
+        kind: "issue",
+        label: "Выставить счёт",
+        title: "Проверьте строки и выставьте счёт",
+        hint: "Работы — по прайсу на день работ, запчасти — по цене прихода. После выставления строки уже не обновить."
+      },
+      canRebuild: true,
+      canCorrect: true,
+      canCancel: true
+    };
+  }
+  if (input.status === "issued") {
+    return {
+      next: {
+        kind: "transfer",
+        label: "Передать в 1С",
+        title: "Передайте счёт в 1С",
+        hint: "Когда счёт отдали в бухгалтерию. После передачи сумму изменить будет нельзя."
+      },
+      canRebuild: false,
+      canCorrect: true,
+      canCancel: true
+    };
+  }
+  return NO_ACTIONS;
 }
 
 /** Выгрузка файлом доступна всем, кто счёт видит: она ничего не меняет. */

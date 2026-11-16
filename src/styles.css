@@ -9183,3 +9183,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .engineer-calendar-toolbar__title { min-width: 140px; font-size: 14px; }
   .engineer-calendar__name small { display: none; }
 }
+
+/* Карточка счёта: под ценой — откуда она, у скидки — ссылка «Добавить» или «Изменить» */
+.invoice-line__source { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
+.invoice-correct-link { display: block; margin-top: 4px; font-size: 13px; }
