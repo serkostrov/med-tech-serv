@@ -62,11 +62,11 @@ function reportCutsSheet(report: OperationsReportRecord, share: (value: number) 
 /** Лист «Загрузка инженеров»: занятые дни периода и заявки по каждому инженеру. */
 function reportEngineerLoadSheet(report: OperationsReportRecord): XlsxSheet | undefined {
   if (report.engineerLoad.length === 0) return undefined;
-  const header = ["Инженер", "Заявок", "Закрыто", "Просрочено", "Занятых дней", "Дней в периоде", "Загрузка", "Часы"];
+  const header = ["Инженер", "Заявок со сроком в периоде", "Закрыто", "Просрочено", "Занятых дней", "Дней в периоде", "Загрузка", "Часы"];
   return {
     name: "Загрузка инженеров",
     headerRow: 1,
-    widths: [30, 10, 10, 12, 14, 16, 11, 9],
+    widths: [30, 26, 10, 12, 14, 16, 11, 9],
     rows: [
       header,
       ...report.engineerLoad.map((item): XlsxCell[] => [
@@ -93,10 +93,11 @@ function reportSpendSheet(report: OperationsReportRecord): XlsxSheet | undefined
   const rows: XlsxCell[][] = [
     [{ bold: "Затраты за период" }],
     ["Период", `${dayLabel(report.period.from)} – ${dayLabel(report.period.to)}`],
-    ["Считаем по", "позициям неотменённых счетов; дата счёта — день выставления"],
+    ["Считаем по", "неотменённым счетам; дата счёта — день выставления, у черновика — день создания"],
     ...(report.equipmentSpend.length
       ? [
           [],
+          ["По приборам", "позиции счетов, привязанные к задачам прибора"],
           [{ bold: "Прибор" }, { bold: "Площадка и плательщик" }, { bold: "Заявок" }, { bold: "Счетов" }, { bold: "Работы" }, { bold: "Запчасти" }, { bold: "Итого" }] as XlsxCell[],
           ...report.equipmentSpend.map((item): XlsxCell[] => [
             item.name, item.detail ?? "", item.taskCount, item.invoiceCount, item.workAmount, item.partsAmount, item.totalAmount
@@ -106,6 +107,7 @@ function reportSpendSheet(report: OperationsReportRecord): XlsxSheet | undefined
     ...(report.payerSpend.length
       ? [
           [],
+          ["По плательщикам", "итоги счетов целиком, вместе с корректировкой: сумма больше, чем по приборам"],
           [{ bold: "Плательщики" }, { bold: "Корректировка" }, { bold: "Заявок" }, { bold: "Счетов" }, { bold: "Работы" }, { bold: "Запчасти" }, { bold: "Итого" }] as XlsxCell[],
           ...report.payerSpend.map((item): XlsxCell[] => [
             item.name,

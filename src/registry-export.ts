@@ -194,10 +194,20 @@ export function reservationRegistrySheets(items: readonly StockReservationRecord
  * должна совпадать с тем, что реестр нашёл. Читаем страницами, как отдаёт сервер,
  * и упираемся в предел, чтобы случайный отбор на всю базу не положил браузер.
  */
+export const REGISTRY_EXPORT_MAX_ROWS = 20_000;
+
+/**
+ * Приписка к сообщению о выгрузке, когда строк столько, что сработал предел: человек
+ * должен знать, что файл неполный, а не думать, что в реестре ровно столько записей.
+ */
+export function registryExportNote(rows: number, maxRows = REGISTRY_EXPORT_MAX_ROWS): string {
+  return rows >= maxRows ? ". Это предел выгрузки, уточните отбор — в реестре их больше" : "";
+}
+
 export async function allRegistryRows<Item>(
   load: (limit: number, offset: number) => Promise<{ readonly items: readonly Item[]; readonly total: number }>,
   pageSize = 500,
-  maxRows = 20_000
+  maxRows = REGISTRY_EXPORT_MAX_ROWS
 ): Promise<readonly Item[]> {
   const rows: Item[] = [];
   let total = 0;

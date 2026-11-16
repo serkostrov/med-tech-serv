@@ -193,13 +193,19 @@ export function ReservationsPage() {
     }
   };
 
-  // Выгрузка реестра резервов: те же строки, что сейчас на экране после отбора,
-  // со всей цепочкой — состояние, задача, кому выдали, когда.
+  // Выгрузка реестра резервов со всей цепочкой: состояние, задача, кому выдали, когда.
+  // Читаем все резервы состояния страницами, а не только те 500 (или 100 закрытых),
+  // что держит окно на экране, и применяем к ним тот же отбор, что виден на вкладке.
   const exportRegistry = async () => {
     setExporting(true);
     try {
-      await downloadWorkbook(reservationRegistrySheets(visible), registryFileName("Резервы"));
-      toast.success(`В файле ${formatRussianCount(visible.length, ["резерв", "резерва", "резервов"])}`, { title: "Резервы выгружены" });
+      const rows = filterReservations(await m2Api.allStockReservations(tab === "closed" ? "closed" : "active"), appliedFilters);
+      if (rows.length === 0) {
+        toast.warning("По этому отбору резервов нет: выгружать нечего", { title: "Выгружать нечего" });
+        return;
+      }
+      await downloadWorkbook(reservationRegistrySheets(rows), registryFileName("Резервы"));
+      toast.success(`В файле ${formatRussianCount(rows.length, ["резерв", "резерва", "резервов"])}`, { title: "Резервы выгружены" });
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить резервы", { title: "Файл не выгрузился" });
     } finally {

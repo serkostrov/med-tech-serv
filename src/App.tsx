@@ -55,7 +55,7 @@ import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
-import { allRegistryRows, downloadWorkbook, equipmentRegistrySheets, registryFileName, taskRegistrySheets } from "./registry-export.js";
+import { allRegistryRows, downloadWorkbook, equipmentRegistrySheets, registryExportNote, registryFileName, taskRegistrySheets } from "./registry-export.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
 import { tasksAvailableForInvoice } from "./invoice-tasks.js";
@@ -1691,7 +1691,9 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
       });
   }, [initialTaskId]);
   // Выгрузка реестра задач: все задачи под текущим отбором, а не только открытая страница.
-  // Фильтры те же, что применены на экране, чтобы файл совпадал с тем, что видно.
+  // Фильтры те же, что применены на экране. Переключатель доски «Закрытые и отменённые»
+  // в выгрузку не входит: он прячет колонки доски, а не меняет отбор, и файл реестра
+  // должен отвечать фильтрам, а не виду.
   const exportExcel = async () => {
     setExporting(true);
     try {
@@ -1703,11 +1705,16 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         ...(appliedFilters.periodFrom ? { periodFrom: appliedFilters.periodFrom } : {}), ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
         ...(appliedFilters.overdue ? { overdue: true } : {}), sort: appliedFilters.sort, limit, offset
       }));
+      // Пустой файл с одной шапкой человеку не нужен: говорим, что по отбору ничего нет.
+      if (rows.length === 0) {
+        toast.warning("По этому отбору задач нет: менять нечего, файл не нужен", { title: "Выгружать нечего" });
+        return;
+      }
       await downloadWorkbook(taskRegistrySheets(rows, {
         workTypes: Object.fromEntries(workTypes.map((item) => [item.code, item.name])),
         statuses: Object.fromEntries(taskStatuses.map((item) => [item.code, item.name]))
       }), registryFileName("Задачи"));
-      toast.success(`В файле ${formatRussianCount(rows.length, ["задача", "задачи", "задач"])}`, { title: "Задачи выгружены" });
+      toast.success(`В файле ${formatRussianCount(rows.length, ["задача", "задачи", "задач"])}${registryExportNote(rows.length)}`, { title: "Задачи выгружены" });
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить задачи", { title: "Файл не выгрузился" });
     } finally {
@@ -2562,7 +2569,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
       }));
       const statuses = Object.fromEntries(references.statuses.map((item) => [item.code, item.name]));
       await downloadWorkbook(equipmentRegistrySheets(rows, statuses), registryFileName(engineer ? "Мои приборы" : "Приборы"));
-      toast.success(`В файле ${formatRussianCount(rows.length, ["прибор", "прибора", "приборов"])}`, { title: "Приборы выгружены" });
+      toast.success(`В файле ${formatRussianCount(rows.length, ["прибор", "прибора", "приборов"])}${registryExportNote(rows.length)}`, { title: "Приборы выгружены" });
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить приборы", { title: "Файл не выгрузился" });
     } finally {

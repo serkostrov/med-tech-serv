@@ -298,7 +298,10 @@ describe("large reports, edge cases", () => {
     const bounds = reportPeriodBounds("2026-11-01", "2026-11-30");
     assert.equal(bounds.start, "2026-10-31T21:00:00.000Z");
     assert.equal(bounds.end, "2026-11-30T20:59:59.999Z");
-    assert.deepEqual(reportPeriodBounds("не дата", "тоже"), { start: "не дата", end: "тожеT23:59:59.999Z" });
+    // Верхняя граница выгрузки — начало следующего дня, как в базе: заявка последнего
+    // мига 30-го попадает и в цифры отчёта, и в лист «Заявки».
+    assert.equal(bounds.endBefore, "2026-11-30T21:00:00.000Z");
+    assert.deepEqual(reportPeriodBounds("не дата", "тоже"), { start: "не дата", end: "тожеT23:59:59.999Z", endBefore: "тожеT23:59:59.999Z" });
   });
 
   it("counts overdue by the Moscow day when no day is given", () => {

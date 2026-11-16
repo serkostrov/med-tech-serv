@@ -1110,11 +1110,24 @@ export function closedOnTime(completedAt: string | undefined, deadlineTo: string
  * Границы периода отчёта по часам компании (Москва): с начала первого дня до конца последнего.
  * На любом устройстве одинаково: задача, созданная в 01:00 по Москве, попадает в свой день.
  */
-export function reportPeriodBounds(from: string, to: string): { readonly start: string; readonly end: string } {
+export function reportPeriodBounds(from: string, to: string): { readonly start: string; readonly end: string; readonly endBefore: string } {
+  const end = companyDayEnd(to) ?? `${to}T23:59:59.999Z`;
   return {
     start: companyDayStart(from) ?? from,
-    end: companyDayEnd(to) ?? `${to}T23:59:59.999Z`
+    end,
+    // Начало следующего дня: отбор «меньше этого момента» совпадает с тем, что считает
+    // база (0044), а «не позже 23:59:59.999» разошёлся бы с ней на доли миллисекунды —
+    // заявка последнего мига дня попала бы в цифры и не попала в выгрузку.
+    endBefore: companyDayStart(nextCalendarDay(to)) ?? end
   };
+}
+
+/** Следующий календарный день: «2026-11-16» → «2026-11-17». Пусто, если дня нет. */
+function nextCalendarDay(day: string): string {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(day);
+  if (!match) return day;
+  const next = new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]) + 1));
+  return next.toISOString().slice(0, 10);
 }
 
 /**
@@ -3676,6 +3689,31 @@ export class M2ApiClient {
     }, "Не получилось загрузить резервы");
   }
 
+  /**
+   * Все резервы состояния для выгрузки — страницами, а не первые 500 или 100, как окно
+   * склада. Порядок тот же, что на экране, плюс номер как добивка: без неё страницы
+   * с одинаковым временем могли бы перемешаться и строка потерялась бы.
+   */
+  public async allStockReservations(state: "active" | "closed" = "active"): Promise<readonly StockReservationRecord[]> {
+    const pageSize = 500;
+    const rows: StockReservationRecord[] = [];
+    // Предел тот же, что у выгрузки реестров: случайный отбор на всю базу не должен
+    // положить браузер.
+    while (rows.length < 20_000) {
+      const offset = rows.length;
+      const chunk = await this.loadReservations((select) => {
+        const request = this.db().from("stock_reservations").select(select);
+        return (state === "active"
+          ? request.in("status", [...ACTIVE_RESERVATION_STATUSES]).order("created_at").order("number")
+          : request.in("status", [...CLOSED_RESERVATION_STATUSES]).order("updated_at", { ascending: false }).order("number")
+        ).range(offset, offset + pageSize - 1);
+      }, "Не получилось выгрузить резервы");
+      rows.push(...chunk);
+      if (chunk.length < pageSize) break;
+    }
+    return rows;
+  }
+
   /** Резервы одной задачи с шагами истории: карточка задачи и форма результата инженера. */
   public async taskReservations(taskId: string): Promise<readonly StockReservationRecord[]> {
     return this.loadReservations(
@@ -3812,26 +3850,33 @@ export class M2ApiClient {
    */
   public async operationsReport(from: string, to: string): Promise<OperationsReportRecord> {
     const canSeeFinance = await this.hasPermission("finance.read");
-    const [summary, breakdown, parts, load] = await Promise.all([
-      this.db().rpc("report_task_summary", { p_from: from, p_to: to }),
-      this.db().rpc("report_task_breakdown", { p_from: from, p_to: to }),
-      this.db().rpc("report_part_warranty", { p_from: from, p_to: to }),
-      this.db().rpc("report_engineer_load", { p_from: from, p_to: to })
+    const period = { p_from: from, p_to: to };
+    // Все разрезы одним заходом. Деньги спрашиваем только с правом на них, чтобы
+    // в журнале сервера не было заведомо пустых запросов от тех, кому их не видно.
+    const [summary, breakdown, parts, load, equipmentSpend, payerSpend] = await Promise.all([
+      this.db().rpc("report_task_summary", period),
+      this.db().rpc("report_task_breakdown", period),
+      this.db().rpc("report_part_warranty", period),
+      this.db().rpc("report_engineer_load", period),
+      canSeeFinance ? this.db().rpc("report_equipment_spend", period) : null,
+      canSeeFinance ? this.db().rpc("report_payer_spend", period) : null
     ]);
     if (isMissingDatabaseFunction(summary.error) || isMissingDatabaseFunction(breakdown.error)) {
       return this.operationsReportInBrowser(from, to, canSeeFinance);
     }
     throwIfError(summary.error, "Не получилось построить отчёт");
     throwIfError(breakdown.error, "Не получилось построить отчёт");
-    throwIfError(parts.error, "Не получилось построить отчёт");
-    throwIfError(load.error, "Не получилось построить отчёт");
-    const spend = canSeeFinance
-      ? await Promise.all([
-          this.db().rpc("report_equipment_spend", { p_from: from, p_to: to }),
-          this.db().rpc("report_payer_spend", { p_from: from, p_to: to })
-        ])
-      : [];
-    for (const result of spend) throwIfError(result.error, "Не получилось посчитать затраты");
+    // Миграции на стенд применяют по одной, и 0045 может отстать от 0044. Разрез,
+    // функции которого ещё нет, остаётся пустым — валить из-за него весь отчёт нельзя.
+    const rowsOf = (result: { readonly data: unknown; readonly error: { readonly code?: string; readonly message?: string } | null } | null, fallback: string): readonly unknown[] => {
+      if (!result || isMissingDatabaseFunction(result.error)) return [];
+      throwIfError(result.error, fallback);
+      return (result.data ?? []) as readonly unknown[];
+    };
+    const partRows = rowsOf(parts, "Не получилось посчитать гарантийность замен");
+    const loadRows = rowsOf(load, "Не получилось посчитать загрузку инженеров");
+    const equipmentSpendRows = rowsOf(equipmentSpend, "Не получилось посчитать затраты по приборам");
+    const payerSpendRows = rowsOf(payerSpend, "Не получилось посчитать затраты по плательщикам");
     const summaryRow = asRow(Array.isArray(summary.data) ? summary.data[0] : summary.data);
     const cuts = (section: string): readonly ReportCutItem[] => ((breakdown.data ?? []) as readonly unknown[])
       .map((item: unknown) => asRow(item))
@@ -3873,7 +3918,7 @@ export class M2ApiClient {
       tasksByEquipment: cuts("equipment"),
       tasksBySite: cuts("site"),
       tasksByEngineer: cuts("engineer"),
-      partsByCondition: ((parts.data ?? []) as readonly unknown[]).map((item: unknown) => {
+      partsByCondition: partRows.map((item: unknown) => {
         const row = asRow(item);
         return {
           code: text(row, "condition_code"),
@@ -3883,7 +3928,7 @@ export class M2ApiClient {
           quantity: numberValue(row.quantity) ?? 0
         };
       }),
-      engineerLoad: ((load.data ?? []) as readonly unknown[]).map((item: unknown) => {
+      engineerLoad: loadRows.map((item: unknown) => {
         const row = asRow(item);
         return {
           engineerId: text(row, "engineer_id"),
@@ -3896,13 +3941,15 @@ export class M2ApiClient {
           workHours: numberValue(row.work_hours) ?? 0
         };
       }),
-      equipmentSpend: ((spend[0]?.data ?? []) as readonly unknown[]).map((item: unknown) => {
+      equipmentSpend: equipmentSpendRows.map((item: unknown) => {
         const row = asRow(item);
         const serial = text(row, "serial_number");
         const model = optionalText(row, "equipment_name");
         return {
           id: text(row, "equipment_id"),
-          name: [model, serial].filter(Boolean).join(" · ") || serial,
+          // Названия прибора может не быть: деньги видны по finance.read, а приборы
+          // по своему праву, и строку затрат из-за этого не теряем.
+          name: [model, serial].filter(Boolean).join(" · ") || "Прибор",
           ...(optionalText(row, "site_name") || optionalText(row, "payer_name")
             ? { detail: [optionalText(row, "site_name"), optionalText(row, "payer_name")].filter(Boolean).join(" · ") }
             : {}),
@@ -3913,7 +3960,7 @@ export class M2ApiClient {
           totalAmount: numberValue(row.total_amount) ?? 0
         };
       }),
-      payerSpend: ((spend[1]?.data ?? []) as readonly unknown[]).map((item: unknown) => {
+      payerSpend: payerSpendRows.map((item: unknown) => {
         const row = asRow(item);
         return {
           id: text(row, "payer_id"),
@@ -3940,7 +3987,7 @@ export class M2ApiClient {
     const [tasks, workTypesResult] = await Promise.all([
       allPages((start, end, withCount) => this.db().from("tasks")
         .select("id, status_code, work_type_code, deadline_to, completed_at, created_at", withCount ? { count: "exact" } : undefined)
-        .gte("created_at", bounds.start).lte("created_at", bounds.end)
+        .gte("created_at", bounds.start).lt("created_at", bounds.endBefore)
         .order("created_at", { ascending: true }).order("id", { ascending: true })
         .range(start, end), "Не получилось построить отчёт"),
       this.db().from("work_types").select("code, name")
@@ -4024,7 +4071,7 @@ export class M2ApiClient {
       this.db().from("task_statuses").select("code, name"),
       allPages((start, end, withCount) => this.db().from("tasks")
         .select(select, withCount ? { count: "exact" } : undefined)
-        .gte("created_at", reportPeriodBounds(from, to).start).lte("created_at", reportPeriodBounds(from, to).end)
+        .gte("created_at", reportPeriodBounds(from, to).start).lt("created_at", reportPeriodBounds(from, to).endBefore)
         .order("created_at", { ascending: true }).order("id", { ascending: true })
         .range(start, end), "Не получилось выгрузить заявки за период", pageSize)
     ]);
