@@ -384,4 +384,152 @@ SELECT pg_temp.check((SELECT count(*) = 7 FROM public.inventory_part_movements((
   'выдача и возврат встали в историю позиции');
 SELECT pg_temp.as_owner();
 
+-- =========================================================================
+-- 0050. Приход накладной файлом и остаток по состояниям
+-- =========================================================================
+
+SELECT pg_temp.check(has_function_privilege('authenticated', 'public.preview_stock_receipt(jsonb)', 'EXECUTE')
+                 AND has_function_privilege('authenticated', 'public.receive_stock_batch(jsonb)', 'EXECUTE')
+                 AND NOT has_function_privilege('anon', 'public.preview_stock_receipt(jsonb)', 'EXECUTE')
+                 AND NOT has_function_privilege('anon', 'public.receive_stock_batch(jsonb)', 'EXECUTE'),
+  'разбор и приход накладной доступны вошедшему сотруднику и закрыты без входа');
+SELECT pg_temp.check(NOT (SELECT prosecdef FROM pg_proc WHERE proname = 'preview_stock_receipt')
+                 AND NOT (SELECT prosecdef FROM pg_proc WHERE proname = 'receive_stock_batch'),
+  'разбор и приход накладной работают с правами вызывающего');
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT pg_temp.expect_message(
+  $$SELECT * FROM public.preview_stock_receipt('[{"article": "AU-LAMP-12V20W", "quantity": 1}]'::jsonb)$$,
+  'Загружать приход накладной может только склад', 'инженер накладную не разбирает');
+SELECT pg_temp.expect_message(
+  $$SELECT * FROM public.receive_stock_batch('[{"article": "AU-LAMP-12V20W", "quantity": 1}]'::jsonb)$$,
+  'Оприходовать накладную может только склад', 'инженер накладную не приходует');
+SELECT pg_temp.as_owner();
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.expect_message($$SELECT * FROM public.preview_stock_receipt('[]'::jsonb)$$,
+  'В файле нет ни одной строки с приходом', 'пустой файл отказывается понятно');
+
+-- Что система распознала: артикул, псевдоним поставщика, состояние словом и число строкой.
+CREATE TEMP TABLE preview AS SELECT * FROM public.preview_stock_receipt($$[
+  {"row": 2, "article": "au-lamp-12v20w", "quantity": 5, "condition": "Н", "unit_price": 1500.50, "comment": "Накладная 108"},
+  {"row": 3, "article": " 12V20W-AU ", "quantity": "2,5", "condition": "гарантийная", "comment": "Накладная 108"},
+  {"row": 4, "article": "XN-FILTER-WB", "quantity": 10, "condition": ""},
+  {"row": 5, "article": "НЕТ-ТАКОГО", "quantity": 1, "condition": "Н"},
+  {"row": 6, "article": "ART-OFF", "quantity": 1, "condition": "Н"},
+  {"row": 7, "article": "XN-FILTER-WB", "quantity": 1, "condition": "ерунда"},
+  {"row": 8, "article": "AU-LAMP-12V20W", "quantity": "много", "condition": "Б"},
+  {"row": 9, "article": "", "quantity": 1, "condition": "Н"},
+  {"row": 10, "article": "XN-FILTER-WB", "quantity": 4, "condition": "Б", "unit_price": "дорого"}
+]$$::jsonb);
+
+SELECT pg_temp.check((SELECT part_id = (SELECT id FROM ids WHERE k = 'part_a') AND matched_by = 'article'
+                        AND part_condition = 'N' AND quantity = 5 AND unit_price = 1500.50 AND error IS NULL
+                        FROM preview WHERE row_no = 2),
+  'строка по артикулу распознана с ценой и состоянием «Н»');
+SELECT pg_temp.check((SELECT part_id = (SELECT id FROM ids WHERE k = 'part_a') AND matched_by = 'alias'
+                        AND part_condition = 'G' AND quantity = 2.5 AND error IS NULL
+                        FROM preview WHERE row_no = 3),
+  'строка по псевдониму поставщика распознана, количество «2,5» прочитано');
+SELECT pg_temp.check((SELECT part_condition = 'N' AND error IS NULL FROM preview WHERE row_no = 4),
+  'пустое состояние считается новой запчастью');
+SELECT pg_temp.check((SELECT error = 'Артикул «НЕТ-ТАКОГО» на складе не найден: добавьте запчасть или заведите ей псевдоним'
+                        FROM preview WHERE row_no = 5),
+  'неизвестный артикул назван в ошибке своей строки');
+SELECT pg_temp.check((SELECT error = 'Запчасть «ART-OFF · Снятая с учёта» снята с учёта: приходовать её нельзя'
+                        FROM preview WHERE row_no = 6),
+  'снятая с учёта позиция не приходуется');
+SELECT pg_temp.check((SELECT error = 'Состояние «ерунда» непонятно: напишите Г, Н или Б' FROM preview WHERE row_no = 7),
+  'непонятное состояние не угадывается');
+SELECT pg_temp.check((SELECT error = 'Количество должно быть числом, например 5 или 2,5' FROM preview WHERE row_no = 8),
+  'нечисловое количество названо ошибкой строки');
+SELECT pg_temp.check((SELECT error = 'Не указан артикул' FROM preview WHERE row_no = 9),
+  'строка без артикула названа ошибкой');
+SELECT pg_temp.check((SELECT error = 'Цену укажите числом, например 1500,50 — или оставьте клетку пустой'
+                        FROM preview WHERE row_no = 10),
+  'нечисловая цена не теряется молча');
+SELECT pg_temp.check((SELECT count(*) = 6 FROM preview WHERE error IS NOT NULL),
+  'ошибки приходят списком по строкам, а не одной фразой');
+SELECT pg_temp.check((SELECT count(*) = 0 FROM stock_movements
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_b') AND movement_type = 'receipt'
+                         AND comment = 'Накладная 108'),
+  'разбор ничего не оприходовал: склад не тронут');
+
+-- Одна запчасть в одном состоянии двумя строками: цена прихода у партии одна, и какую
+-- из двух взял бы счёт, по файлу не понять — просим объединить, назвав обе строки.
+SELECT pg_temp.check((SELECT count(*) = 2 FROM public.preview_stock_receipt($$[
+    {"row": 2, "article": "AU-LAMP-12V20W", "quantity": 1, "condition": "Н"},
+    {"row": 5, "article": "au-lamp-12v20w", "quantity": 2, "condition": "новая"}
+  ]$$::jsonb) AS twice
+   WHERE twice.error = 'Этот артикул в том же состоянии есть в файле ещё раз (строки 2, 5): объедините их в одну'),
+  'две строки на одну запчасть в одном состоянии названы обе');
+
+-- Приход с ошибкой: не проводится ни одна строка.
+SELECT pg_temp.expect_message(
+  $$SELECT * FROM public.receive_stock_batch($x$[
+    {"row": 2, "article": "AU-LAMP-12V20W", "quantity": 5, "condition": "Н"},
+    {"row": 3, "article": "НЕТ-ТАКОГО", "quantity": 1, "condition": "Н"}
+  ]$x$::jsonb)$$,
+  'В файле 1 ошибка: на склад не попала ни одна строка. Строка 3: Артикул «НЕТ-ТАКОГО» на складе не найден: добавьте запчасть или заведите ей псевдоним',
+  'ошибка в одной строке не пускает на склад весь файл');
+SELECT pg_temp.check((SELECT on_hand_quantity = 6 FROM stock_balances
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_a') AND part_condition = 'N'),
+  'после отказа остаток не изменился');
+
+-- Приход без ошибок: все строки одной транзакцией.
+CREATE TEMP TABLE applied AS SELECT * FROM public.receive_stock_batch($$[
+  {"row": 2, "article": "au-lamp-12v20w", "quantity": 5, "condition": "Н", "unit_price": 1500.50, "comment": "Накладная 108 от 14.11.2026"},
+  {"row": 3, "article": "12V20W-AU", "quantity": 2, "condition": "Г", "comment": "Накладная 108 от 14.11.2026"},
+  {"row": 4, "article": "XN-FILTER-WB", "quantity": 10, "comment": "Накладная 108 от 14.11.2026"}
+]$$::jsonb);
+SELECT pg_temp.check((SELECT count(*) = 3 FROM applied), 'оприходованы все три строки накладной');
+SELECT pg_temp.check((SELECT on_hand_after = 11 FROM applied WHERE part_condition = 'N' AND part_article = 'AU-LAMP-12V20W'),
+  'в ответе видно, сколько стало на складе');
+SELECT pg_temp.check((SELECT on_hand_quantity = 11 FROM stock_balances
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_a') AND part_condition = 'N')
+                 AND (SELECT on_hand_quantity = 6 FROM stock_balances
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_a') AND part_condition = 'G')
+                 AND (SELECT on_hand_quantity = 16 FROM stock_balances
+                       WHERE part_id = (SELECT id FROM ids WHERE k = 'part_b') AND part_condition = 'N'),
+  'остатки по состояниям сошлись после прихода файлом');
+SELECT pg_temp.check((SELECT count(*) = 3 FROM stock_movements
+                       WHERE movement_type = 'receipt' AND comment = 'Накладная 108 от 14.11.2026'
+                         AND performed_by = (SELECT id FROM ids WHERE k = 'warehouse')),
+  'приход файлом записан движениями с накладной в комментарии и автором');
+SELECT pg_temp.check((SELECT count(*) = 2 FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))
+                       WHERE comment = 'Накладная 108 от 14.11.2026'),
+  'приход файлом виден в истории позиции');
+SELECT pg_temp.as_owner();
+
+-- Цена прихода: склад её записал, но прочитать не может ни из партии, ни из истории.
+SELECT pg_temp.check((SELECT receipt_unit_price = 1500.50 FROM stock_lots WHERE id = (SELECT id FROM ids WHERE k = 'lot_an')),
+  'цена прихода из файла легла в партию');
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.expect_forbidden($$SELECT receipt_unit_price FROM stock_lots$$,
+  'кладовщик цену прихода не читает');
+SELECT pg_temp.as_owner();
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT pg_temp.expect_forbidden($$SELECT receipt_unit_price FROM stock_lots$$,
+  'инженер цену прихода не читает');
+SELECT pg_temp.as_owner();
+
+-- Остаток по состояниям в списке склада.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.check((SELECT on_hand_new = 11 AND on_hand_guarantee = 6 AND on_hand_used = 3
+                        AND on_hand_quantity = 20
+                        FROM inventory_part_registry WHERE id = (SELECT id FROM ids WHERE k = 'part_a')),
+  'в списке склада остаток разложен по Г, Н и Б и сходится с общим');
+SELECT pg_temp.check((SELECT available_new = 11 AND available_guarantee = 6 AND available_used = 3
+                        FROM inventory_part_registry WHERE id = (SELECT id FROM ids WHERE k = 'part_a')),
+  'доступное тоже по состояниям');
+-- У снятой с учёта позиции после корректировки лежит одна новая: остальные состояния нули,
+-- а не пусто — иначе в списке вместо «0» был бы прочерк.
+SELECT pg_temp.check((SELECT on_hand_quantity = 1 AND on_hand_new = 1 AND on_hand_guarantee = 0 AND on_hand_used = 0
+                        FROM inventory_part_registry WHERE id = (SELECT id FROM ids WHERE k = 'part_off')),
+  'у позиции с остатком в одном состоянии остальные нули');
+SELECT pg_temp.check((SELECT on_hand_quantity = 0 AND on_hand_new = 0 AND available_new = 0
+                        FROM inventory_part_registry WHERE article_number = 'XN-FILTER-WB') IS NOT TRUE,
+  'позиция с остатком не считается пустой');
+SELECT pg_temp.as_owner();
+
 ROLLBACK;
