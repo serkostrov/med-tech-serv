@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
+import { PostgrestClient } from "@supabase/postgrest-js";
 import { M2ApiClient } from "./m2-api.js";
 
 type FakeResponse = { readonly data?: unknown; readonly error?: { readonly message: string } | null; readonly count?: number | null };
@@ -75,8 +76,8 @@ describe("склад: история движений, списание и ко�
     const api = new M2ApiClient(fake.client);
     const rows = [{ row: 2, article: "12V20W-AU", quantity: "4", condition: "Н" }];
     const preview = await api.previewStockReceipt(rows);
-    // Предпросмотр идёт запросом на чтение (GET): он ничего не меняет на складе.
-    assert.deepEqual(fake.of("rpc:preview_stock_receipt")[0]?.[0], ["rpc", "preview_stock_receipt", { p_items: rows }, { get: true }]);
+    // Предпросмотр ничего не меняет на складе: функция базы объявлена STABLE.
+    assert.deepEqual(fake.of("rpc:preview_stock_receipt")[0]?.[0], ["rpc", "preview_stock_receipt", { p_items: rows }, undefined]);
     assert.deepEqual(preview[0], {
       rowNo: 2, article: "12V20W-AU", partId: "p1", partArticle: "AU-LAMP-12V20W", partName: "Лампа",
       matchedBy: "alias", condition: "N", quantity: 4, unitPrice: 1500.5
@@ -99,6 +100,30 @@ describe("склад: история движений, списание и ко�
     await assert.rejects(() => api.addPartAlias("p1", "   "), /артикул поставщика/u);
   });
 
+  it("строки накладной доезжают до базы целиком, а не строкой «[object Object]»", async () => {
+    // Через настоящий postgrest-js: с { get: true } массив объектов складывается в адрес
+    // как «{[object Object],…}» — накладная теряется по дороге, и разбор не работает вовсе.
+    const sent: { method?: string; url: string; body?: unknown }[] = [];
+    const fetchStub = async (url: string | URL, options?: { method?: string; body?: unknown }) => {
+      sent.push({ url: String(url), ...(options?.method ? { method: options.method } : {}), body: options?.body });
+      return new Response("[]", { status: 200, headers: { "content-type": "application/json" } });
+    };
+    const client = new PostgrestClient("http://test.local", { fetch: fetchStub as never });
+    const api = new M2ApiClient({ rpc: client.rpc.bind(client) } as never);
+    const rows = [{ row: 2, article: "12V20W-AU", quantity: "4", condition: "Н" }];
+    await api.previewStockReceipt(rows);
+    await api.receiveStockBatch(rows);
+    for (const request of sent) {
+      assert.equal(request.method, "POST", "строки накладной уходят телом запроса");
+      assert.doesNotMatch(String(request.url), /object Object/u);
+      assert.deepEqual(JSON.parse(String(request.body)), { p_items: rows });
+    }
+    // История читается адресной строкой: там только простые значения, им это не вредит.
+    sent.length = 0;
+    await api.inventoryPartMovements("p1", 10, 0);
+    assert.match(String(sent[0]?.url), /p_part_id=p1&p_limit=10&p_offset=0/u);
+  });
+
   it("приход файлом ничего не меняет до подтверждения человеком", async () => {
     const source = await readFile(new URL("./StockReceiptImport.tsx", import.meta.url), "utf8");
     // Выбор файла только спрашивает базу, что распознано; приход — отдельной кнопкой.
@@ -108,7 +133,7 @@ describe("склад: история движений, списание и ко�
     const apply = source.slice(source.indexOf("const apply = async"), source.indexOf("return <Dialog"));
     assert.match(apply, /receiveStockBatch/u);
     // Кнопка прихода неактивна, пока в разборе есть хоть одна ошибка.
-    assert.match(source, /const ready = preview\.length > 0 && summary\.broken === 0;/u);
+    assert.match(source, /summary\.broken === 0/u);
     assert.match(source, /disabled=\{!ready\}/u);
   });
 

@@ -99,6 +99,39 @@ describe("чтение таблиц: xlsx и csv", () => {
     await assert.rejects(() => readXlsxRows(encoder.encode("не архив")), /не похож на xlsx/u);
   });
 
+  it("битый архив объясняется по-русски, а не ошибкой распаковщика", async () => {
+    // Оглавление указывает за край файла (так же выглядит zip64 с 0xFFFFFFFF).
+    const broken = zipStore([["xl/sharedStrings.xml", encoder.encode("<sst/>")]]);
+    const view = new DataView(broken.buffer, broken.byteOffset, broken.byteLength);
+    const centralOffset = view.getUint32(broken.length - 6, true);
+    view.setUint32(centralOffset + 42, 0xFFFFFFFF, true);
+    await assert.rejects(() => unzipEntries(broken), /повреждён.*за его край/u);
+    // Файл архива обрезан: данные короче, чем обещает оглавление.
+    const cut = zipStore([["xl/sharedStrings.xml", encoder.encode("<sst/>")]]);
+    const cutView = new DataView(cut.buffer, cut.byteOffset, cut.byteLength);
+    cutView.setUint32(cutView.getUint32(cut.length - 6, true) + 20, 10_000, true);
+    await assert.rejects(() => unzipEntries(cut), /повреждён.*обрезана/u);
+  });
+
+  it("csv из Excel в русской кодировке читается буквами, а не кракозябрами", async () => {
+    // windows-1251: так Excel в русской локали сохраняет CSV по умолчанию.
+    const cp1251 = Uint8Array.from([
+      0xC0, 0xF0, 0xF2, 0xE8, 0xEA, 0xF3, 0xEB, 0x3B, 0xCA, 0xEE, 0xEB, 0x2D, 0xE2, 0xEE, 0x3B, 0xD1, 0xEE, 0xF1, 0xF2, 0x2E,
+      0x0A, 0x41, 0x55, 0x2D, 0x31, 0x3B, 0x34, 0x3B, 0xCD
+    ]);
+    const rows = await readSpreadsheetFile({ name: "накладная.csv", arrayBuffer: async () => cp1251.buffer as ArrayBuffer });
+    assert.deepEqual(rows, [["Артикул", "Кол-во", "Сост."], ["AU-1", "4", "Н"]]);
+  });
+
+  it("клетка за последней колонкой Excel не съедает память", () => {
+    // ZZZZZ1 это 12 млн колонок: наивный добор пустых клеток повесил бы страницу.
+    const xml = "<row r=\"1\"><c r=\"A1\" t=\"inlineStr\"><is><t>есть</t></is></c>"
+      + "<c r=\"ZZZZZ1\" t=\"inlineStr\"><is><t>мусор</t></is></c></row>";
+    const started = Date.now();
+    assert.deepEqual(parseSheet(xml, []), [["есть"]]);
+    assert.ok(Date.now() - started < 1000, "разбор не должен занимать секунды");
+  });
+
   it("файл без расширения читается как csv: накладную часто сохраняют текстом", async () => {
     const rows = await readSpreadsheetFile({
       name: "накладная.csv",

@@ -5,6 +5,7 @@
 import type { PartConditionTotals, StockMovementRecord, StockMovementType } from "./m2-api.js";
 import type { StatusTone } from "./ui.js";
 import { companyDateTimeText } from "./task-dates.js";
+import { formatRussianCount } from "./equipment-changes.js";
 
 export type PartCondition = "G" | "N" | "B";
 
@@ -21,11 +22,11 @@ export const PART_CONDITION_LABELS: Readonly<Record<PartCondition, string>> = {
   B: "б/у"
 };
 
-/** Состояние словом про остаток: «4 гарантийных». */
-export const PART_CONDITION_PLURALS: Readonly<Record<PartCondition, string>> = {
-  G: "гарантийных",
-  N: "новых",
-  B: "б/у"
+/** Состояние словом про остаток: «1 гарантийная», «4 гарантийных» — считаем по-русски. */
+export const PART_CONDITION_FORMS: Readonly<Record<PartCondition, readonly [string, string, string]>> = {
+  G: ["гарантийная", "гарантийные", "гарантийных"],
+  N: ["новая", "новые", "новых"],
+  B: ["б/у", "б/у", "б/у"]
 };
 
 export const MOVEMENT_LABELS: Readonly<Record<StockMovementType, string>> = {
@@ -93,7 +94,11 @@ export function conditionTotalsText(totals: PartConditionTotals): string {
 export function conditionTotalsTitle(totals: PartConditionTotals): string {
   const parts = PART_CONDITIONS
     .filter((condition) => totals[condition] > 0)
-    .map((condition) => `${String(totals[condition]).replace(".", ",")} ${PART_CONDITION_PLURALS[condition]}`);
+    // Дробное количество (метры трубки) в склонение не отдаём: «2,5 новых» ни одна форма
+    // не описывает, а formatRussianCount считает по целым.
+    .map((condition) => Number.isInteger(totals[condition])
+      ? formatRussianCount(totals[condition], PART_CONDITION_FORMS[condition])
+      : `${String(totals[condition]).replace(".", ",")} ${PART_CONDITION_FORMS[condition][2]}`);
   return parts.length ? parts.join(", ") : "ни в одном состоянии нет";
 }
 

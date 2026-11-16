@@ -103,9 +103,18 @@ BEGIN
    ORDER BY coalesce(sum(m.on_hand_delta), 0) DESC, (l.lot_code = 'default') DESC, l.id
    LIMIT 1;
   IF lot IS NULL AND p_create_missing THEN
+    -- Партию по умолчанию могли завести в эту же секунду другим приходом: уникальный
+    -- индекс (part_id, part_condition, lot_code) тогда отказал бы сырым английским
+    -- текстом. ON CONFLICT молчит, и мы просто читаем ту партию, что уже есть.
     INSERT INTO public.stock_lots (part_id, part_condition, lot_code)
     VALUES (p_part_id, p_condition, 'default')
+    ON CONFLICT (part_id, part_condition, lot_code) DO NOTHING
     RETURNING id INTO lot;
+    IF lot IS NULL THEN
+      SELECT l.id INTO lot
+        FROM public.stock_lots AS l
+       WHERE l.part_id = p_part_id AND l.part_condition = p_condition AND l.lot_code = 'default';
+    END IF;
   END IF;
   RETURN lot;
 END

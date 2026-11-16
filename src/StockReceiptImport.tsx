@@ -2,6 +2,7 @@ import React, { useRef, useState, type ChangeEvent } from "react";
 import { m2Api, type StockReceiptPreviewRow } from "./m2-api.js";
 import { Button, Dialog, Notice, ResourceState, StatusBadge, toast } from "./ui.js";
 import { formatRussianCount } from "./equipment-changes.js";
+import { formatMoney } from "./price-list.js";
 import { readSpreadsheetFile } from "./xlsx-read.js";
 import {
   detectReceiptColumns,
@@ -65,7 +66,11 @@ export function StockReceiptImport({ open, onOpenChange, onDone }: {
     }
   };
 
-  /** Номер накладной вписывают после загрузки: строки уходят в базу заново, с ним. */
+  /**
+   * Номер накладной вписывают и после загрузки файла: он идёт в комментарий каждого
+   * движения. Разбор базы от него не зависит, поэтому заново не спрашиваем — номер
+   * доедет вместе со строками при приходе.
+   */
   const changeComment = async (value: string) => {
     setComment(value);
     if (!rows.length) return;
@@ -142,7 +147,7 @@ export function StockReceiptImport({ open, onOpenChange, onDone }: {
             </Notice>}
         <div className="table-scroll">
           <table className="data-table receipt-import__table">
-            <thead><tr><th>Строка</th><th>Артикул из файла</th><th>Запчасть на складе</th><th className="numeric">Количество</th><th>Состояние</th><th>Что не так</th></tr></thead>
+            <thead><tr><th>Строка</th><th>Артикул из файла</th><th>Запчасть на складе</th><th className="numeric">Количество</th><th>Состояние</th><th className="numeric">Цена</th><th>Что не так</th></tr></thead>
             <tbody>{preview.map((row) => <tr className={row.error ? "receipt-import__row--broken" : ""} key={row.rowNo}>
               <td data-label="Строка">{row.rowNo}</td>
               <td data-label="Артикул из файла"><strong>{row.article || "—"}</strong></td>
@@ -154,6 +159,9 @@ export function StockReceiptImport({ open, onOpenChange, onDone }: {
                 : "—"}</td>
               <td className="numeric" data-label="Количество">{row.quantity === undefined ? "—" : movementQuantityText(row.quantity)}</td>
               <td data-label="Состояние">{row.condition ? `${PART_CONDITION_LETTERS[row.condition]} · ${PART_CONDITION_LABELS[row.condition]}` : "—"}</td>
+              {/* Цена из файла, а не со склада: читать цену прихода складу нельзя (0040).
+                  Показываем, чтобы было видно, если в цену попала колонка «Сумма». */}
+              <td className="numeric" data-label="Цена">{row.unitPrice === undefined ? "—" : formatMoney(row.unitPrice)}</td>
               <td data-label="Что не так">{row.error
                 ? <StatusBadge tone="danger">{row.error}</StatusBadge>
                 : <StatusBadge tone="success">Готово к приходу</StatusBadge>}</td>

@@ -279,7 +279,8 @@ export function reservationEngineerName(reservation: Pick<StockReservationRecord
 
 /** Артикул без пробелов и дефисов: «TC-7A 001» находится по «tc7a001», как в поиске склада. */
 function withoutSeparators(value: string): string {
-  return value.replace(/[^0-9a-zа-я]+/giu, "");
+  // «ё» буква, а не разделитель: база в regexp_replace по [:alnum:] её оставляет.
+  return value.replace(/[^0-9a-zа-яё]+/giu, "");
 }
 
 function matchesSearch(reservation: StockReservationRecord, search: string): boolean {

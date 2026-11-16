@@ -226,7 +226,9 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
         <Button className="button--compact" disabled={part.onHandQuantity <= 0} onClick={() => { setFormError(null); setForm(form === "writeoff" ? null : "writeoff"); }} variant={form === "writeoff" ? "primary" : "secondary"}>Списать</Button>
         <Button className="button--compact" onClick={() => { setFormError(null); setForm(form === "adjustment" ? null : "adjustment"); }} variant={form === "adjustment" ? "primary" : "secondary"}>Поправить остаток</Button>
       </div> : null}
-      {canWrite && form ? <form className="dialog-form part-card__form" onSubmit={(event) => void submitForm(event)}>
+      {/* key={form}: форма пересобирается при смене операции, иначе состояние осталось бы
+          от прошлой — список состояний у списания и корректировки разный. */}
+      {canWrite && form ? <form className="dialog-form part-card__form" key={form} onSubmit={(event) => void submitForm(event)}>
         <h4 className="part-card__heading">{FORM_TITLES[form]}</h4>
         {formError ? <div className="form-error" role="alert">{formError}</div> : null}
         {form === "adjustment" ? <Notice tone="info">Впишите, сколько запчастей этого состояния насчитали на полке. Разницу база проведёт встречным движением — прежние движения останутся как есть.</Notice> : null}

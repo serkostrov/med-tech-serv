@@ -56,20 +56,22 @@ export function InventoryBoard({ parts, loading, onOpen }: {
       <div className="task-board__cards">
         {loading && cards.length === 0 ? <p className="task-board__empty">Загружаем склад…</p> : null}
         {cards.map((part) => <article className="task-board-card" key={part.id}>
-          {/* Вся карточка — кнопка: по ней открывается позиция с историей движений. */}
-          <button className="task-board-card__open" onClick={() => onOpen?.(part)} type="button">
+          {/* Артикул с наименованием — кнопка: по ней открывается карточка позиции
+              с историей движений. Таблица остатков стоит рядом, а не внутри кнопки:
+              <dl> в <button> вкладывать нельзя, и чтение с экрана ломается. */}
+          <button className="task-board-card__open inventory-board-card__open" onClick={() => onOpen?.(part)} type="button">
             <span className="task-board-card__top">{part.articleNumber}{part.isActive ? null : <i>Неактивна</i>}</span>
             <strong>{part.name}</strong>
-            {/* Единиц измерения в номенклатуре нет: целые считаем штуками, как в резервах и задачах. */}
-            <dl>
-              <div><dt>На складе</dt><dd>{partQuantityText(part.onHandQuantity)}</dd></div>
-              {/* Резервируют и выдают в состоянии, поэтому Г, Н и Б видно сразу на карточке. */}
-              <div><dt>Г · Н · Б</dt><dd title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</dd></div>
-              {part.reservedQuantity > 0 ? <div><dt>В резерве</dt><dd>{partQuantityText(part.reservedQuantity)}</dd></div> : null}
-              {part.reservedQuantity > 0 ? <div><dt>Доступно</dt><dd>{partQuantityText(part.availableQuantity)}</dd></div> : null}
-              <div><dt>Минимум</dt><dd>{part.minimumStock > 0 ? partQuantityText(part.minimumStock) : "не задан"}</dd></div>
-            </dl>
           </button>
+          {/* Единиц измерения в номенклатуре нет: целые считаем штуками, как в резервах и задачах. */}
+          <dl className="inventory-board-card__stats">
+            <div><dt>На складе</dt><dd>{partQuantityText(part.onHandQuantity)}</dd></div>
+            {/* Резервируют и выдают в состоянии, поэтому Г, Н и Б видно сразу на карточке. */}
+            <div><dt>Г · Н · Б</dt><dd title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</dd></div>
+            {part.reservedQuantity > 0 ? <div><dt>В резерве</dt><dd>{partQuantityText(part.reservedQuantity)}</dd></div> : null}
+            {part.reservedQuantity > 0 ? <div><dt>Доступно</dt><dd>{partQuantityText(part.availableQuantity)}</dd></div> : null}
+            <div><dt>Минимум</dt><dd>{part.minimumStock > 0 ? partQuantityText(part.minimumStock) : "не задан"}</dd></div>
+          </dl>
         </article>)}
         {!loading && cards.length === 0 ? <p className="task-board__empty">Таких позиций нет.</p> : null}
       </div>

@@ -261,7 +261,13 @@ BEGIN
       USING ERRCODE = '23514';
   END IF;
 
+  -- Разбор второй и последний раз: строки проводим и тут же собираем ответ.
+  -- Одна запчасть в одном состоянии встречается в файле ровно раз (две строки разбор
+  -- не пропускает), поэтому остаток после вставки и есть итог по этой строке.
   FOR item IN SELECT * FROM public.preview_stock_receipt(p_items) ORDER BY row_no LOOP
+    -- Тот же замок, что у списания и корректировки (0049): два одновременных прихода
+    -- по одной позиции не должны заводить партию по умолчанию вдвоём.
+    PERFORM pg_advisory_xact_lock(hashtextextended(item.part_id::text || ':' || item.part_condition::text, 0));
     -- Партия этой запчасти в этом состоянии; нет ни одной — заводим по умолчанию.
     lot := public.stock_lot_for_write(item.part_id, item.part_condition, true);
     IF item.unit_price IS NOT NULL THEN
@@ -277,23 +283,17 @@ BEGIN
       'receipt:batch:' || batch || ':' || item.row_no::text, 'receipt', lot, item.part_id,
       item.part_condition, item.quantity, item.quantity, public.current_app_user_id(), item.comment
     );
-  END LOOP;
 
-  -- Разбор тот же, остаток уже с учётом проведённых движений: страница показывает,
-  -- сколько стало на складе по каждой строке накладной.
-  RETURN QUERY
-  SELECT
-    applied.part_id,
-    applied.part_article,
-    applied.part_name,
-    applied.part_condition,
-    trim_scale(applied.quantity),
-    trim_scale(coalesce((
-      SELECT sum(m.on_hand_delta) FROM public.stock_movements AS m
-       WHERE m.part_id = applied.part_id AND m.part_condition = applied.part_condition
-    ), 0))
-  FROM public.preview_stock_receipt(p_items) AS applied
-  ORDER BY applied.row_no;
+    part_id := item.part_id;
+    part_article := item.part_article;
+    part_name := item.part_name;
+    part_condition := item.part_condition;
+    quantity := trim_scale(item.quantity);
+    SELECT trim_scale(coalesce(sum(m.on_hand_delta), 0)) INTO on_hand_after
+      FROM public.stock_movements AS m
+     WHERE m.part_id = item.part_id AND m.part_condition = item.part_condition;
+    RETURN NEXT;
+  END LOOP;
 END
 $$;
 

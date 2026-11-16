@@ -12,6 +12,9 @@
 const ZIP_EOCD = 0x06054b50;
 const ZIP_CENTRAL = 0x02014b50;
 
+/** Последняя колонка листа Excel — XFD. Номер больше бывает только у битого файла. */
+const MAX_COLUMN = 16_383;
+
 /** Строки из таблицы: лист как есть, ячейка — текст. */
 export type SheetRows = readonly (readonly string[])[];
 
@@ -19,13 +22,36 @@ function decodeUtf8(data: Uint8Array): string {
   return new TextDecoder("utf-8").decode(data);
 }
 
+/**
+ * Текст файла. Внутри .xlsx всегда UTF-8, а вот .csv Excel в русской локали сохраняет
+ * в windows-1251: читать его как UTF-8 значит получить кракозябры вместо артикулов
+ * и состояний. Поэтому сначала строгий UTF-8, и только если он не сошёлся — 1251.
+ */
+function decodeText(data: Uint8Array): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(data);
+  } catch {
+    try {
+      return new TextDecoder("windows-1251").decode(data);
+    } catch {
+      // Кодировки нет в браузере: читаем как UTF-8 с заменой, файл хотя бы откроется.
+      return decodeUtf8(data);
+    }
+  }
+}
+
 /** Распаковка deflate средствами браузера; архив без сжатия читается и без неё. */
 async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
   if (typeof DecompressionStream === "undefined") {
     throw new Error("Этот браузер не умеет распаковывать xlsx: сохраните накладную в CSV и загрузите его");
   }
-  const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  try {
+    const stream = new Blob([data as BlobPart]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    // Распаковщик бросает пустую ошибку: без своего текста человек увидел бы пустую плашку.
+    throw new Error("Файл .xlsx повреждён: часть его не распаковывается. Пересохраните накладную");
+  }
 }
 
 /**
@@ -55,10 +81,18 @@ export async function unzipEntries(data: Uint8Array): Promise<ReadonlyMap<string
     const commentLength = view.getUint16(cursor + 32, true);
     const localOffset = view.getUint32(cursor + 42, true);
     const name = decoder.decode(data.subarray(cursor + 46, cursor + 46 + nameLength));
+    // Смещения берутся из самого файла: у битого архива (и у zip64, где здесь стоит
+    // 0xFFFFFFFF) они уводят за край, и DataView бросает ошибку без понятного текста.
+    if (localOffset + 30 > data.length) {
+      throw new Error("Файл .xlsx повреждён: оглавление архива указывает за его край. Пересохраните накладную");
+    }
     // Дополнительное поле у локального заголовка своё: смещение данных считаем по нему.
     const localNameLength = view.getUint16(localOffset + 26, true);
     const localExtraLength = view.getUint16(localOffset + 28, true);
     const start = localOffset + 30 + localNameLength + localExtraLength;
+    if (start + packedSize > data.length) {
+      throw new Error("Файл .xlsx повреждён: часть файлов в архиве обрезана. Пересохраните накладную");
+    }
     const packed = data.subarray(start, start + packedSize);
     if (!name.endsWith("/")) {
       result.set(name, method === 0 ? packed : await inflateRaw(packed));
@@ -124,7 +158,10 @@ export function parseSheet(xml: string, sharedStrings: readonly string[]): Sheet
         value = unescapeXml(raw);
       }
       const at = reference ? columnIndex(reference) : cells.length;
-      const column = at >= 0 ? at : cells.length;
+      // Дальше XFD (16383) Excel колонок не делает: номер больше — файл битый, и наивный
+      // добор пустых клеток съел бы память, а то и повесил бы страницу. Такую клетку пропускаем.
+      const column = at >= 0 && at <= MAX_COLUMN ? at : at > MAX_COLUMN ? -1 : cells.length;
+      if (column < 0) continue;
       while (cells.length < column) cells.push("");
       cells[column] = value;
     }
@@ -200,5 +237,5 @@ export async function readSpreadsheetFile(file: { readonly name: string; arrayBu
   if (/\.xlsx?$/iu.test(file.name)) {
     throw new Error("Файл .xls старого формата не читается: сохраните его как .xlsx или .csv");
   }
-  return parseCsvRows(decodeUtf8(bytes));
+  return parseCsvRows(decodeText(bytes));
 }

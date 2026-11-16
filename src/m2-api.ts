@@ -3818,7 +3818,10 @@ export class M2ApiClient {
    * только после подтверждения человеком, отдельным вызовом receiveStockBatch.
    */
   public async previewStockReceipt(items: readonly StockReceiptInputRow[]): Promise<readonly StockReceiptPreviewRow[]> {
-    const { data, error } = await this.db().rpc("preview_stock_receipt", { p_items: items }, { get: true });
+    // Обычным запросом (POST), а не { get: true }: в строку адреса postgrest-js складывает
+    // массив через join, и накладная превратилась бы в «{[object Object],[object Object]}».
+    // Функция объявлена STABLE и ничего не меняет — приход идёт отдельным вызовом.
+    const { data, error } = await this.db().rpc("preview_stock_receipt", { p_items: items });
     throwIfError(error, "Не получилось разобрать файл накладной");
     return (Array.isArray(data) ? data : []).map((item) => stockReceiptPreviewRow(asRow(item)));
   }

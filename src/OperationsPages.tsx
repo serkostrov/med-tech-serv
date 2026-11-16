@@ -146,6 +146,7 @@ export function WarehousePage() {
   // Открытая карточка позиции — по id, а не копией строки: после прихода или списания
   // список перечитывается, и в карточке должны быть свежие остатки, а не прежние.
   const [openedId, setOpenedId] = useState<string | null>(null);
+  const lastOpened = useRef<InventoryPartRecord | undefined>(undefined);
   const [importing, setImporting] = useState(false);
   const [canWrite, setCanWrite] = useState(false);
   // Ответ на прежний запрос не должен затереть свежий: доска и страница списка просят
@@ -240,8 +241,13 @@ export function WarehousePage() {
     }
   };
   const draft = editing === "new" ? emptyPart : editing;
-  // Строка открытой карточки берётся из свежего списка: остатки в ней всегда те же, что в таблице.
-  const opened = openedId ? parts.find((item) => item.id === openedId) : undefined;
+  // Строка открытой карточки берётся из свежего списка: остатки в ней всегда те же,
+  // что в таблице. После прихода или списания позиция может выпасть из отбора
+  // («Ниже минимума» перестало подходить) — тогда показываем, что знали о ней в прошлый
+  // раз: закрывать карточку под руками, пока человек смотрит историю, нельзя.
+  const openedFromList = openedId ? parts.find((item) => item.id === openedId) : undefined;
+  if (openedFromList) lastOpened.current = openedFromList;
+  const opened = openedId ? openedFromList ?? lastOpened.current : undefined;
   return <>
     <PageIntro
       actions={<>
@@ -283,7 +289,7 @@ export function WarehousePage() {
     <InventoryPartCard
       canWrite={canWrite}
       onChanged={() => reload()}
-      onOpenChange={(open) => { if (!open) setOpenedId(null); }}
+      onOpenChange={(open) => { if (!open) { setOpenedId(null); lastOpened.current = undefined; } }}
       open={Boolean(opened)}
       part={opened ?? null}
     />

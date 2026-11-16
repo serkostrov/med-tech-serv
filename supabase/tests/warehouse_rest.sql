@@ -90,7 +90,7 @@ GRANT SELECT, INSERT ON ids TO authenticated;
 
 DO $$
 DECLARE
-  roles text[] := ARRAY['coordinator', 'engineer', 'warehouse', 'supervisor', 'admin'];
+  roles text[] := ARRAY['coordinator', 'engineer', 'warehouse', 'supervisor', 'admin', 'customer'];
   r text; uid uuid;
   org uuid; site uuid; payer uuid; manuf uuid; model uuid; eq uuid; wt text; t1 uuid;
   part_a uuid; part_b uuid; part_c uuid;
@@ -384,6 +384,17 @@ SELECT pg_temp.check((SELECT count(*) = 7 FROM public.inventory_part_movements((
   'выдача и возврат встали в историю позиции');
 SELECT pg_temp.as_owner();
 
+-- Заказчику склад закрыт целиком: ни остатков, ни истории движений по позиции.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'customer'));
+SELECT pg_temp.check((SELECT count(*) = 0 FROM inventory_part_registry), 'заказчик не видит склада');
+SELECT pg_temp.expect_message(
+  $$SELECT * FROM public.inventory_part_movements((SELECT id FROM ids WHERE k = 'part_a'))$$,
+  'История движений по запчасти доступна только складу', 'заказчик не читает историю движений');
+SELECT pg_temp.expect_message(
+  $$SELECT * FROM public.preview_stock_receipt('[{"article": "AU-LAMP-12V20W", "quantity": 1}]'::jsonb)$$,
+  'Загружать приход накладной может только склад', 'заказчик не разбирает накладные');
+SELECT pg_temp.as_owner();
+
 -- =========================================================================
 -- 0050. Приход накладной файлом и остаток по состояниям
 -- =========================================================================
@@ -483,6 +494,11 @@ CREATE TEMP TABLE applied AS SELECT * FROM public.receive_stock_batch($$[
   {"row": 4, "article": "XN-FILTER-WB", "quantity": 10, "comment": "Накладная 108 от 14.11.2026"}
 ]$$::jsonb);
 SELECT pg_temp.check((SELECT count(*) = 3 FROM applied), 'оприходованы все три строки накладной');
+-- Состояние, которого у позиции ещё не было: партия заводится приходом сама.
+SELECT pg_temp.check((SELECT on_hand_after = 2 FROM public.receive_stock_batch($$[
+    {"row": 2, "article": "XN-FILTER-WB", "quantity": 2, "condition": "Б", "comment": "Б/у из обмена"}
+  ]$$::jsonb)),
+  'приход в новое состояние заводит партию сам');
 SELECT pg_temp.check((SELECT on_hand_after = 11 FROM applied WHERE part_condition = 'N' AND part_article = 'AU-LAMP-12V20W'),
   'в ответе видно, сколько стало на складе');
 SELECT pg_temp.check((SELECT on_hand_quantity = 11 FROM stock_balances
@@ -527,8 +543,10 @@ SELECT pg_temp.check((SELECT available_new = 11 AND available_guarantee = 6 AND 
 SELECT pg_temp.check((SELECT on_hand_quantity = 1 AND on_hand_new = 1 AND on_hand_guarantee = 0 AND on_hand_used = 0
                         FROM inventory_part_registry WHERE id = (SELECT id FROM ids WHERE k = 'part_off')),
   'у позиции с остатком в одном состоянии остальные нули');
-SELECT pg_temp.check((SELECT on_hand_quantity = 0 AND on_hand_new = 0 AND available_new = 0
-                        FROM inventory_part_registry WHERE article_number = 'XN-FILTER-WB') IS NOT TRUE,
+-- Сравниваем значения, а не «не ложь»: иначе проверка прошла бы и на пустом ответе.
+SELECT pg_temp.check((SELECT on_hand_quantity = 18 AND on_hand_new = 16 AND available_new = 16
+                        AND on_hand_guarantee = 0 AND on_hand_used = 2
+                        FROM inventory_part_registry WHERE article_number = 'XN-FILTER-WB'),
   'позиция с остатком не считается пустой');
 SELECT pg_temp.as_owner();
 

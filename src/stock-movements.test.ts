@@ -53,7 +53,11 @@ describe("склад: подписи к движениям и остаткам �
 
   it("остаток по состояниям: только то, что есть, в порядке Г, Н, Б", () => {
     assert.equal(conditionTotalsText({ G: 1, N: 6, B: 0 }), "1 Г · 6 Н");
-    assert.equal(conditionTotalsTitle({ G: 1, N: 6, B: 0 }), "1 гарантийных, 6 новых");
+    // Считаем по-русски: «1 гарантийная», а не «1 гарантийных».
+    assert.equal(conditionTotalsTitle({ G: 1, N: 6, B: 0 }), "1 гарантийная, 6 новых");
+    assert.equal(conditionTotalsTitle({ G: 2, N: 21, B: 5 }), "2 гарантийные, 21 новая, 5 б/у");
+    // Дробное количество (метры трубки) склонять не пытаемся.
+    assert.equal(conditionTotalsTitle({ G: 0, N: 2.5, B: 0 }), "2,5 новых");
     assert.equal(conditionTotalsText({ G: 0, N: 0, B: 0 }), "—");
     assert.equal(conditionTotalsTitle({ G: 0, N: 0, B: 0 }), "ни в одном состоянии нет");
     assert.equal(conditionTotalsText({ G: 0, N: 2.5, B: 3 }), "2,5 Н · 3 Б");
