@@ -402,8 +402,9 @@ GRANT EXECUTE ON FUNCTION public.task_mail_thread(uuid) TO medtech_api;
 -- ---------------------------------------------------------------------------
 
 -- Отвечает клиенту тот, кто ведёт задачи и видит почту: координатор и руководитель.
--- Инженеру и кладовщику переписку с клиентом не доверяем, читать её они могут.
--- Отвечать есть на что, только если задача пришла из письма.
+-- Инженер этой задачи переписку читает (app_can_read_task_mail), но сам клиенту не пишет:
+-- переписку с заказчиком ведёт координатор. Отвечать есть на что, только если задача
+-- пришла из письма.
 CREATE OR REPLACE FUNCTION public.app_can_reply_task_mail(p_task_id uuid)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
