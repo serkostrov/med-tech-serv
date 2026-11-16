@@ -12,7 +12,7 @@ import {
 } from "./navigation.js";
 import { hasEquipmentSerialConflict } from "./equipment-passport.js";
 import { formatMeterReading, meterReadingRefusal } from "./meter-reading.js";
-import { canHideReferenceValue, referenceEditPayload } from "./reference-edit.js";
+import { canHideReferenceValue, duplicateModelRefusal, referenceEditPayload } from "./reference-edit.js";
 import {
   formatEquipmentAssignmentChange,
   formatEquipmentAssignmentDate,
@@ -2779,6 +2779,16 @@ function AdminReferencesPage() {
     setSaving(true); setFormError(null);
     try {
       const attributes = Object.fromEntries(selected.fields.filter((field) => !field.readOnly).map((field) => [field.key, editingAttributes[field.key] ?? null]));
+      // Дубль модели у одного производителя база не примет (миграция 0039): говорим это сразу.
+      if (selected.key === "equipment-models") {
+        const manufacturerId = attributes.manufacturerId ?? null;
+        const duplicate = duplicateModelRefusal(
+          { ...(editingId && editingId !== "new" ? { id: editingId } : {}), name, manufacturerId },
+          records,
+          (relatedValues.manufacturers ?? []).find((value) => value.id === manufacturerId)?.name
+        );
+        if (duplicate) throw new Error(duplicate);
+      }
       if (editingId === "new") await m2Api.createCatalogValue(selected.key, { ...(code ? { code } : {}), name, attributes });
       else if (editingId) await m2Api.updateCatalogValue(selected.key, editingId, referenceEditPayload(name, attributes));
       await loadCatalog(selected.key);
