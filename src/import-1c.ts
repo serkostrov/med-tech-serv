@@ -637,7 +637,6 @@ function readEquipmentSheet(
           fix: "Оставьте одну модель на прибор: в базу попадёт та, что встретилась первой"
         });
       }
-      state.serviceRows += withEvents ? 0 : 1;
     } else {
       const meterSource = cell(row.cells, columns.meter);
       const meterReading = readImportNumber(meterSource);
@@ -827,6 +826,7 @@ export interface ImportPlanSummary {
   readonly sheetRows: number;
   readonly serviceRows: number;
   readonly dataRows: number;
+  /** Строк файла без ошибок: они перенесутся (возможно, с оговоркой). */
   readonly readyRows: number;
   readonly errorRows: number;
   readonly warningRows: number;
@@ -1076,7 +1076,6 @@ export function buildImportPlan(
   const eventsCreate = equipment.reduce((total, item) => total + item.eventsCreate, 0);
   const eventsExisting = equipment.reduce((total, item) => total + item.eventsExisting, 0);
   const eventsBlocked = equipment.reduce((total, item) => total + item.eventsBlocked, 0);
-  const readyEquipment = equipment.filter((item) => item.action !== "blocked").length;
   return {
     layout: reading.layout,
     sheet: reading.sheet,
@@ -1087,7 +1086,7 @@ export function buildImportPlan(
       sheetRows: reading.sheetRows,
       serviceRows: reading.serviceRows,
       dataRows,
-      readyRows: readyEquipment + eventsCreate + eventsExisting,
+      readyRows: Math.max(dataRows - rowsWith("error"), 0),
       errorRows: rowsWith("error"),
       warningRows: rowsWith("warning"),
       equipmentCreate: writeEquipment.length,
