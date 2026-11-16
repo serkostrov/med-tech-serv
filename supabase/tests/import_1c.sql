@@ -249,6 +249,26 @@ SELECT pg_temp.expect_refusal_matching(
   'скрыт\(а\) модель',
   'скрытая модель объясняется словами, а не отказом с идентификатором');
 
+-- Прибор уже в реестре, а его модель позже скрыли: повтор файла всё равно проходит.
+SELECT pg_temp.act_as_nobody();
+UPDATE public.equipment_models AS em
+   SET is_active = false
+  FROM public.manufacturers AS m
+ WHERE m.id = em.manufacturer_id AND m.name = 'IMP54 Beckman' AND em.name = 'IMP54 DxH-800';
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+INSERT INTO outcome
+SELECT 'after_hide', public.import_equipment_history('imp54.xlsx', pg_temp.data('equipment'), pg_temp.data('events'));
+SELECT pg_temp.check_eq(pg_temp.result('after_hide') ->> 'equipmentCreated', '0',
+  'скрытая модель не мешает повтору файла: прибор уже в реестре');
+SELECT pg_temp.check_eq(pg_temp.result('after_hide') ->> 'eventsCreated', '0',
+  'повтор по-прежнему ничего не добавляет');
+SELECT pg_temp.act_as_nobody();
+UPDATE public.equipment_models AS em
+   SET is_active = true
+  FROM public.manufacturers AS m
+ WHERE m.id = em.manufacturer_id AND m.name = 'IMP54 Beckman' AND em.name = 'IMP54 DxH-800';
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+
 -- ---------------------------------------------------------------- Чего импорт не делает молча
 INSERT INTO outcome
 SELECT 'orphan', public.import_equipment_history('imp54.xlsx', '[]'::jsonb, pg_temp.data('events_orphan'));

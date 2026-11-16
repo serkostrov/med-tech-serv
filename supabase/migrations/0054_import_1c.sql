@@ -68,7 +68,7 @@ BEGIN
 
   -- Строка выгрузки должна быть полной: без серийного номера, производителя или модели
   -- прибор в реестре не создать, и молча пропускать такую строку нельзя.
-  SELECT format('%s-я строка приборов (S/N «%s»)', list.row_no, coalesce(list.item ->> 'serialNumber', ''))
+  SELECT format('%s-й записи приборов (S/N «%s»)', list.row_no, coalesce(list.item ->> 'serialNumber', ''))
     INTO broken_row
     FROM jsonb_array_elements(p_equipment) WITH ORDINALITY AS list(item, row_no)
    WHERE jsonb_typeof(list.item) IS DISTINCT FROM 'object'
@@ -83,7 +83,7 @@ BEGIN
   END IF;
   -- Дата события приходит с часовым поясом: без него момент разобрался бы по
   -- поясу сервера, и московская полночь уехала бы на сутки назад.
-  SELECT format('%s-я строка истории (S/N «%s»)', list.row_no, coalesce(list.item ->> 'serialNumber', ''))
+  SELECT format('%s-й записи истории (S/N «%s»)', list.row_no, coalesce(list.item ->> 'serialNumber', ''))
     INTO broken_row
     FROM jsonb_array_elements(p_events) WITH ORDINALITY AS list(item, row_no)
    WHERE jsonb_typeof(list.item) IS DISTINCT FROM 'object'
@@ -103,6 +103,8 @@ BEGIN
   PERFORM pg_advisory_xact_lock(hashtextextended('import_equipment_history', 0));
 
   -- Новая модель или производитель — это запись в справочник, а не в реестр приборов.
+  -- Прибор, который уже в реестре, справочник не пополняет: его модель и
+  -- производитель в выгрузке могут и отличаться от записанных, но импорт их не трогает.
   SELECT EXISTS (
     SELECT 1
       FROM jsonb_array_elements(p_equipment) AS item
@@ -113,6 +115,11 @@ BEGIN
         WHERE lower(btrim(m.name)) = lower(btrim(item ->> 'manufacturer'))
           AND lower(btrim(em.name)) = lower(btrim(item ->> 'model'))
      )
+       AND NOT EXISTS (
+         SELECT 1 FROM public.equipment AS existing
+          WHERE existing.serial_number_normalized
+                = upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
+       )
   ) INTO needs_catalog;
   IF needs_catalog AND NOT public.app_has_permission('references.write') THEN
     RAISE EXCEPTION 'В выгрузке есть модель, которой нет в справочнике: её добавляет тот, кто ведёт справочники'
@@ -133,7 +140,15 @@ BEGIN
     LEFT JOIN public.equipment_models AS em
       ON em.manufacturer_id = m.id
      AND lower(btrim(em.name)) = lower(btrim(item ->> 'model'))
-   WHERE NOT m.is_active OR (em.id IS NOT NULL AND NOT em.is_active)
+   WHERE (NOT m.is_active OR (em.id IS NOT NULL AND NOT em.is_active))
+     -- Прибор, который уже в реестре, справочник не трогает: повторная загрузка
+     -- того же файла не должна упираться в модель, скрытую после первого переноса.
+     AND NOT EXISTS (
+       SELECT 1 FROM public.equipment AS existing
+        WHERE existing.serial_number_normalized
+              = upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
+     )
+   ORDER BY m.name, em.name
    LIMIT 1;
   IF hidden_pair IS NOT NULL THEN
     RAISE EXCEPTION 'В справочнике скрыт(а) %: верните запись кнопкой «Показать» и повторите импорт', hidden_pair
@@ -222,7 +237,8 @@ BEGIN
                        END
              END AS meter_reading
         FROM jsonb_array_elements(p_equipment) AS item
-       ORDER BY upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
+       ORDER BY upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g')),
+                btrim(item ->> 'serialNumber')
     ) AS wanted
     JOIN public.manufacturers AS m ON lower(btrim(m.name)) = lower(wanted.manufacturer)
     JOIN public.equipment_models AS em
@@ -238,11 +254,13 @@ BEGIN
     INTO equipment_wanted
     FROM jsonb_array_elements(p_equipment) AS item;
 
-  SELECT count(DISTINCT (upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g')), item ->> 'sourceKey'))
+  SELECT count(DISTINCT upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
+                 || ':' || (item ->> 'sourceKey'))
     INTO events_wanted
     FROM jsonb_array_elements(p_events) AS item;
 
-  SELECT count(DISTINCT (upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g')), item ->> 'sourceKey'))
+  SELECT count(DISTINCT upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
+                 || ':' || (item ->> 'sourceKey'))
     INTO events_without_equipment
     FROM jsonb_array_elements(p_events) AS item
    WHERE NOT EXISTS (
@@ -251,37 +269,44 @@ BEGIN
             = upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
    );
 
-  -- Событие узнаётся по source_key: он посчитан по содержанию строки файла, поэтому
-  -- повторная загрузка того же файла не добавляет истории.
-  INSERT INTO public.equipment_history (
-    equipment_id, event_type, happened_at, summary, details, source_key, created_by
-  )
-  SELECT e.id,
-         'manual',
-         (item ->> 'happenedAt')::timestamptz,
-         btrim(item ->> 'summary'),
-         jsonb_build_object(
-           'import_source', source_name,
-           'client', btrim(coalesce(item ->> 'client', '')),
-           'description', coalesce(item ->> 'description', ''),
-           'workType', btrim(coalesce(item ->> 'workType', ''))
-         ),
-         item ->> 'sourceKey',
-         auth.uid()
-    FROM jsonb_array_elements(p_events) WITH ORDINALITY AS list(item, row_no)
-    JOIN public.equipment AS e
-      ON e.serial_number_normalized
-         = upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
-   ORDER BY list.row_no
-  ON CONFLICT (equipment_id, source_key) WHERE source_key IS NOT NULL DO NOTHING;
-  GET DIAGNOSTICS events_created = ROW_COUNT;
+  -- Невозможную дату («30 февраля») проверка формата не ловит: она отличает
+  -- только вид записи. Объясняем такой отказ словами, а не кодом Postgres.
+  BEGIN
+    -- Событие узнаётся по source_key: он посчитан по содержанию строки файла, поэтому
+    -- повторная загрузка того же файла не добавляет истории.
+    INSERT INTO public.equipment_history (
+      equipment_id, event_type, happened_at, summary, details, source_key, created_by
+    )
+    SELECT e.id,
+           'manual',
+           (item ->> 'happenedAt')::timestamptz,
+           btrim(item ->> 'summary'),
+           jsonb_build_object(
+             'import_source', source_name,
+             'client', btrim(coalesce(item ->> 'client', '')),
+             'description', coalesce(item ->> 'description', ''),
+             'workType', btrim(coalesce(item ->> 'workType', ''))
+           ),
+           item ->> 'sourceKey',
+           auth.uid()
+      FROM jsonb_array_elements(p_events) WITH ORDINALITY AS list(item, row_no)
+      JOIN public.equipment AS e
+        ON e.serial_number_normalized
+           = upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
+     ORDER BY list.row_no
+    ON CONFLICT (equipment_id, source_key) WHERE source_key IS NOT NULL DO NOTHING;
+    GET DIAGNOSTICS events_created = ROW_COUNT;
+  EXCEPTION WHEN invalid_datetime_format OR datetime_field_overflow THEN
+    RAISE EXCEPTION 'В выгрузке есть событие с невозможной датой: проверьте даты в файле'
+      USING ERRCODE = '23514';
+  END;
 
   RETURN jsonb_build_object(
     'sourceName', source_name,
     'manufacturersCreated', manufacturers_created,
     'modelsCreated', models_created,
     'equipmentCreated', equipment_created,
-    'equipmentAlready', equipment_wanted - equipment_created,
+    'equipmentAlready', greatest(equipment_wanted - equipment_created, 0),
     'eventsCreated', events_created,
     'eventsAlready', greatest(events_wanted - events_created - events_without_equipment, 0),
     'eventsWithoutEquipment', events_without_equipment
