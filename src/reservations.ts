@@ -16,6 +16,14 @@ export const RESERVATION_STATUS_LABELS: Readonly<Record<StockReservationStatus, 
   cancelled: "Резерв снят"
 };
 
+/**
+ * Состояния по ходу жизни резерва: от заявки до возврата, снятый резерв последним.
+ * В этом порядке идут колонки доски и пункты фильтра по состоянию.
+ */
+export const RESERVATION_STATUSES_IN_ORDER: readonly StockReservationStatus[] = [
+  "created", "warehouse_notified", "issued", "installed", "returned", "cancelled"
+];
+
 export const RESERVATION_STATUS_TONES: Readonly<Record<StockReservationStatus, StatusTone>> = {
   created: "warning",
   warehouse_notified: "info",
@@ -190,6 +198,70 @@ export function installedReservations(
     && item.condition === part.condition
     && item.installMarked
     && (item.status === "issued" || item.status === "installed"));
+}
+
+/**
+ * Условия отбора резервов в окне склада. Пустая строка значит «все», как в остальных реестрах.
+ * Список резервов приходит целиком, поэтому отбираем на месте, а не запросом в базу.
+ */
+export interface ReservationFilters {
+  readonly search: string;
+  readonly status: string;
+  /** Инженер, как он подписан в строке: кому выдали, иначе инженер задачи. */
+  readonly engineer: string;
+  readonly taskNumber: string;
+  readonly partId: string;
+}
+
+export const EMPTY_RESERVATION_FILTERS: ReservationFilters = { search: "", status: "", engineer: "", taskNumber: "", partId: "" };
+
+/** Инженер строки: кому выдали, иначе инженер задачи. Без них резерв ничей. */
+export function reservationEngineerName(reservation: Pick<StockReservationRecord, "issuedToName" | "engineerName">): string | undefined {
+  return reservation.issuedToName ?? reservation.engineerName;
+}
+
+function matchesSearch(reservation: StockReservationRecord, search: string): boolean {
+  const normalized = search.trim().toLocaleLowerCase("ru-RU");
+  if (!normalized) return true;
+  const haystack = [reservation.number, reservation.articleNumber, reservation.partName, reservation.taskNumber, reservation.taskTitle, reservationEngineerName(reservation)]
+    .filter(Boolean).join(" ").toLocaleLowerCase("ru-RU");
+  return normalized.split(/\s+/u).every((word) => haystack.includes(word));
+}
+
+/** Резервы по условиям окна: все условия вместе, пустое поле ничего не отсекает. */
+export function filterReservations(items: readonly StockReservationRecord[], filters: ReservationFilters): readonly StockReservationRecord[] {
+  return items.filter((item) => (!filters.status || item.status === filters.status)
+    && (!filters.engineer || reservationEngineerName(item) === filters.engineer)
+    && (!filters.taskNumber || item.taskNumber === filters.taskNumber)
+    && (!filters.partId || item.partId === filters.partId)
+    && matchesSearch(item, filters.search));
+}
+
+export interface ReservationFilterOption {
+  readonly value: string;
+  readonly label: string;
+}
+
+/**
+ * Что предложить в фильтрах: только то, что есть в загруженных резервах. Пустых списков
+ * и состояний не из этой вкладки в фильтрах не будет.
+ */
+export function reservationFilterOptions(items: readonly StockReservationRecord[]): {
+  readonly statuses: readonly ReservationFilterOption[];
+  readonly engineers: readonly ReservationFilterOption[];
+  readonly tasks: readonly ReservationFilterOption[];
+  readonly parts: readonly ReservationFilterOption[];
+} {
+  const statuses = RESERVATION_STATUSES_IN_ORDER.filter((status) => items.some((item) => item.status === status))
+    .map((status) => ({ value: status, label: RESERVATION_STATUS_LABELS[status] }));
+  const unique = (options: readonly ReservationFilterOption[]) => [...new Map(options.map((option) => [option.value, option])).values()]
+    .sort((left, right) => left.label.localeCompare(right.label, "ru"));
+  return {
+    statuses,
+    engineers: unique(items.map(reservationEngineerName).filter((name): name is string => Boolean(name)).map((name) => ({ value: name, label: name }))),
+    tasks: unique(items.filter((item) => item.taskNumber).map((item) => ({ value: item.taskNumber as string, label: item.taskTitle ? `${item.taskNumber} · ${item.taskTitle}` : item.taskNumber as string }))),
+    parts: unique(items.map((item) => ({ value: item.partId, label: `${item.articleNumber} · ${item.partName}` })))
+  };
 }
 
 /** Номера резервов для подписи «установлена · Р-000012, Р-000013». */

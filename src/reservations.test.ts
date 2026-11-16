@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient, stockReservationRecord } from "./m2-api.js";
-import { RESERVATION_STATUS_LABELS, availableReservationActions, issueBlockReason, reservationActions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote } from "./reservations.js";
+import { EMPTY_RESERVATION_FILTERS, RESERVATION_STATUS_LABELS, availableReservationActions, filterReservations, issueBlockReason, reservationActions, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
 
 /** Поддельный клиент Supabase: запоминает цепочку запроса к таблице и вызовы функций базы. */
 function fakeClient(response: { data?: unknown; error?: { message: string; code?: string } | null }) {
@@ -55,6 +55,38 @@ describe("резервы склада", () => {
     assert.equal(reservationStepText(step), "У инженера · Никитина Ольга Павловна · 10.11.2026 19:58");
     // Без автора остаётся только время, лишних разделителей нет.
     assert.equal(reservationStepAuthorText({ status: "issued", changedAt: "2026-11-10T16:58:00Z" }), "10.11.2026 19:58");
+  });
+
+  it("отбирает резервы по состоянию, инженеру, задаче, запчасти и словам поиска", () => {
+    const base = {
+      id: "r1", number: "Р-000001", status: "created", partId: "p1", articleNumber: "AU-LAMP", partName: "Лампа галогеновая",
+      condition: "N", quantity: 1, installMarked: false, steps: [], createdAt: "2026-11-10T07:00:00Z", updatedAt: "2026-11-10T07:00:00Z"
+    } as const;
+    const items = [
+      { ...base, taskNumber: "З-1", taskTitle: "Ремонт дозатора", engineerName: "Иванов Пётр Алексеевич" },
+      { ...base, id: "r2", number: "Р-000002", status: "issued", partId: "p2", articleNumber: "XN-FILTER", partName: "Фильтр крови", taskNumber: "З-2", engineerName: "Иванов Пётр Алексеевич", issuedToName: "Кузнецова Мария Олеговна" },
+      { ...base, id: "r3", number: "Р-000003", status: "issued", taskNumber: "З-2", engineerName: "Иванов Пётр Алексеевич" }
+    ] as const;
+    const pick = (filters: Partial<ReservationFilters>) => filterReservations(items, { ...EMPTY_RESERVATION_FILTERS, ...filters }).map((item) => item.id);
+    assert.deepEqual(pick({}), ["r1", "r2", "r3"]);
+    assert.deepEqual(pick({ status: "issued" }), ["r2", "r3"]);
+    // Инженер строки — тот, кому выдали, а не инженер задачи.
+    assert.deepEqual(pick({ engineer: "Кузнецова Мария Олеговна" }), ["r2"]);
+    assert.deepEqual(pick({ engineer: "Иванов Пётр Алексеевич" }), ["r1", "r3"]);
+    assert.deepEqual(pick({ taskNumber: "З-2" }), ["r2", "r3"]);
+    assert.deepEqual(pick({ partId: "p1" }), ["r1", "r3"]);
+    assert.deepEqual(pick({ search: "фильтр" }), ["r2"]);
+    assert.deepEqual(pick({ search: "лампа З-2" }), ["r3"]);
+    assert.deepEqual(pick({ search: "  " }), ["r1", "r2", "r3"]);
+    // Условия складываются: ничего не подходит — пустой список.
+    assert.deepEqual(pick({ status: "created", engineer: "Кузнецова Мария Олеговна" }), []);
+
+    const options = reservationFilterOptions(items);
+    // В списках только то, что есть в загруженных резервах, состояния по ходу жизни резерва.
+    assert.deepEqual(options.statuses, [{ value: "created", label: "Ждёт сборки" }, { value: "issued", label: "У инженера" }]);
+    assert.deepEqual(options.engineers.map((item) => item.value), ["Иванов Пётр Алексеевич", "Кузнецова Мария Олеговна"]);
+    assert.deepEqual(options.tasks.map((item) => item.label), ["З-1 · Ремонт дозатора", "З-2"]);
+    assert.deepEqual(options.parts.map((item) => item.label), ["AU-LAMP · Лампа галогеновая", "XN-FILTER · Фильтр крови"]);
   });
 
   it("не даёт выдать по отменённой или закрытой задаче и без инженера, объясняет почему", () => {

@@ -1,6 +1,6 @@
-import React, { useEffect, useRef, useState, type ReactNode } from "react";
+import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { m2Api, type StockReservationRecord } from "./m2-api.js";
-import { Button, ConfirmationDialog, DataTableShell, MetricCard, PageIntro, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
+import { Button, ConfirmationDialog, DataTableShell, FilterBar, MetricCard, PageIntro, PageTabs, ResourceState, Select, StatusBadge, toast } from "./ui.js";
 import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { companyDateTimeText } from "./task-dates.js";
@@ -8,17 +8,21 @@ import { ReservationSteps } from "./TaskReservations.js";
 import { engineerReservationsFileName, engineerReservationsWorkbook } from "./reservation-export.js";
 import { XLSX_MIME } from "./xlsx.js";
 import {
+  EMPTY_RESERVATION_FILTERS,
   RESERVATION_STATUS_LABELS,
   RESERVATION_STATUS_TONES,
   availableReservationActions,
+  filterReservations,
   issueBlockReason,
   lastReservationStep,
+  reservationFilterOptions,
   reservationIssuedAt,
   reservationQuantityText,
   reservationSummary,
   reservationTaskNote,
   reservationsByEngineer,
-  type ReservationAction
+  type ReservationAction,
+  type ReservationFilters
 } from "./reservations.js";
 
 type ReservationsTab = "active" | "closed" | "engineers";
@@ -59,6 +63,10 @@ export function ReservationsPage() {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<{ readonly reservation: StockReservationRecord; readonly action: ConfirmedAction } | null>(null);
   const [exporting, setExporting] = useState(false);
+  // Условия в полях и условия, по которым сейчас отобран список: как в других реестрах,
+  // набранное применяется по «Показать». Резервы уже загружены, поэтому отбираем на месте.
+  const [filters, setFilters] = useState<ReservationFilters>(EMPTY_RESERVATION_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<ReservationFilters>(EMPTY_RESERVATION_FILTERS);
   // Пока окно подтверждения закрывается, в нём остаётся прежний текст, а не пустой заголовок.
   const lastConfirming = useRef(confirming);
   if (confirming) lastConfirming.current = confirming;
@@ -88,6 +96,9 @@ export function ReservationsPage() {
     tabRef.current = next;
     setTab(next);
     setItems([]);
+    // Условия сбрасываем: на другой вкладке и состояния, и задачи с инженерами уже другие.
+    setFilters(EMPTY_RESERVATION_FILTERS);
+    setAppliedFilters(EMPTY_RESERVATION_FILTERS);
     void reload(next);
   };
 
@@ -115,17 +126,26 @@ export function ReservationsPage() {
     void run(reservation, action).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Не получилось выполнить действие"));
   };
 
+  // Карточки сверху считаем по всей вкладке, а не по отбору: это сводка склада, как на «Складе».
   const summary = reservationSummary(tab === "active" ? items : []);
   const showActions = canWrite && tab === "active";
   const counting = loading && items.length === 0;
-  const groups = tab === "engineers" ? reservationsByEngineer(items) : [];
+  const options = useMemo(() => reservationFilterOptions(items), [items]);
+  const visible = useMemo(() => filterReservations(items, appliedFilters), [items, appliedFilters]);
+  const filtered = visible.length !== items.length;
+  const groups = tab === "engineers" ? reservationsByEngineer(visible) : [];
   const issuedCount = groups.reduce((total, group) => total + group.items.length, 0);
+
+  const applyFilters = (next = filters) => {
+    setFilters(next);
+    setAppliedFilters(next);
+  };
 
   // Выгрузка того, что сейчас на вкладке: по строке на каждую выданную запчасть.
   const exportEngineers = async () => {
     setExporting(true);
     try {
-      const url = URL.createObjectURL(new Blob([(await engineerReservationsWorkbook(items)) as BlobPart], { type: XLSX_MIME }));
+      const url = URL.createObjectURL(new Blob([(await engineerReservationsWorkbook(visible)) as BlobPart], { type: XLSX_MIME }));
       const link = document.createElement("a");
       link.href = url;
       link.download = engineerReservationsFileName();
@@ -149,6 +169,14 @@ export function ReservationsPage() {
       <MetricCard icon="engineers" label="У инженеров" tone="purple" value={counting ? "…" : String(summary.withEngineers)} />
     </div> : null}
     <PageTabs items={[{ value: "active", label: "Действующие" }, { value: "engineers", label: "У инженеров" }, { value: "closed", label: "Закрытые" }]} label="Резервы" onValueChange={changeTab} value={tab} />
+    <FilterBar loading={loading} onReset={() => applyFilters(EMPTY_RESERVATION_FILTERS)} onSubmit={() => applyFilters()}>
+      <label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Резерв, артикул, запчасть, задача" type="search" value={filters.search} /></label>
+      {/* На вкладке «У инженеров» все резервы выданы: выбирать состояние там не из чего. */}
+      {tab === "engineers" ? null : <label>Состояние<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{options.statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>}
+      <label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineer: event.target.value }))} value={filters.engineer}><option value="">Все</option>{options.engineers.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
+      <label>Задача<Select onChange={(event) => setFilters((current) => ({ ...current, taskNumber: event.target.value }))} value={filters.taskNumber}><option value="">Все</option>{options.tasks.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
+      <label>Запчасть<Select onChange={(event) => setFilters((current) => ({ ...current, partId: event.target.value }))} value={filters.partId}><option value="">Все</option>{options.parts.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
+    </FilterBar>
     {tab === "engineers" ? <DataTableShell
       action={items.length ? <Button busy={exporting} busyLabel="Готовим файл…" disabled={issuedCount === 0} onClick={() => void exportEngineers()} variant="secondary">Скачать в Excel</Button> : undefined}
       meta={loading ? undefined : `${formatRussianCount(issuedCount, ["запчасть", "запчасти", "запчастей"])} у ${formatRussianCount(groups.length, ["инженера", "инженеров", "инженеров"])}`}
@@ -156,7 +184,7 @@ export function ReservationsPage() {
     >
       {loadError ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Резервы не загрузились" />
         : loading && items.length === 0 ? <ResourceState description="Подождите, резервы сейчас появятся." status="loading" title="Загружаем резервы" />
-        : groups.length === 0 ? <ResourceState description="Как только кладовщик выдаст запчасть инженеру, она появится здесь." status="empty" title="На руках у инженеров ничего нет" />
+        : groups.length === 0 ? <ResourceState description={filtered ? "Измените условия или сбросьте фильтры." : "Как только кладовщик выдаст запчасть инженеру, она появится здесь."} status={filtered ? "filtered-empty" : "empty"} title={filtered ? "Запчастей по этим условиям нет" : "На руках у инженеров ничего нет"} />
         : <div className="engineer-reservations">{groups.map((group) => <section className="engineer-reservations__group" key={group.engineerName}>
           <header className="engineer-reservations__head">
             <h3>{group.engineerName}</h3>
@@ -177,16 +205,16 @@ export function ReservationsPage() {
             <span className={`engineer-reservations__days${days >= 14 ? " engineer-reservations__days--long" : ""}`}>{formatRussianCount(days, ["день", "дня", "дней"])}</span>
           </li>)}</ul>
         </section>)}</div>}
-    </DataTableShell> : <DataTableShell meta={loading ? undefined : `${items.length} ${tab === "active" ? "в работе" : "последних"}`} title={tab === "active" ? "Резервы в работе" : "Закрытые резервы"}>
+    </DataTableShell> : <DataTableShell meta={loading ? undefined : `${visible.length}${filtered ? ` из ${items.length}` : ""} ${tab === "active" ? "в работе" : "последних"}`} title={tab === "active" ? "Резервы в работе" : "Закрытые резервы"}>
       {loadError ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Резервы не загрузились" />
         : loading && items.length === 0 ? <ResourceState description="Подождите, резервы сейчас появятся." status="loading" title="Загружаем резервы" />
-        : items.length === 0 ? <ResourceState description={tab === "active" ? "Когда под задачу зарезервируют запчасть, она появится здесь." : "Выданные, возвращённые и снятые резервы появятся здесь."} status="empty" title={tab === "active" ? "Резервов в работе нет" : "Закрытых резервов пока нет"} />
+        : visible.length === 0 ? <ResourceState description={filtered ? "Измените условия или сбросьте фильтры." : tab === "active" ? "Когда под задачу зарезервируют запчасть, она появится здесь." : "Выданные, возвращённые и снятые резервы появятся здесь."} status={filtered ? "filtered-empty" : "empty"} title={filtered ? "Резервов по этим условиям нет" : tab === "active" ? "Резервов в работе нет" : "Закрытых резервов пока нет"} />
         : <div className="reservations-container"><div className="table-scroll"><table className="data-table reservations-table">
           <thead><tr>
             <th>Резерв</th><th>Запчасть</th><th>Количество</th><th>Задача</th><th>Инженер</th><th>Состояние</th>
             {showActions ? <th><span className="sr-only">Действия</span></th> : null}
           </tr></thead>
-          <tbody>{items.map((reservation) => {
+          <tbody>{visible.map((reservation) => {
             const actions = availableReservationActions(reservation);
             const busy = busyId === reservation.id;
             const blocked = issueBlockReason(reservation);
