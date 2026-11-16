@@ -34,6 +34,8 @@ export interface XlsxReadSheet {
 
 export interface XlsxReadWorkbook {
   readonly sheets: readonly XlsxReadSheet[];
+  /** Книга считает даты от 1904 года: числа в ней сдвинуты на 1462 дня. */
+  readonly date1904: boolean;
 }
 
 export class XlsxReadError extends Error {
@@ -121,9 +123,14 @@ function readZipDirectory(source: Uint8Array): readonly ZipEntry[] {
 }
 
 async function inflateRaw(data: Uint8Array): Promise<Uint8Array> {
-  const stream = new Blob([data as unknown as BlobPart]).stream()
-    .pipeThrough(new DecompressionStream("deflate-raw"));
-  return new Uint8Array(await new Response(stream).arrayBuffer());
+  try {
+    const stream = new Blob([data as unknown as BlobPart]).stream()
+      .pipeThrough(new DecompressionStream("deflate-raw"));
+    return new Uint8Array(await new Response(stream).arrayBuffer());
+  } catch {
+    // Распаковщик браузера бросает TypeError с пустым текстом: человеку он ничего не скажет.
+    throw new XlsxReadError("Файл повреждён: часть книги не распаковывается. Пересохраните его в Excel");
+  }
 }
 
 async function entryText(source: Uint8Array, entry: ZipEntry): Promise<string> {
@@ -226,7 +233,7 @@ function styleDates(xml: string | undefined): StyleDates {
   const cellXfs = /<cellXfs(?:\s[^>]*)?>([\s\S]*?)<\/cellXfs>/u.exec(xml);
   const dateByStyle: boolean[] = [];
   if (cellXfs?.[1]) {
-    const xfs = /<xf\s([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/gu;
+    const xfs = /<xf\b([^>]*?)(?:\/>|>[\s\S]*?<\/xf>)/gu;
     let xf = xfs.exec(cellXfs[1]);
     while (xf) {
       const id = Number(attributes(xf[1] ?? "").numFmtId ?? "0");
@@ -308,7 +315,7 @@ function readSheet(
   date1904: boolean
 ): XlsxReadSheet {
   const rows: XlsxReadRow[] = [];
-  const rowPattern = /<row\s([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/gu;
+  const rowPattern = /<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/gu;
   let rowMatch = rowPattern.exec(xml);
   let fallbackNumber = 0;
   while (rowMatch) {
@@ -316,17 +323,16 @@ function readSheet(
     const rowAttributes = attributes(rowMatch[1] ?? "");
     const number = Number(rowAttributes.r ?? fallbackNumber);
     const cells: XlsxCellValue[] = [];
-    const cellPattern = /<c\s([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gu;
+    const cellPattern = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/gu;
     let cellMatch = cellPattern.exec(rowMatch[2] ?? "");
     let fallbackColumn = -1;
     while (cellMatch) {
       const cellAttributes = attributes(cellMatch[1] ?? "");
       fallbackColumn += 1;
       const index = cellAttributes.r ? columnIndex(cellAttributes.r) : fallbackColumn;
-      if (index >= MAX_COLUMNS_PER_SHEET) {
-        throw new XlsxReadError("В листе слишком много столбцов: оставьте не больше 256");
-      }
-      if (index >= 0) {
+      // Клетки за пределом листа пропускаем: Excel размечает пустыми клетками
+      // всю строку, когда её форматируют целиком, и ронять на этом файл нельзя.
+      if (index >= 0 && index < MAX_COLUMNS_PER_SHEET) {
         fallbackColumn = index;
         while (cells.length < index) cells.push(null);
         cells[index] = cellValue(cellMatch[2] ?? "", cellAttributes, strings, styles, date1904);
@@ -345,7 +351,7 @@ function readSheet(
 function sheetOrder(workbookXml: string, relsXml: string | undefined): readonly { readonly name: string; readonly path: string }[] {
   const targets = new Map<string, string>();
   if (relsXml) {
-    const pattern = /<Relationship\s([^>]*?)\/>/gu;
+    const pattern = /<Relationship\b([^>]*?)(?:\/>|>[\s\S]*?<\/Relationship>)/gu;
     let match = pattern.exec(relsXml);
     while (match) {
       const attrs = attributes(match[1] ?? "");
@@ -354,7 +360,7 @@ function sheetOrder(workbookXml: string, relsXml: string | undefined): readonly 
     }
   }
   const sheets: { name: string; path: string }[] = [];
-  const pattern = /<sheet\s([^>]*?)\/>/gu;
+  const pattern = /<sheet\b([^>]*?)(?:\/>|>[\s\S]*?<\/sheet>)/gu;
   let match = pattern.exec(workbookXml);
   let index = 0;
   while (match) {
@@ -374,14 +380,15 @@ function sheetOrder(workbookXml: string, relsXml: string | undefined): readonly 
 /** Читает книгу Excel: листы в их порядке, значения по столбцам, даты календарём. */
 export async function readXlsxWorkbook(source: Uint8Array): Promise<XlsxReadWorkbook> {
   const entries = readZipDirectory(source);
-  const byName = new Map(entries.map((entry) => [entry.name, entry]));
+  // Регистр имён внутри архива у разных программ разный: ищем без учёта регистра.
+  const byName = new Map(entries.map((entry) => [entry.name.toLowerCase(), entry]));
   const workbookEntry = byName.get("xl/workbook.xml");
   if (!workbookEntry) {
     throw new XlsxReadError("Это не книга Excel: внутри нет xl/workbook.xml. Сохраните файл как .xlsx");
   }
   const workbookXml = await entryText(source, workbookEntry);
   const relsEntry = byName.get("xl/_rels/workbook.xml.rels");
-  const stringsEntry = byName.get("xl/sharedStrings.xml");
+  const stringsEntry = byName.get("xl/sharedstrings.xml");
   const stylesEntry = byName.get("xl/styles.xml");
   const relsXml = relsEntry ? await entryText(source, relsEntry) : undefined;
   const strings = stringsEntry ? sharedStrings(await entryText(source, stringsEntry)) : [];
@@ -393,10 +400,10 @@ export async function readXlsxWorkbook(source: Uint8Array): Promise<XlsxReadWork
   if (order.length > MAX_SHEETS) throw new XlsxReadError("В книге слишком много листов: оставьте не больше 64");
   const sheets: XlsxReadSheet[] = [];
   for (const sheet of order) {
-    const entry = byName.get(sheet.path);
+    const entry = byName.get(sheet.path.toLowerCase());
     if (!entry) continue;
     sheets.push(readSheet(sheet.name, await entryText(source, entry), strings, styles, date1904));
   }
   if (sheets.length === 0) throw new XlsxReadError("В книге нет ни одного читаемого листа");
-  return { sheets };
+  return { sheets, date1904 };
 }

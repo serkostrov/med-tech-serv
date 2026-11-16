@@ -31,11 +31,14 @@ import {
  */
 
 const ROWS = ["строка", "строки", "строк"] as const;
+/** Замечаний на плохом файле бывают тысячи: столько в таблице, остальные числом. */
+const MAX_SHOWN_ISSUES = 200;
 const DEVICES = ["прибор", "прибора", "приборов"] as const;
 const EVENTS = ["событие", "события", "событий"] as const;
 
 function message(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
+  // У отказа распаковщика браузера текст бывает пустым: тогда говорим своими словами.
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 const ACTION_LABELS: Readonly<Record<ImportPlan["equipment"][number]["action"], string>> = {
@@ -87,6 +90,12 @@ export function ImportPage() {
       ? buildImportPlan(reading, snapshot, manufacturer ? { defaultManufacturer: manufacturer } : {})
       : undefined,
     [reading, snapshot, manufacturer]
+  );
+  // Тот же разбор без выбора производителя: по нему видно, нужен ли выбор вообще.
+  // Иначе селектор исчезал бы сразу после выбора и снять его было бы нечем.
+  const planWithoutChoice = useMemo(
+    () => reading && snapshot ? buildImportPlan(reading, snapshot) : undefined,
+    [reading, snapshot]
   );
 
   const chooseFile = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -148,7 +157,12 @@ export function ImportPage() {
   }
 
   const summary = plan?.summary;
-  const needsManufacturer = plan?.issues.some((issue) => issue.code === "model_not_in_catalog") === true;
+  const needsManufacturer = planWithoutChoice?.issues.some(
+    (issue) => issue.code === "model_not_in_catalog" || issue.code === "model_ambiguous"
+  ) === true;
+  const sheetIssues = plan?.issues.filter((issue) => issue.row === 0) ?? [];
+  const blockingSheetIssue = sheetIssues.find((issue) => issueSeverity(issue.code) === "error");
+  const shownIssues = plan?.issues.slice(0, MAX_SHOWN_ISSUES) ?? [];
   const writeCount = (plan?.write.equipment.length ?? 0) + (plan?.write.events.length ?? 0);
 
   return (
@@ -182,7 +196,14 @@ export function ImportPage() {
         title="Выберите файл выгрузки"
       /> : null}
 
-      {plan && summary ? <>
+      {blockingSheetIssue ? <ResourceState
+        description={`${blockingSheetIssue.problem}. ${blockingSheetIssue.fix}`}
+        icon="info"
+        status="empty"
+        title="Файл не разобран"
+      /> : null}
+
+      {plan && summary && !blockingSheetIssue ? <>
         <div className="metric-grid metric-grid--four">
           <MetricCard
             detail={`Лист «${plan.sheet}», служебных строк ${summary.serviceRows}`}
@@ -232,9 +253,13 @@ export function ImportPage() {
           </p>
           {needsManufacturer ? <label className="import-plan__manufacturer">
             Производитель для моделей, которых нет в справочнике
-            <Select onChange={(event) => setManufacturer(event.target.value)} value={manufacturer}>
+            <Select
+              onChange={(event) => { setManufacturer(event.target.value); setWritten(undefined); }}
+              value={manufacturer}
+            >
               <option value="">Не выбран: такие приборы перенесены не будут</option>
-              {(snapshot?.manufacturers ?? []).map((name) => <option key={name} value={name}>{name}</option>)}
+              {(snapshot?.manufacturers ?? []).filter((item) => item.isActive)
+                .map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
             </Select>
             <span className="form-hint">
               В выгрузке «история прибора» производителя нет. Выберите его, и модель заведётся в справочнике.
@@ -270,7 +295,7 @@ export function ImportPage() {
               <th scope="col">Что делать</th>
             </tr></thead>
             <tbody>
-              {plan.issues.map((issue, index) => <tr key={`${issue.row}-${issue.code}-${index}`}>
+              {shownIssues.map((issue, index) => <tr key={`${issue.row}-${issue.code}-${index}`}>
                 <td>
                   <StatusBadge tone={issueSeverity(issue.code) === "error" ? "danger" : "warning"}>
                     {issue.row > 0 ? `${issue.row}${issue.column ? ` · ${issue.column}` : ""}` : "Весь лист"}
@@ -281,6 +306,9 @@ export function ImportPage() {
               </tr>)}
             </tbody>
           </table></div>
+          {plan.issues.length > shownIssues.length ? <p className="muted import-plan__done">
+            Показаны первые {shownIssues.length}; всего {formatRussianCount(plan.issues.length, ["замечание", "замечания", "замечаний"])}
+          </p> : null}
         </DataTableShell> : null}
 
         {plan.equipment.length > 0 ? <DataTableShell

@@ -43,7 +43,8 @@ DECLARE
 BEGIN
   BEGIN
     EXECUTE p_sql;
-  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception OR invalid_text_representation THEN
+  EXCEPTION WHEN insufficient_privilege OR check_violation OR raise_exception
+    OR invalid_parameter_value OR invalid_text_representation THEN
     message := SQLERRM;
     IF message !~ p_pattern THEN
       RAISE EXCEPTION 'ПРОВАЛ: % — отказ не объясняет причину: %', p_label, message;
@@ -131,7 +132,7 @@ END $$;
 SELECT pg_temp.act_as(pg_temp.uid('engineer'));
 SELECT pg_temp.expect_refusal_matching(
   'SELECT public.import_equipment_history(''imp54.xlsx'', pg_temp.data(''equipment''), pg_temp.data(''events''))',
-  'приборы и их историю заводит координатор',
+  'право заводить приборы',
   'инженер импорт не запускает, и сказано почему');
 
 SELECT pg_temp.act_as(pg_temp.uid('keeper'));
@@ -164,11 +165,16 @@ SELECT pg_temp.check(
     WHERE e.serial_number_normalized = 'IMP54-BE49081' AND feed.event_type = 'imported') = 2,
   'лента прибора показывает эти записи как «Импорт»');
 SELECT pg_temp.check(
-  (SELECT h.details ->> 'client' FROM public.equipment_history AS h
-    WHERE h.source_key = repeat('1', 64)) = 'IMP54 клиника',
+  (SELECT h.details ->> 'client'
+     FROM public.equipment_history AS h
+     JOIN public.equipment AS e ON e.id = h.equipment_id
+    WHERE h.source_key = repeat('1', 64) AND e.serial_number_normalized = 'IMP54-BE49081') = 'IMP54 клиника',
   'клиент события сохранён снимком');
 SELECT pg_temp.check(
-  (SELECT h.created_by FROM public.equipment_history AS h WHERE h.source_key = repeat('1', 64))
+  (SELECT h.created_by
+     FROM public.equipment_history AS h
+     JOIN public.equipment AS e ON e.id = h.equipment_id
+    WHERE h.source_key = repeat('1', 64) AND e.serial_number_normalized = 'IMP54-BE49081')
     = pg_temp.uid('coord'),
   'автор записи — тот, кто запустил импорт');
 
@@ -195,6 +201,53 @@ SELECT pg_temp.check(
      JOIN public.manufacturers AS k ON k.id = m.manufacturer_id
     WHERE k.name = 'IMP54 Mindray' AND m.name = 'IMP54 BS-620') = 1,
   'в справочнике ровно одна такая модель');
+
+-- ------------------------------------------------- Новый прибор и его история разом
+INSERT INTO outcome
+SELECT 'together', public.import_equipment_history(
+  'imp54-together.xlsx',
+  jsonb_build_array(jsonb_build_object(
+    'serialNumber', 'IMP54-TOGETHER-1', 'manufacturer', 'IMP54 Beckman', 'model', 'IMP54 DxH-800')),
+  jsonb_build_array(jsonb_build_object(
+    'serialNumber', 'IMP54-TOGETHER-1', 'sourceKey', repeat('5', 64),
+    'happenedAt', '2024-05-05T00:00:00+03:00', 'summary', 'Инсталляция',
+    'client', 'IMP54 клиника', 'description', '', 'workType', 'Инсталляция')));
+SELECT pg_temp.check_eq(pg_temp.result('together') ->> 'equipmentCreated', '1',
+  'прибор создан тем же вызовом');
+SELECT pg_temp.check_eq(pg_temp.result('together') ->> 'eventsCreated', '1',
+  'событие нашло прибор, созданный в этом же вызове');
+SELECT pg_temp.check_eq(pg_temp.result('together') ->> 'eventsWithoutEquipment', '0',
+  'потерянных событий нет');
+SELECT pg_temp.check_eq(pg_temp.result('together') ->> 'equipmentAlready', '0',
+  'повторов в файле не было');
+
+-- Один прибор тремя строками файла: «уже было» не выдумывается из повторов.
+INSERT INTO outcome
+SELECT 'repeats', public.import_equipment_history(
+  'imp54-repeats.xlsx',
+  jsonb_build_array(
+    jsonb_build_object('serialNumber', 'IMP54-REPEAT-1', 'manufacturer', 'IMP54 Beckman', 'model', 'IMP54 DxH-800'),
+    jsonb_build_object('serialNumber', ' imp54-repeat-1 ', 'manufacturer', 'IMP54 Beckman', 'model', 'IMP54 DxH-800')),
+  '[]'::jsonb);
+SELECT pg_temp.check_eq(pg_temp.result('repeats') ->> 'equipmentCreated', '1', 'прибор создан один раз');
+SELECT pg_temp.check_eq(pg_temp.result('repeats') ->> 'equipmentAlready', '0',
+  'повтор строки в файле не считается записью, которая уже была');
+
+-- Скрытую модель база на прибор не поставит: отказ говорит, что делать.
+SELECT pg_temp.act_as_nobody();
+DO $$
+DECLARE maker uuid;
+BEGIN
+  INSERT INTO public.manufacturers (name) VALUES ('IMP54 Hidden') RETURNING id INTO maker;
+  INSERT INTO public.equipment_models (manufacturer_id, name, is_active)
+  VALUES (maker, 'IMP54 Скрытая', false);
+END $$;
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.expect_refusal_matching(
+  'SELECT public.import_equipment_history(''imp54.xlsx'', jsonb_build_array(jsonb_build_object('
+  || '''serialNumber'', ''IMP54-HIDDEN-1'', ''manufacturer'', ''IMP54 Hidden'', ''model'', ''IMP54 Скрытая'')), ''[]''::jsonb)',
+  'скрыта модель',
+  'скрытая модель объясняется словами, а не отказом с идентификатором');
 
 -- ---------------------------------------------------------------- Чего импорт не делает молча
 INSERT INTO outcome
@@ -227,7 +280,8 @@ SELECT pg_temp.act_as_nobody();
 
 -- ---------------------------------------------------------------- Служебное
 SELECT pg_temp.check(
-  (SELECT NOT prosecdef FROM pg_proc WHERE proname = 'import_equipment_history'),
+  (SELECT NOT prosecdef FROM pg_proc
+    WHERE proname = 'import_equipment_history' AND pronamespace = 'public'::regnamespace),
   'импорт идёт с правами вызывающего: правила строк не обходятся');
 SELECT pg_temp.check(
   NOT has_function_privilege('anon', 'public.import_equipment_history(text, jsonb, jsonb)', 'execute'),

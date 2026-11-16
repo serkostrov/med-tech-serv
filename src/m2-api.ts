@@ -9,13 +9,13 @@ import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
-import { normalizeEquipmentSerial } from "./equipment-passport.js";
-import type {
-  ImportExistingEquipment,
-  ImportSnapshot,
-  ImportWriteEquipment,
-  ImportWriteEvent,
-  ImportWriteResult
+import {
+  importSerialKey,
+  type ImportExistingEquipment,
+  type ImportSnapshot,
+  type ImportWriteEquipment,
+  type ImportWriteEvent,
+  type ImportWriteResult
 } from "./import-1c.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
@@ -2094,11 +2094,11 @@ export class M2ApiClient {
    * уже записанные ключи их истории. Только чтение: ничего не меняет.
    */
   public async importSnapshot(serialNumbers: readonly string[]): Promise<ImportSnapshot> {
-    const keys = [...new Set(serialNumbers.map(normalizeEquipmentSerial).filter(Boolean))];
+    const keys = [...new Set(serialNumbers.map(importSerialKey).filter(Boolean))];
     const [manufacturers, models, sites, payers] = await Promise.all([
       // Скрытые записи справочника тоже нужны: название в них уже занято.
-      this.db().from("manufacturers").select("id, name"),
-      this.db().from("equipment_models").select("id, name, manufacturer_id"),
+      this.db().from("manufacturers").select("id, name, is_active"),
+      this.db().from("equipment_models").select("id, name, manufacturer_id, is_active"),
       this.db().from("sites").select("name").eq("is_active", true),
       this.db().from("payers").select("name").eq("is_active", true)
     ]);
@@ -2106,8 +2106,11 @@ export class M2ApiClient {
     throwIfError(models.error);
     throwIfError(sites.error);
     throwIfError(payers.error);
-    const manufacturerNames = new Map((manufacturers.data ?? [])
-      .map((item) => [text(asRow(item), "id"), text(asRow(item), "name")]));
+    const manufacturerById = new Map((manufacturers.data ?? [])
+      .map((item) => [text(asRow(item), "id"), {
+        name: text(asRow(item), "name"),
+        isActive: asRow(item).is_active !== false
+      }]));
 
     const equipment: ImportExistingEquipment[] = [];
     // Серийные номера передаём порциями: в условии in.() их может быть много.
@@ -2150,15 +2153,18 @@ export class M2ApiClient {
     }
 
     return {
-      manufacturers: [...manufacturerNames.values()],
+      manufacturers: [...manufacturerById.values()],
       models: (models.data ?? []).map((item) => {
         const row = asRow(item);
         const manufacturerId = text(row, "manufacturer_id");
+        const maker = manufacturerById.get(manufacturerId);
         return {
           id: text(row, "id"),
           name: text(row, "name"),
           manufacturerId,
-          manufacturerName: manufacturerNames.get(manufacturerId) ?? ""
+          manufacturerName: maker?.name ?? "",
+          // Скрытый производитель делает скрытой и свою модель: прибор на неё не завести.
+          isActive: row.is_active !== false && maker?.isActive !== false
         };
       }),
       sites: (sites.data ?? []).map((item) => text(asRow(item), "name")),

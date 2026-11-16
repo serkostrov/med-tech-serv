@@ -38,6 +38,10 @@ AS $$
 DECLARE
   source_name text := nullif(btrim(coalesce(p_source_name, '')), '');
   needs_catalog boolean;
+  hidden_pair text;
+  broken_row text;
+  equipment_wanted integer;
+  events_wanted integer;
   manufacturers_created integer := 0;
   models_created integer := 0;
   equipment_created integer := 0;
@@ -45,7 +49,7 @@ DECLARE
   events_without_equipment integer := 0;
 BEGIN
   IF NOT public.app_has_permission('equipment.write') THEN
-    RAISE EXCEPTION 'Недостаточно прав: приборы и их историю заводит координатор'
+    RAISE EXCEPTION 'Недостаточно прав: переносить приборы и их историю может тот, у кого есть право заводить приборы (equipment.write)'
       USING ERRCODE = '42501';
   END IF;
   IF source_name IS NULL OR char_length(source_name) > 200 THEN
@@ -55,34 +59,48 @@ BEGIN
      OR jsonb_typeof(p_events) IS DISTINCT FROM 'array' THEN
     RAISE EXCEPTION 'Приборы и события передаются списками' USING ERRCODE = '22023';
   END IF;
-  IF jsonb_array_length(p_equipment) > 5000 OR jsonb_array_length(p_events) > 50000 THEN
-    RAISE EXCEPTION 'За один раз переносим не больше 5000 приборов и 50000 событий: разделите выгрузку'
+  -- Каждая строка приборов и истории пишет ещё и строку аудита (триггеры 0001),
+  -- поэтому за один запрос берём столько, сколько проходит до таймаута PostgREST.
+  IF jsonb_array_length(p_equipment) > 2000 OR jsonb_array_length(p_events) > 10000 THEN
+    RAISE EXCEPTION 'За один раз переносим не больше 2000 приборов и 10000 событий: разделите выгрузку'
       USING ERRCODE = '22023';
   END IF;
 
   -- Строка выгрузки должна быть полной: без серийного номера, производителя или модели
   -- прибор в реестре не создать, и молча пропускать такую строку нельзя.
-  IF EXISTS (
-    SELECT 1 FROM jsonb_array_elements(p_equipment) AS item
-     WHERE jsonb_typeof(item) IS DISTINCT FROM 'object'
-        OR nullif(btrim(coalesce(item ->> 'serialNumber', '')), '') IS NULL
-        OR nullif(btrim(coalesce(item ->> 'manufacturer', '')), '') IS NULL
-        OR nullif(btrim(coalesce(item ->> 'model', '')), '') IS NULL
-  ) THEN
-    RAISE EXCEPTION 'У каждого прибора выгрузки нужны серийный номер, производитель и модель'
+  SELECT format('%s-я строка приборов (S/N «%s»)', list.row_no, coalesce(list.item ->> 'serialNumber', ''))
+    INTO broken_row
+    FROM jsonb_array_elements(p_equipment) WITH ORDINALITY AS list(item, row_no)
+   WHERE jsonb_typeof(list.item) IS DISTINCT FROM 'object'
+      OR nullif(btrim(coalesce(list.item ->> 'serialNumber', '')), '') IS NULL
+      OR nullif(btrim(coalesce(list.item ->> 'manufacturer', '')), '') IS NULL
+      OR nullif(btrim(coalesce(list.item ->> 'model', '')), '') IS NULL
+   ORDER BY list.row_no
+   LIMIT 1;
+  IF broken_row IS NOT NULL THEN
+    RAISE EXCEPTION 'У каждого прибора выгрузки нужны серийный номер, производитель и модель: не хватает в %', broken_row
       USING ERRCODE = '23514';
   END IF;
-  IF EXISTS (
-    SELECT 1 FROM jsonb_array_elements(p_events) AS item
-     WHERE jsonb_typeof(item) IS DISTINCT FROM 'object'
-        OR nullif(btrim(coalesce(item ->> 'serialNumber', '')), '') IS NULL
-        OR nullif(btrim(coalesce(item ->> 'summary', '')), '') IS NULL
-        OR coalesce(item ->> 'sourceKey', '') !~ '^[0-9a-f]{64}$'
-        OR coalesce(item ->> 'happenedAt', '') !~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}'
-  ) THEN
-    RAISE EXCEPTION 'У каждого события выгрузки нужны прибор, дата, краткое описание и ключ строки'
+  -- Дата события приходит с часовым поясом: без него момент разобрался бы по
+  -- поясу сервера, и московская полночь уехала бы на сутки назад.
+  SELECT format('%s-я строка истории (S/N «%s»)', list.row_no, coalesce(list.item ->> 'serialNumber', ''))
+    INTO broken_row
+    FROM jsonb_array_elements(p_events) WITH ORDINALITY AS list(item, row_no)
+   WHERE jsonb_typeof(list.item) IS DISTINCT FROM 'object'
+      OR nullif(btrim(coalesce(list.item ->> 'serialNumber', '')), '') IS NULL
+      OR nullif(btrim(coalesce(list.item ->> 'summary', '')), '') IS NULL
+      OR coalesce(list.item ->> 'sourceKey', '') !~ '^[0-9a-f]{64}$'
+      OR coalesce(list.item ->> 'happenedAt', '') !~ '^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2})?(\.\d+)?(Z|[+-]\d{2}:?\d{2})$'
+   ORDER BY list.row_no
+   LIMIT 1;
+  IF broken_row IS NOT NULL THEN
+    RAISE EXCEPTION 'У каждого события выгрузки нужны прибор, дата с часовым поясом, краткое описание и ключ строки: не хватает в %', broken_row
       USING ERRCODE = '23514';
   END IF;
+
+  -- Два импорта подряд не должны вперегонки заводить одного производителя,
+  -- а проверка справочника — расходиться с тем, что увидит запись.
+  PERFORM pg_advisory_xact_lock(hashtextextended('import_equipment_history', 0));
 
   -- Новая модель или производитель — это запись в справочник, а не в реестр приборов.
   SELECT EXISTS (
@@ -101,31 +119,60 @@ BEGIN
       USING ERRCODE = '42501';
   END IF;
 
-  -- Два импорта подряд не должны вперегонки заводить одного производителя.
-  PERFORM pg_advisory_xact_lock(hashtextextended('import_equipment_history', 0));
-
-  INSERT INTO public.manufacturers (name)
-  SELECT DISTINCT ON (lower(btrim(item ->> 'manufacturer'))) btrim(item ->> 'manufacturer')
-    FROM jsonb_array_elements(p_equipment) AS item
-   WHERE NOT EXISTS (
-     SELECT 1 FROM public.manufacturers AS m
-      WHERE lower(btrim(m.name)) = lower(btrim(item ->> 'manufacturer'))
-   )
-   ORDER BY lower(btrim(item ->> 'manufacturer'))
-  ON CONFLICT DO NOTHING;
-  GET DIAGNOSTICS manufacturers_created = ROW_COUNT;
-
-  INSERT INTO public.equipment_models (manufacturer_id, name)
-  SELECT DISTINCT ON (m.id, lower(btrim(item ->> 'model'))) m.id, btrim(item ->> 'model')
+  -- Скрытую модель или скрытого производителя база на прибор не поставит
+  -- (страж validate_active_equipment_references, 0001), а завести вторую такую же
+  -- не даст уникальный индекс. Говорим об этом словами до записи.
+  SELECT format('«%s» у производителя «%s»', em.name, m.name)
+    INTO hidden_pair
     FROM jsonb_array_elements(p_equipment) AS item
     JOIN public.manufacturers AS m
       ON lower(btrim(m.name)) = lower(btrim(item ->> 'manufacturer'))
-   WHERE NOT EXISTS (
-     SELECT 1 FROM public.equipment_models AS em
-      WHERE em.manufacturer_id = m.id
-        AND lower(btrim(em.name)) = lower(btrim(item ->> 'model'))
-   )
-   ORDER BY m.id, lower(btrim(item ->> 'model'))
+    LEFT JOIN public.equipment_models AS em
+      ON em.manufacturer_id = m.id
+     AND lower(btrim(em.name)) = lower(btrim(item ->> 'model'))
+   WHERE NOT m.is_active OR (em.id IS NOT NULL AND NOT em.is_active)
+   LIMIT 1;
+  IF hidden_pair IS NOT NULL THEN
+    RAISE EXCEPTION 'В справочнике скрыта модель %: верните её кнопкой «Показать» и повторите импорт', hidden_pair
+      USING ERRCODE = '23514';
+  END IF;
+
+  INSERT INTO public.manufacturers (name, sort_order)
+  SELECT wanted.name,
+         (SELECT coalesce(max(m.sort_order), 0) FROM public.manufacturers AS m)
+           + 10 * row_number() OVER (ORDER BY lower(wanted.name))
+    FROM (
+      SELECT DISTINCT ON (lower(btrim(item ->> 'manufacturer'))) btrim(item ->> 'manufacturer') AS name
+        FROM jsonb_array_elements(p_equipment) AS item
+       WHERE NOT EXISTS (
+         SELECT 1 FROM public.manufacturers AS m
+          WHERE lower(btrim(m.name)) = lower(btrim(item ->> 'manufacturer'))
+       )
+       ORDER BY lower(btrim(item ->> 'manufacturer'))
+    ) AS wanted
+  ON CONFLICT DO NOTHING;
+  GET DIAGNOSTICS manufacturers_created = ROW_COUNT;
+
+  INSERT INTO public.equipment_models (manufacturer_id, name, sort_order)
+  SELECT wanted.manufacturer_id,
+         wanted.name,
+         (SELECT coalesce(max(em.sort_order), 0)
+            FROM public.equipment_models AS em
+           WHERE em.manufacturer_id = wanted.manufacturer_id)
+           + 10 * row_number() OVER (PARTITION BY wanted.manufacturer_id ORDER BY lower(wanted.name))
+    FROM (
+      SELECT DISTINCT ON (m.id, lower(btrim(item ->> 'model')))
+             m.id AS manufacturer_id, btrim(item ->> 'model') AS name
+        FROM jsonb_array_elements(p_equipment) AS item
+        JOIN public.manufacturers AS m
+          ON lower(btrim(m.name)) = lower(btrim(item ->> 'manufacturer'))
+       WHERE NOT EXISTS (
+         SELECT 1 FROM public.equipment_models AS em
+          WHERE em.manufacturer_id = m.id
+            AND lower(btrim(em.name)) = lower(btrim(item ->> 'model'))
+       )
+       ORDER BY m.id, lower(btrim(item ->> 'model'))
+    ) AS wanted
   ON CONFLICT DO NOTHING;
   GET DIAGNOSTICS models_created = ROW_COUNT;
 
@@ -139,22 +186,22 @@ BEGIN
   SELECT wanted.serial_number,
          m.id,
          em.id,
-         -- Площадку и плательщика ищем подзапросом, а не соединением: имя площадки
+         -- Площадку ищем подзапросом и берём, только если она одна: имя площадки
          -- уникально внутри организации, и у двух организаций оно может совпасть.
-         (SELECT site.id
+         -- Если таких площадок несколько, прибор создаётся без привязки, а пробный
+         -- импорт предупреждает об этом заранее.
+         (SELECT (array_agg(site.id ORDER BY site.created_at, site.id))[1]
             FROM public.sites AS site
            WHERE wanted.site IS NOT NULL
              AND site.is_active
              AND lower(btrim(site.name)) = lower(wanted.site)
-           ORDER BY site.created_at, site.id
-           LIMIT 1),
-         (SELECT payer.id
+          HAVING count(*) = 1),
+         (SELECT (array_agg(payer.id ORDER BY payer.created_at, payer.id))[1]
             FROM public.payers AS payer
            WHERE wanted.payer IS NOT NULL
              AND payer.is_active
              AND lower(btrim(payer.name)) = lower(wanted.payer)
-           ORDER BY payer.created_at, payer.id
-           LIMIT 1),
+          HAVING count(*) = 1),
          wanted.notes,
          wanted.meter_reading
     FROM (
@@ -167,8 +214,9 @@ BEGIN
              nullif(btrim(coalesce(item ->> 'payer', '')), '') AS payer,
              nullif(btrim(coalesce(item ->> 'notes', '')), '') AS notes,
              CASE WHEN jsonb_typeof(item -> 'meterReading') = 'number'
-                    AND (item ->> 'meterReading')::numeric >= 0
-                  THEN round((item ->> 'meterReading')::numeric, 2)
+                  THEN CASE WHEN (item ->> 'meterReading')::numeric BETWEEN 0 AND 999999999999.99
+                            THEN round((item ->> 'meterReading')::numeric, 2)
+                       END
              END AS meter_reading
         FROM jsonb_array_elements(p_equipment) AS item
        ORDER BY upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
@@ -183,7 +231,15 @@ BEGIN
   ON CONFLICT DO NOTHING;
   GET DIAGNOSTICS equipment_created = ROW_COUNT;
 
-  SELECT count(*)
+  SELECT count(DISTINCT upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g')))
+    INTO equipment_wanted
+    FROM jsonb_array_elements(p_equipment) AS item;
+
+  SELECT count(DISTINCT (upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g')), item ->> 'sourceKey'))
+    INTO events_wanted
+    FROM jsonb_array_elements(p_events) AS item;
+
+  SELECT count(DISTINCT (upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g')), item ->> 'sourceKey'))
     INTO events_without_equipment
     FROM jsonb_array_elements(p_events) AS item
    WHERE NOT EXISTS (
@@ -209,11 +265,11 @@ BEGIN
          ),
          item ->> 'sourceKey',
          auth.uid()
-    FROM jsonb_array_elements(p_events) WITH ORDINALITY AS list(item, position)
+    FROM jsonb_array_elements(p_events) WITH ORDINALITY AS list(item, row_no)
     JOIN public.equipment AS e
       ON e.serial_number_normalized
          = upper(regexp_replace(btrim(item ->> 'serialNumber'), '\s+', '', 'g'))
-   ORDER BY position
+   ORDER BY list.row_no
   ON CONFLICT (equipment_id, source_key) WHERE source_key IS NOT NULL DO NOTHING;
   GET DIAGNOSTICS events_created = ROW_COUNT;
 
@@ -222,9 +278,9 @@ BEGIN
     'manufacturersCreated', manufacturers_created,
     'modelsCreated', models_created,
     'equipmentCreated', equipment_created,
-    'equipmentAlready', jsonb_array_length(p_equipment) - equipment_created,
+    'equipmentAlready', equipment_wanted - equipment_created,
     'eventsCreated', events_created,
-    'eventsAlready', jsonb_array_length(p_events) - events_created - events_without_equipment,
+    'eventsAlready', greatest(events_wanted - events_created - events_without_equipment, 0),
     'eventsWithoutEquipment', events_without_equipment
   );
 END

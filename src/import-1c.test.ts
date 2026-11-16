@@ -15,13 +15,13 @@ import { CUSTOMER_SAMPLE_PATH, customerSampleWorkbook } from "./import-sample.te
 
 /** Справочник моделей стенда: ровно то, что заводит миграция 0001. */
 const CATALOG: ImportSnapshot = {
-  manufacturers: ["Beckman Coulter", "Mindray"],
+  manufacturers: [{ name: "Beckman Coulter", isActive: true }, { name: "Mindray", isActive: true }],
   sites: ["Мариинская больница", "ГП № 87"],
   payers: ["МедТехСервис"],
   models: [
-    { id: "m-dxh800", name: "DxH-800", manufacturerId: "bc", manufacturerName: "Beckman Coulter" },
-    { id: "m-au480", name: "AU 480", manufacturerId: "bc", manufacturerName: "Beckman Coulter" },
-    { id: "m-bs620", name: "BS-620", manufacturerId: "mr", manufacturerName: "Mindray" }
+    { id: "m-dxh800", name: "DxH-800", manufacturerId: "bc", manufacturerName: "Beckman Coulter", isActive: true },
+    { id: "m-au480", name: "AU 480", manufacturerId: "bc", manufacturerName: "Beckman Coulter", isActive: true },
+    { id: "m-bs620", name: "BS-620", manufacturerId: "mr", manufacturerName: "Mindray", isActive: true }
   ],
   equipment: [],
   historyKeys: []
@@ -292,8 +292,8 @@ test("модель у двух производителей: импорт про
   const plan = buildImportPlan(reading, {
     ...CATALOG,
     models: [
-      { id: "m-1", name: "Общая модель", manufacturerId: "bc", manufacturerName: "Beckman Coulter" },
-      { id: "m-2", name: "Общая модель", manufacturerId: "mr", manufacturerName: "Mindray" }
+      { id: "m-1", name: "Общая модель", manufacturerId: "bc", manufacturerName: "Beckman Coulter", isActive: true },
+      { id: "m-2", name: "Общая модель", manufacturerId: "mr", manufacturerName: "Mindray", isActive: true }
     ]
   });
   assert.equal(plan.issues[0]?.code, "model_ambiguous");
@@ -318,4 +318,145 @@ test("строка без даты и без прибора: клиент во �
   assert.equal(reading.equipment.length, 1);
   assert.equal(reading.equipment[0]?.serialKey, "BE49081");
   assert.equal(reading.events.length, 1);
+});
+
+test("подзаголовки и повторные заголовки не превращаются в приборы", async () => {
+  const source = buildXlsx([{
+    name: "Лист1",
+    rows: [
+      ["наименование прибора", "(s/n прибора)", "вид работ", "описание работ"],
+      ["дата", "Наименование клиента", null, null],
+      ["март 2023", "ООО «Ромашка»", null, null],
+      ["DxH-800", "BE49081", null, null],
+      ["15.03.2023", "Клиника", "Ремонт", "замена иглы"],
+      ["наименование прибора", "(s/n прибора)", "вид работ", "описание работ"],
+      ["дата", "Наименование клиента", null, null],
+      ["DxH-800", "BE49082", null, null],
+      ["16.03.2023", "Клиника", "Ремонт", "замена иглы"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  // Строка с периодом и клиентом прибором не становится, и про неё сказано.
+  assert.deepEqual(reading.issues.map((issue) => [issue.row, issue.code]), [[3, "row_unclear"]]);
+  assert.deepEqual(reading.equipment.map((item) => item.serialNumber), ["BE49081", "BE49082"]);
+  assert.deepEqual(reading.events.map((event) => `${event.row}:${event.serialNumber}`), ["5:BE49081", "9:BE49082"]);
+  const plan = buildImportPlan(reading, CATALOG);
+  assert.equal(plan.write.equipment.length, 2);
+  assert.equal(plan.write.events.length, 2);
+});
+
+test("плоская таблица работ: одна строка — прибор и его событие", async () => {
+  const source = buildXlsx([{
+    name: "Работы",
+    rows: [
+      ["Серийный номер", "Модель", "Дата", "Вид работ", "Описание работ", "Инженер"],
+      ["BE49081", "DxH-800", "15.03.2023", "Ремонт", "замена иглы", "Петров"],
+      ["BE49081", "DxH-800", "16.03.2023", "Выезд ТО", null, "Петров"],
+      ["BE49082", "DxH-800", "17.03.2023", "Ремонт", "замена насоса", "Петров"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  assert.equal(reading.layout, "equipment-rows");
+  // Лишний столбец «Инженер» заголовок находить не мешает.
+  assert.deepEqual(reading.issues, []);
+  assert.deepEqual(reading.equipment.map((item) => item.serialNumber), ["BE49081", "BE49082"]);
+  assert.equal(reading.events.length, 3);
+  assert.equal(reading.events[1]?.workType, "Выезд ТО");
+  const plan = buildImportPlan(reading, CATALOG);
+  assert.equal(plan.summary.equipmentCreate, 2);
+  assert.equal(plan.summary.eventsCreate, 3);
+});
+
+test("скрытая модель справочника: отказ до записи, а не после", async () => {
+  const source = buildXlsx([{
+    name: "Лист1",
+    rows: [
+      ["наименование прибора", "(s/n прибора)", "вид работ", "описание работ"],
+      ["дата", "Наименование клиента", null, null],
+      ["BS-620", "BE49081", null, null],
+      ["15.03.2023", "Клиника", "Ремонт", "замена иглы"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  const plan = buildImportPlan(reading, {
+    ...CATALOG,
+    models: CATALOG.models.map((model) => model.name === "BS-620" ? { ...model, isActive: false } : model)
+  });
+  assert.deepEqual(plan.issues.map((issue) => issue.code), ["model_hidden"]);
+  assert.match(String(plan.issues[0]?.fix), /Показать/u);
+  assert.equal(plan.write.equipment.length, 0);
+  assert.equal(plan.summary.equipmentBlocked, 1);
+});
+
+test("прибор уже в реестре: его история переносится, даже если модель спорная", async () => {
+  const source = buildXlsx([{
+    name: "Лист1",
+    rows: [
+      ["наименование прибора", "(s/n прибора)", "вид работ", "описание работ"],
+      ["дата", "Наименование клиента", null, null],
+      ["Общая модель", "BE49081", null, null],
+      ["15.03.2023", "Клиника", "Ремонт", "замена иглы"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  const plan = buildImportPlan(reading, {
+    ...CATALOG,
+    models: [
+      { id: "m-1", name: "Общая модель", manufacturerId: "bc", manufacturerName: "Beckman Coulter", isActive: true },
+      { id: "m-2", name: "Общая модель", manufacturerId: "mr", manufacturerName: "Mindray", isActive: true }
+    ],
+    equipment: [{ id: "eq-1", serialNumber: "BE49081", modelName: "DxH-800", manufacturerName: "Beckman Coulter" }]
+  });
+  assert.deepEqual(plan.issues, []);
+  assert.equal(plan.summary.equipmentExists, 1);
+  assert.equal(plan.summary.eventsCreate, 1);
+  assert.equal(plan.summary.modelsCreate, 0);
+  // Расхождение показываем честно: в файле другое название модели.
+  assert.deepEqual(plan.equipment[0]?.differences, [
+    { field: "Модель", inFile: "Общая модель", inBase: "DxH-800" }
+  ]);
+});
+
+test("выбранный производитель разводит одинаковые названия моделей", async () => {
+  const source = buildXlsx([{
+    name: "Лист1",
+    rows: [
+      ["наименование прибора", "(s/n прибора)", "вид работ", "описание работ"],
+      ["дата", "Наименование клиента", null, null],
+      ["Общая модель", "BE49099", null, null],
+      ["15.03.2023", "Клиника", "Ремонт", "замена иглы"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  const base: ImportSnapshot = {
+    ...CATALOG,
+    models: [
+      { id: "m-1", name: "Общая модель", manufacturerId: "bc", manufacturerName: "Beckman Coulter", isActive: true },
+      { id: "m-2", name: "Общая модель", manufacturerId: "mr", manufacturerName: "Mindray", isActive: true }
+    ]
+  };
+  assert.equal(buildImportPlan(reading, base).issues[0]?.code, "model_ambiguous");
+  const chosen = buildImportPlan(reading, base, { defaultManufacturer: "Mindray" });
+  assert.deepEqual(chosen.issues, []);
+  assert.equal(chosen.equipment[0]?.manufacturerName, "Mindray");
+  assert.equal(chosen.summary.modelsCreate, 0);
+  assert.equal(chosen.write.equipment[0]?.manufacturer, "Mindray");
+});
+
+test("площадка с одинаковым названием у двух организаций не привязывается молча", async () => {
+  const source = buildXlsx([{
+    name: "Приборы",
+    rows: [
+      ["Серийный номер", "Производитель", "Модель", "Площадка"],
+      ["BE49081", "Beckman Coulter", "DxH-800", "Поликлиника № 1"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  const plan = buildImportPlan(reading, {
+    ...CATALOG,
+    sites: ["Поликлиника № 1", "Поликлиника № 1"]
+  });
+  assert.deepEqual(plan.issues.map((issue) => issue.code), ["site_ambiguous"]);
+  assert.equal(plan.write.equipment[0]?.site, undefined);
+  assert.equal(plan.summary.equipmentCreate, 1);
 });

@@ -40,13 +40,14 @@
  */
 import { normalizeEquipmentSerial } from "./equipment-passport.js";
 import { companyDayStart, companyToday } from "./task-dates.js";
-import { readXlsxWorkbook, type XlsxCellValue, type XlsxReadSheet } from "./xlsx-read.js";
+import { excelSerialToDateText, readXlsxWorkbook, type XlsxCellValue, type XlsxReadSheet } from "./xlsx-read.js";
 
 export type ImportLayout = "history-blocks" | "equipment-rows";
 
 export type ImportIssueCode =
   | "layout_unknown"
   | "sheet_empty"
+  | "sheet_skipped"
   | "serial_unknown"
   | "serial_missing"
   | "model_missing"
@@ -59,6 +60,9 @@ export type ImportIssueCode =
   | "equipment_duplicate_in_file"
   | "model_not_in_catalog"
   | "model_ambiguous"
+  | "model_hidden"
+  | "manufacturer_hidden"
+  | "site_ambiguous"
   | "site_not_found"
   | "payer_not_found"
   | "number_invalid";
@@ -70,7 +74,8 @@ export type ImportIssueCode =
 export type ImportIssueSeverity = "error" | "warning";
 
 const WARNING_CODES: readonly ImportIssueCode[] = [
-  "duplicate_in_file", "equipment_duplicate_in_file", "number_invalid", "site_not_found", "payer_not_found"
+  "sheet_skipped", "duplicate_in_file", "equipment_duplicate_in_file", "number_invalid",
+  "site_not_found", "site_ambiguous", "payer_not_found"
 ];
 
 export function issueSeverity(code: ImportIssueCode): ImportIssueSeverity {
@@ -147,6 +152,24 @@ const COLUMN_ALIASES: Readonly<Record<ColumnRole, readonly RegExp[]>> = {
   meter: [/^показание счетчика$/u, /^счетчик$/u, /^наработка$/u]
 };
 
+/**
+ * Ключ сравнения названий — ровно как уникальные индексы базы: lower(btrim(name)).
+ * Нарочно не трогаем внутренние пробелы и «ё»: иначе пробный импорт сказал бы
+ * «модель известна» там, где база завела бы вторую почти такую же.
+ */
+export function catalogKey(value: string): string {
+  return value.replace(/^[\t\n\v\f\r ]+|[\t\n\v\f\r ]+$/gu, "").toLocaleLowerCase("ru-RU");
+}
+
+/**
+ * Ключ прибора — ровно как generated column equipment.serial_number_normalized:
+ * убираем пробелы, которые убирает Postgres, и поднимаем регистр. Неразрывный
+ * пробел остаётся: в базе он тоже остаётся, и прибор ищется по тому же ключу.
+ */
+export function importSerialKey(value: string): string {
+  return value.replace(/[\t\n\v\f\r ]+/gu, "").toUpperCase();
+}
+
 /** Заголовок столбца к единому виду: «  Вид  Работ » и «вид работы» — одно и то же. */
 export function normalizeHeader(value: XlsxCellValue): string {
   return String(value ?? "")
@@ -193,21 +216,51 @@ interface HeaderMap {
   readonly layout: ImportLayout;
 }
 
-/** Строка похожа на заголовок, если все её непустые клетки — узнаваемые названия столбцов. */
-function looksLikeHeader(cells: readonly XlsxCellValue[]): boolean {
-  const filled = cells.filter((cell) => !isBlank(cell));
-  return filled.length > 0 && filled.every((cell) => headerRole(cell) !== undefined);
-}
+/** Столбцов узнали хотя бы столько — тогда строка считается заголовком. */
+const MIN_HEADER_ROLES = 2;
 
 function rolesOf(cells: readonly XlsxCellValue[]): Partial<Record<ColumnRole, number>> {
   const columns: Partial<Record<ColumnRole, number>> = {};
   cells.forEach((cell, index) => {
     const role = headerRole(cell);
-    // Первое вхождение сильнее: в двухстрочном заголовке «площадка» может
-    // встретиться и как клиент события, и как площадка прибора.
+    // Первое вхождение сильнее: в двухстрочном заголовке один столбец подписан
+    // и как прибор, и как дата.
     if (role && columns[role] === undefined) columns[role] = index;
   });
   return columns;
+}
+
+/**
+ * Строка похожа на заголовок: узнали не меньше двух столбцов (или все непустые
+ * клетки — известные названия) и ни в одной клетке нет даты. Лишний столбец вроде
+ * «Инженер» заголовком быть не мешает, а строка с датой заголовком не бывает.
+ */
+function looksLikeHeader(cells: readonly XlsxCellValue[]): boolean {
+  const filled = cells.filter((cell) => !isBlank(cell));
+  if (filled.length === 0) return false;
+  if (filled.some((cell) => readImportDate(cell).ok)) return false;
+  const known = Object.keys(rolesOf(cells)).length;
+  return known >= MIN_HEADER_ROLES || (known > 0 && known === filled.length);
+}
+
+const MONTH_NAME = /^(январ|феврал|март|апрел|ма[йя]|июн|июл|август|сентябр|октябр|ноябр|декабр)/u;
+
+/**
+ * Клетка похожа на дату или период, а не на название прибора: «март 2023»,
+ * «01.2023», «2023», «Итого». Такие строки не должны становиться приборами.
+ */
+function looksLikeDateText(value: XlsxCellValue): boolean {
+  if (typeof value === "number") return true;
+  const source = text(value).toLocaleLowerCase("ru-RU");
+  return MONTH_NAME.test(source)
+    || /^\d{1,4}\s*[.,/-]/u.test(source)
+    || /^\d+$/u.test(source)
+    || /^(итого|всего|период)/u.test(source);
+}
+
+/** Серийный номер: в нём есть цифра. Иначе это название клиента или подзаголовок. */
+function looksLikeSerial(value: string): boolean {
+  return /\d/u.test(value) && value.length <= 120;
 }
 
 /**
@@ -237,7 +290,6 @@ export function detectHeader(sheet: XlsxReadSheet): HeaderMap | undefined {
   }
   return undefined;
 }
-
 const DATE_TEXT = /^(\d{1,2})[.,/-](\d{1,2})[.,/-](\d{2,4})$/u;
 const ISO_TEXT = /^(\d{4})-(\d{2})-(\d{2})(?:[T ]\d{2}:\d{2}(?::\d{2})?)?$/u;
 
@@ -261,13 +313,11 @@ function calendarDate(year: number, month: number, day: number): string | undefi
  * или число Excel, если в книге у клетки не стоял формат даты.
  * День и месяц в выгрузках 1С идут по-русски — сначала день.
  */
-export function readImportDate(value: XlsxCellValue): DateReadResult {
+export function readImportDate(value: XlsxCellValue, date1904 = false): DateReadResult {
   if (isBlank(value)) return { ok: false, reason: "empty" };
   if (typeof value === "number") {
-    const MILLISECONDS_PER_DAY = 86_400_000;
-    if (!Number.isFinite(value) || value < 61 || value > 2_958_465) return { ok: false, reason: "invalid" };
-    const moment = new Date(Date.UTC(1899, 11, 30) + Math.floor(value) * MILLISECONDS_PER_DAY);
-    return { ok: true, date: moment.toISOString().slice(0, 10) };
+    const date = excelSerialToDateText(value, date1904);
+    return date ? { ok: true, date: date.slice(0, 10) } : { ok: false, reason: "invalid" };
   }
   const source = text(value);
   const iso = ISO_TEXT.exec(source);
@@ -315,6 +365,8 @@ export async function historySourceKey(parts: {
 }
 
 const MAX_SUMMARY = 180;
+/** Предел колонки equipment.last_meter_reading: numeric(14, 2). */
+const MAX_METER_READING = 999_999_999_999.99;
 
 function summaryOf(workType: string, description: string): string {
   const base = workType || description.split("\n")[0] || "";
@@ -340,42 +392,156 @@ function cell(cells: readonly XlsxCellValue[], index: number | undefined): XlsxC
   return index === undefined ? null : (cells[index] ?? null);
 }
 
-/** Разбирает лист «история прибора»: блок прибора плюс его события. */
-function readHistorySheet(sheet: XlsxReadSheet, header: HeaderMap, today: string, state: MutableReading): void {
+/** Приводит текст события к одному виду для ключа: так же, как historySourceKey. */
+function eventTextKey(value: string): string {
+  return value.replace(/\s+/gu, " ").trim().toLocaleLowerCase("ru-RU");
+}
+
+interface EventDraft {
+  readonly row: number;
+  readonly serialKey: string;
+  readonly serialNumber: string;
+  readonly happenedOn: string;
+  readonly client: string;
+  readonly workType: string;
+  readonly description: string;
+}
+
+function pushEvent(state: MutableReading, draft: EventDraft): void {
+  state.events.push({
+    ...draft,
+    happenedAt: companyDayStart(draft.happenedOn) ?? `${draft.happenedOn}T00:00:00+03:00`,
+    summary: summaryOf(draft.workType, draft.description),
+    sourceKey: ""
+  });
+}
+
+/**
+ * Проверяет строку события и складывает его. Возвращает false, если строка
+ * не годится: тогда про неё уже сказано замечанием.
+ */
+function readEventRow(options: {
+  readonly state: MutableReading;
+  readonly rowNumber: number;
+  readonly dateColumn: number | undefined;
+  readonly dateSource: XlsxCellValue;
+  readonly date: DateReadResult;
+  readonly today: string;
+  readonly workType: string;
+  readonly description: string;
+  readonly client: string;
+  readonly device: ImportEquipmentRow;
+  readonly seen: Map<string, number>;
+}): void {
+  const { state, rowNumber, date, device } = options;
+  if (!date.ok) {
+    state.issues.push({
+      row: rowNumber, column: columnLetter(options.dateColumn ?? 0),
+      code: date.reason === "empty" ? "date_missing" : "date_invalid",
+      problem: date.reason === "empty"
+        ? "В строке события нет даты"
+        : `Дату «${text(options.dateSource)}» не удалось прочитать`,
+      fix: "Впишите дату в виде 15.03.2023 или датой Excel"
+    });
+    return;
+  }
+  if (date.date > options.today) {
+    state.issues.push({
+      row: rowNumber, column: columnLetter(options.dateColumn ?? 0), code: "date_future",
+      problem: `Дата ${date.date} позже сегодняшней`,
+      fix: "Исправьте дату: события будущим числом база не принимает"
+    });
+    return;
+  }
+  if (!options.workType && !options.description) {
+    state.issues.push({
+      row: rowNumber, code: "event_empty",
+      problem: "В строке есть только дата: нечего записать в историю",
+      fix: "Впишите вид работ или описание, иначе удалите строку"
+    });
+    return;
+  }
+  const identity = [device.serialKey, date.date, eventTextKey(options.workType), eventTextKey(options.description)].join("\u001f");
+  const twin = options.seen.get(identity);
+  if (twin !== undefined) {
+    state.issues.push({
+      row: rowNumber, code: "duplicate_in_file",
+      problem: `Строка повторяет строку ${twin}: тот же прибор, дата, вид и описание работ`,
+      fix: "Если это два разных выезда, допишите, чем они отличались; иначе удалите одну строку"
+    });
+    return;
+  }
+  options.seen.set(identity, rowNumber);
+  pushEvent(state, {
+    row: rowNumber,
+    serialKey: device.serialKey,
+    serialNumber: device.serialNumber,
+    happenedOn: date.date,
+    client: options.client,
+    workType: options.workType,
+    description: options.description
+  });
+}
+
+/** Разбирает лист «история прибора»: строка прибора, под ней его события. */
+function readHistorySheet(
+  sheet: XlsxReadSheet, header: HeaderMap, today: string, date1904: boolean, state: MutableReading
+): void {
   const columns = header.columns;
   const clientColumn = columns.client ?? columns.site;
   const headerRows = new Set(header.rows);
   const byKey = new Map<string, ImportEquipmentRow>();
-  const eventKeys = new Map<string, number>();
-  const pending: { readonly row: number; readonly serialKey: string; readonly serialNumber: string;
-    readonly happenedOn: string; readonly client: string; readonly workType: string; readonly description: string }[] = [];
+  const seen = new Map<string, number>();
   let block: ImportEquipmentRow | undefined;
 
   for (const row of sheet.rows) {
     if (headerRows.has(row.number)) { state.serviceRows += 1; continue; }
     if (row.cells.every(isBlank)) { state.serviceRows += 1; continue; }
+    // Заголовок повторяется посреди листа, когда 1С выгружает по разделам.
+    if (looksLikeHeader(row.cells)) { state.serviceRows += 1; continue; }
     const first = cell(row.cells, columns.device ?? columns.date);
     const second = cell(row.cells, columns.serial);
-    const date = readImportDate(cell(row.cells, columns.date));
+    const dateSource = cell(row.cells, columns.date);
+    const date = readImportDate(dateSource, date1904);
     const workType = text(cell(row.cells, columns.workType));
     const description = text(cell(row.cells, columns.description));
 
-    // Строка-заголовок блока: в первом столбце название прибора, а не дата.
-    if (!date.ok && !workType && !description && !isBlank(first)) {
+    // Строка прибора: в первом столбце название прибора (а не дата или период),
+    // во втором — серийный номер. Иначе клиент события стал бы серийным номером,
+    // а следующие события сели бы на выдуманный прибор.
+    if (!date.ok && !workType && !description) {
       const serialNumber = text(second);
-      const serialKey = normalizeEquipmentSerial(serialNumber);
       const modelName = text(first);
+      const serialKey = importSerialKey(serialNumber);
+      if (isBlank(first) || looksLikeDateText(first)) {
+        state.issues.push({
+          row: row.number, code: "row_unclear",
+          problem: "В строке нет ни даты события, ни названия прибора",
+          fix: "Строку прибора начинайте его названием и S/N, строку события — датой"
+        });
+        continue;
+      }
       if (!serialKey) {
         state.issues.push({
           row: row.number, column: columnLetter(columns.serial ?? 1), code: "serial_missing",
-          problem: "В строке прибора нет серийного номера",
+          problem: `У прибора «${modelName}» нет серийного номера`,
           fix: "Впишите S/N прибора или удалите строку"
+        });
+        continue;
+      }
+      // Во втором столбце клиент, а не S/N: так выглядит подзаголовок раздела.
+      // Без этой проверки название клиента стало бы прибором, а события сели бы на него.
+      if (!looksLikeSerial(serialNumber)) {
+        state.issues.push({
+          row: row.number, column: columnLetter(columns.serial ?? 1), code: "row_unclear",
+          problem: `«${serialNumber}» не похоже на серийный номер прибора`,
+          fix: "Строку прибора начинайте его названием и S/N; подзаголовки разделов из файла уберите"
         });
         continue;
       }
       const known = byKey.get(serialKey);
       if (known) {
-        if (modelName && known.modelName && normalizeHeader(modelName) !== normalizeHeader(known.modelName)) {
+        if (modelName && known.modelName && catalogKey(modelName) !== catalogKey(known.modelName)) {
           state.issues.push({
             row: row.number, column: columnLetter(columns.device ?? 0), code: "equipment_duplicate_in_file",
             problem: `Прибор ${known.serialNumber} уже был в строке ${known.row} с названием «${known.modelName}»`,
@@ -390,53 +556,12 @@ function readHistorySheet(sheet: XlsxReadSheet, header: HeaderMap, today: string
         row: row.number, serialNumber, serialKey, modelName,
         ...(text(cell(row.cells, columns.manufacturer)) ? { manufacturerName: text(cell(row.cells, columns.manufacturer)) } : {})
       };
-      if (!modelName) {
-        state.issues.push({
-          row: row.number, column: columnLetter(columns.device ?? 0), code: "model_missing",
-          problem: `У прибора ${serialNumber} не указано название`,
-          fix: "Впишите модель прибора: без неё прибор в реестре не создать"
-        });
-        continue;
-      }
       byKey.set(serialKey, record);
       state.equipment.push(record);
       block = record;
       continue;
     }
 
-    if (!date.ok && !workType && !description) {
-      state.issues.push({
-        row: row.number, code: "row_unclear",
-        problem: "В строке нет ни даты события, ни названия прибора",
-        fix: "Строку прибора начинайте его названием и S/N, строку события — датой"
-      });
-      continue;
-    }
-    if (!date.ok) {
-      state.issues.push({
-        row: row.number, column: columnLetter(columns.date ?? 0),
-        code: date.reason === "empty" ? "date_missing" : "date_invalid",
-        problem: date.reason === "empty" ? "В строке события нет даты" : `Дату «${text(cell(row.cells, columns.date))}» не удалось прочитать`,
-        fix: "Впишите дату в виде 15.03.2023 или датой Excel"
-      });
-      continue;
-    }
-    if (date.date > today) {
-      state.issues.push({
-        row: row.number, column: columnLetter(columns.date ?? 0), code: "date_future",
-        problem: `Дата ${date.date} позже сегодняшней`,
-        fix: "Исправьте дату: события будущим числом база не принимает"
-      });
-      continue;
-    }
-    if (!workType && !description) {
-      state.issues.push({
-        row: row.number, code: "event_empty",
-        problem: "В строке есть только дата: нечего записать в историю",
-        fix: "Впишите вид работ или описание, иначе удалите строку"
-      });
-      continue;
-    }
     if (!block) {
       state.issues.push({
         row: row.number, code: "serial_unknown",
@@ -445,42 +570,35 @@ function readHistorySheet(sheet: XlsxReadSheet, header: HeaderMap, today: string
       });
       continue;
     }
-    const client = text(cell(row.cells, clientColumn));
-    const identity = `${block.serialKey}\u001f${date.date}\u001f${normalizeHeader(workType)}\u001f${normalizeHeader(description)}`;
-    const twin = eventKeys.get(identity);
-    if (twin !== undefined) {
-      state.issues.push({
-        row: row.number, code: "duplicate_in_file",
-        problem: `Строка повторяет строку ${twin}: тот же прибор, дата, вид и описание работ`,
-        fix: "Если это два разных выезда, допишите, чем они отличались; иначе удалите одну строку"
-      });
-      continue;
-    }
-    eventKeys.set(identity, row.number);
-    pending.push({
-      row: row.number, serialKey: block.serialKey, serialNumber: block.serialNumber,
-      happenedOn: date.date, client, workType, description
+    readEventRow({
+      state, rowNumber: row.number, dateColumn: columns.date, dateSource, date, today,
+      workType, description, client: text(cell(row.cells, clientColumn)), device: block, seen
     });
   }
-
-  state.events.push(...pending.map((event) => ({
-    ...event,
-    happenedAt: companyDayStart(event.happenedOn) ?? `${event.happenedOn}T00:00:00+03:00`,
-    summary: summaryOf(event.workType, event.description),
-    sourceKey: ""
-  })));
 }
 
-/** Разбирает обычную таблицу приборов: одна строка — один прибор. */
-function readEquipmentSheet(sheet: XlsxReadSheet, header: HeaderMap, state: MutableReading): void {
+/**
+ * Разбирает таблицу с заголовком: одна строка — один прибор, а если в ней есть
+ * столбец даты, то ещё и одно событие его истории (так 1С выгружает работы списком).
+ */
+function readEquipmentSheet(
+  sheet: XlsxReadSheet, header: HeaderMap, today: string, date1904: boolean, state: MutableReading
+): void {
   const columns = header.columns;
   const headerRows = new Set(header.rows);
+  // Таблица событий: у прибора несколько строк, и повтор S/N — не ошибка.
+  const withEvents = columns.date !== undefined
+    && (columns.workType !== undefined || columns.description !== undefined);
+  const clientColumn = columns.client ?? (withEvents ? columns.site : undefined);
+  const siteColumn = withEvents ? columns.site : (columns.site ?? columns.client);
   const byKey = new Map<string, ImportEquipmentRow>();
+  const seen = new Map<string, number>();
   for (const row of sheet.rows) {
     if (headerRows.has(row.number)) { state.serviceRows += 1; continue; }
     if (row.cells.every(isBlank)) { state.serviceRows += 1; continue; }
+    if (looksLikeHeader(row.cells)) { state.serviceRows += 1; continue; }
     const serialNumber = text(cell(row.cells, columns.serial));
-    const serialKey = normalizeEquipmentSerial(serialNumber);
+    const serialKey = importSerialKey(serialNumber);
     if (!serialKey) {
       state.issues.push({
         row: row.number, column: columnLetter(columns.serial ?? 0), code: "serial_missing",
@@ -490,7 +608,8 @@ function readEquipmentSheet(sheet: XlsxReadSheet, header: HeaderMap, state: Muta
       continue;
     }
     const modelName = text(cell(row.cells, columns.model ?? columns.device));
-    if (!modelName) {
+    const known = byKey.get(serialKey);
+    if (!known && !modelName) {
       state.issues.push({
         row: row.number, column: columnLetter(columns.model ?? columns.device ?? 0), code: "model_missing",
         problem: `У прибора ${serialNumber} не указана модель`,
@@ -498,34 +617,60 @@ function readEquipmentSheet(sheet: XlsxReadSheet, header: HeaderMap, state: Muta
       });
       continue;
     }
-    const known = byKey.get(serialKey);
+    let device = known;
     if (known) {
-      state.issues.push({
-        row: row.number, column: columnLetter(columns.serial ?? 0), code: "equipment_duplicate_in_file",
-        problem: `Прибор ${serialNumber} уже был в строке ${known.row}`,
-        fix: "Оставьте одну строку на прибор: в базу попадёт первая"
-      });
-      continue;
+      if (!withEvents) {
+        state.issues.push({
+          row: row.number, column: columnLetter(columns.serial ?? 0), code: "equipment_duplicate_in_file",
+          problem: `Прибор ${serialNumber} уже был в строке ${known.row}`,
+          fix: "Оставьте одну строку на прибор: в базу попадёт первая"
+        });
+        continue;
+      }
+      if (modelName && catalogKey(modelName) !== catalogKey(known.modelName)) {
+        state.issues.push({
+          row: row.number, column: columnLetter(columns.model ?? columns.device ?? 0), code: "equipment_duplicate_in_file",
+          problem: `У прибора ${serialNumber} в строке ${known.row} другая модель: «${known.modelName}»`,
+          fix: "Оставьте одну модель на прибор: в базу попадёт та, что встретилась первой"
+        });
+      }
+      state.serviceRows += withEvents ? 0 : 1;
+    } else {
+      const meterSource = cell(row.cells, columns.meter);
+      const meterReading = readImportNumber(meterSource);
+      if (!isBlank(meterSource) && (meterReading === undefined || meterReading < 0 || meterReading > MAX_METER_READING)) {
+        state.issues.push({
+          row: row.number, column: columnLetter(columns.meter ?? 0), code: "number_invalid",
+          problem: meterReading === undefined
+            ? `Показание счётчика «${text(meterSource)}» не число`
+            : `Показание счётчика «${text(meterSource)}» вне допустимых значений`,
+          fix: `Впишите число от 0 до ${MAX_METER_READING} без единиц измерения; прибор перенесём без показания`
+        });
+      }
+      const record: ImportEquipmentRow = {
+        row: row.number, serialNumber, serialKey, modelName,
+        ...(text(cell(row.cells, columns.manufacturer)) ? { manufacturerName: text(cell(row.cells, columns.manufacturer)) } : {}),
+        ...(text(cell(row.cells, siteColumn)) ? { siteName: text(cell(row.cells, siteColumn)) } : {}),
+        ...(text(cell(row.cells, columns.payer)) ? { payerName: text(cell(row.cells, columns.payer)) } : {}),
+        ...(text(cell(row.cells, columns.notes)) ? { notes: text(cell(row.cells, columns.notes)) } : {}),
+        ...(meterReading !== undefined && meterReading >= 0 && meterReading <= MAX_METER_READING ? { meterReading } : {})
+      };
+      byKey.set(serialKey, record);
+      state.equipment.push(record);
+      device = record;
     }
-    const meterSource = cell(row.cells, columns.meter);
-    const meterReading = readImportNumber(meterSource);
-    if (!isBlank(meterSource) && meterReading === undefined) {
-      state.issues.push({
-        row: row.number, column: columnLetter(columns.meter ?? 0), code: "number_invalid",
-        problem: `Показание счётчика «${text(meterSource)}» не число`,
-        fix: "Впишите только число, без единиц измерения"
-      });
-    }
-    const record: ImportEquipmentRow = {
-      row: row.number, serialNumber, serialKey, modelName,
-      ...(text(cell(row.cells, columns.manufacturer)) ? { manufacturerName: text(cell(row.cells, columns.manufacturer)) } : {}),
-      ...(text(cell(row.cells, columns.site ?? columns.client)) ? { siteName: text(cell(row.cells, columns.site ?? columns.client)) } : {}),
-      ...(text(cell(row.cells, columns.payer)) ? { payerName: text(cell(row.cells, columns.payer)) } : {}),
-      ...(text(cell(row.cells, columns.notes)) ? { notes: text(cell(row.cells, columns.notes)) } : {}),
-      ...(meterReading !== undefined && meterReading >= 0 ? { meterReading } : {})
-    };
-    byKey.set(serialKey, record);
-    state.equipment.push(record);
+    if (!withEvents || !device) continue;
+    const dateSource = cell(row.cells, columns.date);
+    // Строка только с прибором, без даты: события в ней нет, и это не ошибка.
+    if (isBlank(dateSource)) continue;
+    readEventRow({
+      state, rowNumber: row.number, dateColumn: columns.date, dateSource,
+      date: readImportDate(dateSource, date1904), today,
+      workType: text(cell(row.cells, columns.workType)),
+      description: text(cell(row.cells, columns.description)),
+      client: text(cell(row.cells, clientColumn)),
+      device, seen
+    });
   }
 }
 
@@ -548,10 +693,20 @@ export async function readImportFile(
     ? book.sheets.filter((sheet) => normalizeHeader(sheet.name) === requested)
     : book.sheets;
   if (candidates.length === 0) throw new Error(`Лист «${options.sheetName}» в книге не найден`);
-  const chosen = candidates.map((sheet) => ({ sheet, header: detectHeader(sheet) }))
-    .find((item) => item.header !== undefined) ?? { sheet: candidates[0]!, header: undefined };
+  const parsed = candidates.map((sheet) => ({ sheet, header: detectHeader(sheet) }));
+  const chosen = parsed.find((item) => item.header !== undefined) ?? { sheet: candidates[0]!, header: undefined };
   const sheet = chosen.sheet;
   const state: MutableReading = { equipment: [], events: [], issues: [], serviceRows: 0 };
+  const otherSheets = parsed
+    .filter((item) => item.header !== undefined && item.sheet !== sheet)
+    .map((item) => item.sheet.name);
+  if (otherSheets.length > 0) {
+    state.issues.push({
+      row: 0, code: "sheet_skipped",
+      problem: `В книге подходят и другие листы: ${otherSheets.join(", ")}. Читаем только «${sheet.name}»`,
+      fix: "Загрузите остальные листы отдельными файлами: за один раз переносим один лист"
+    });
+  }
   if (!chosen.header) {
     state.issues.push({
       row: 0,
@@ -565,9 +720,9 @@ export async function readImportFile(
     };
   }
   if (chosen.header.layout === "history-blocks") {
-    readHistorySheet(sheet, chosen.header, today, state);
+    readHistorySheet(sheet, chosen.header, today, book.date1904, state);
   } else {
-    readEquipmentSheet(sheet, chosen.header, state);
+    readEquipmentSheet(sheet, chosen.header, today, book.date1904, state);
   }
   const events: ImportHistoryRow[] = [];
   for (const event of state.events) {
@@ -594,6 +749,13 @@ export interface ImportModelCatalogEntry {
   readonly name: string;
   readonly manufacturerId: string;
   readonly manufacturerName: string;
+  /** Скрытая модель занимает название в справочнике, но прибор на неё не завести. */
+  readonly isActive: boolean;
+}
+
+export interface ImportManufacturerEntry {
+  readonly name: string;
+  readonly isActive: boolean;
 }
 
 export interface ImportExistingEquipment {
@@ -606,7 +768,7 @@ export interface ImportExistingEquipment {
 /** Снимок базы, по которому считается пробный импорт. Читается, но не меняется. */
 export interface ImportSnapshot {
   readonly models: readonly ImportModelCatalogEntry[];
-  readonly manufacturers: readonly string[];
+  readonly manufacturers: readonly ImportManufacturerEntry[];
   /** Названия площадок и плательщиков из справочников: импорт их не заводит. */
   readonly sites: readonly string[];
   readonly payers: readonly string[];
@@ -696,8 +858,9 @@ export interface BuildImportPlanOptions {
   readonly defaultManufacturer?: string;
 }
 
+/** Названия сравниваем так же, как уникальные индексы базы: lower(btrim(...)). */
 function sameName(left: string, right: string): boolean {
-  return normalizeHeader(left) === normalizeHeader(right);
+  return catalogKey(left) === catalogKey(right);
 }
 
 /**
@@ -710,7 +873,7 @@ export function buildImportPlan(
   options: BuildImportPlanOptions = {}
 ): ImportPlan {
   const issues: ImportRowIssue[] = [...reading.issues];
-  const existing = new Map(snapshot.equipment.map((item) => [normalizeEquipmentSerial(item.serialNumber), item]));
+  const existing = new Map(snapshot.equipment.map((item) => [importSerialKey(item.serialNumber), item]));
   const knownKeys = new Set(snapshot.historyKeys);
   const eventsBySerial = new Map<string, ImportHistoryRow[]>();
   for (const event of reading.events) {
@@ -725,119 +888,10 @@ export function buildImportPlan(
   const writeEquipment: ImportWriteEquipment[] = [];
   const writeEvents: ImportWriteEvent[] = [];
 
-  for (const record of reading.equipment) {
-    const events = eventsBySerial.get(record.serialKey) ?? [];
-    const inBase = existing.get(record.serialKey);
-    const sameModelName = snapshot.models.filter((model) => sameName(model.name, record.modelName));
-    const byFileManufacturer = record.manufacturerName
-      ? sameModelName.find((model) => sameName(model.manufacturerName, record.manufacturerName ?? ""))
-      : undefined;
-    let manufacturerName = record.manufacturerName ?? "";
-    let modelAction: ImportPlanEquipment["modelAction"] = "unknown";
-
-    if (byFileManufacturer) {
-      manufacturerName = byFileManufacturer.manufacturerName;
-      modelAction = "known";
-    } else if (record.manufacturerName) {
-      // Производитель указан в файле, а такой модели у него ещё нет: заведём модель.
-      modelAction = "create";
-    } else if (sameModelName.length === 1 && sameModelName[0]) {
-      manufacturerName = sameModelName[0].manufacturerName;
-      modelAction = "known";
-    } else if (sameModelName.length > 1) {
-      issues.push({
-        row: record.row, code: "model_ambiguous",
-        problem: `Модель «${record.modelName}» есть у нескольких производителей: ${sameModelName.map((model) => model.manufacturerName).join(", ")}`,
-        fix: "Добавьте в файл столбец «Производитель» или выберите производителя на экране импорта"
-      });
-    } else if (options.defaultManufacturer) {
-      manufacturerName = options.defaultManufacturer;
-      modelAction = "create";
-    } else if (inBase) {
-      // Прибор уже в базе: его модель и производитель известны, новых не заводим.
-      manufacturerName = inBase.manufacturerName;
-      modelAction = "known";
-    } else {
-      issues.push({
-        row: record.row, code: "model_not_in_catalog",
-        problem: `Модели «${record.modelName}» нет в справочнике моделей`,
-        fix: "Выберите производителя на экране импорта (модель заведём) либо добавьте модель в справочник заранее"
-      });
-    }
-
-    const blocked = !manufacturerName;
-    const differences: ImportPlanDifference[] = [];
-    if (inBase && !sameName(inBase.modelName, record.modelName)) {
-      differences.push({ field: "Модель", inFile: record.modelName, inBase: inBase.modelName });
-    }
-    if (inBase && manufacturerName && !sameName(inBase.manufacturerName, manufacturerName)) {
-      differences.push({ field: "Производитель", inFile: manufacturerName, inBase: inBase.manufacturerName });
-    }
-
-    const newEvents = events.filter((event) => !knownKeys.has(event.sourceKey));
-    const seenEvents = events.length - newEvents.length;
-    equipment.push({
-      row: record.row,
-      serialNumber: record.serialNumber,
-      serialKey: record.serialKey,
-      modelName: record.modelName,
-      manufacturerName,
-      action: blocked ? "blocked" : (inBase ? "exists" : "create"),
-      modelAction: inBase ? "known" : modelAction,
-      differences,
-      eventsCreate: blocked ? 0 : newEvents.length,
-      eventsExisting: blocked ? 0 : seenEvents,
-      eventsBlocked: blocked ? events.length : 0
-    });
-    if (blocked) continue;
-
-    if (!inBase) {
-      if (modelAction === "create") {
-        plannedModels.add(`${normalizeHeader(manufacturerName)}\u001f${normalizeHeader(record.modelName)}`);
-        if (!snapshot.manufacturers.some((name) => sameName(name, manufacturerName))) {
-          plannedManufacturers.add(normalizeHeader(manufacturerName));
-        }
-      }
-      // Площадку и плательщика импорт не заводит: их ведёт раздел «Клиенты».
-      // Чего нет в справочнике — говорим сразу, а прибор создаём без привязки.
-      const site = record.siteName && snapshot.sites.some((name) => sameName(name, record.siteName ?? ""))
-        ? record.siteName
-        : undefined;
-      if (record.siteName && !site) {
-        issues.push({
-          row: record.row, code: "site_not_found",
-          problem: `Площадки «${record.siteName}» нет в справочнике`,
-          fix: "Прибор создадим без площадки: добавьте площадку в «Клиентах» и привяжите прибор вручную"
-        });
-      }
-      const payer = record.payerName && snapshot.payers.some((name) => sameName(name, record.payerName ?? ""))
-        ? record.payerName
-        : undefined;
-      if (record.payerName && !payer) {
-        issues.push({
-          row: record.row, code: "payer_not_found",
-          problem: `Плательщика «${record.payerName}» нет в справочнике`,
-          fix: "Прибор создадим без плательщика: добавьте плательщика в «Клиентах» и привяжите прибор вручную"
-        });
-      }
-      writeEquipment.push({
-        serialNumber: record.serialNumber,
-        manufacturer: manufacturerName,
-        model: record.modelName,
-        ...(site ? { site } : {}),
-        ...(payer ? { payer } : {}),
-        ...(record.notes ? { notes: record.notes } : {}),
-        ...(record.meterReading !== undefined ? { meterReading: record.meterReading } : {})
-      });
-    } else if (modelAction === "create") {
-      plannedModels.add(`${normalizeHeader(manufacturerName)}\u001f${normalizeHeader(record.modelName)}`);
-      if (!snapshot.manufacturers.some((name) => sameName(name, manufacturerName))) {
-        plannedManufacturers.add(normalizeHeader(manufacturerName));
-      }
-    }
-    for (const event of newEvents) {
+  const addEvents = (device: ImportEquipmentRow, events: readonly ImportHistoryRow[]): void => {
+    for (const event of events) {
       writeEvents.push({
-        serialNumber: record.serialNumber,
+        serialNumber: device.serialNumber,
         sourceKey: event.sourceKey,
         happenedAt: event.happenedAt,
         summary: event.summary,
@@ -846,17 +900,170 @@ export function buildImportPlan(
         workType: event.workType
       });
     }
-  }
+  };
 
-  // События приборов, которых в файле нет ни одной строкой блока.
-  const plannedSerials = new Set(reading.equipment.map((record) => record.serialKey));
-  for (const event of reading.events) {
-    if (plannedSerials.has(event.serialKey)) continue;
-    issues.push({
-      row: event.row, code: "serial_unknown",
-      problem: `Прибор ${event.serialNumber} не описан в файле`,
-      fix: "Добавьте строку с названием прибора и его S/N выше его событий"
+  for (const record of reading.equipment) {
+    const events = eventsBySerial.get(record.serialKey) ?? [];
+    const newEvents = events.filter((event) => !knownKeys.has(event.sourceKey));
+    const seenEvents = events.length - newEvents.length;
+    const inBase = existing.get(record.serialKey);
+
+    // Прибор уже в реестре: ни модель, ни производитель не нужны — события
+    // пишутся по серийному номеру, а данные самого прибора импорт не трогает.
+    if (inBase) {
+      const differences: ImportPlanDifference[] = [];
+      if (record.modelName && !sameName(inBase.modelName, record.modelName)) {
+        differences.push({ field: "Модель", inFile: record.modelName, inBase: inBase.modelName });
+      }
+      if (record.manufacturerName && !sameName(inBase.manufacturerName, record.manufacturerName)) {
+        differences.push({ field: "Производитель", inFile: record.manufacturerName, inBase: inBase.manufacturerName });
+      }
+      equipment.push({
+        row: record.row,
+        serialNumber: record.serialNumber,
+        serialKey: record.serialKey,
+        modelName: record.modelName,
+        manufacturerName: inBase.manufacturerName,
+        action: "exists",
+        modelAction: "known",
+        differences,
+        eventsCreate: newEvents.length,
+        eventsExisting: seenEvents,
+        eventsBlocked: 0
+      });
+      addEvents(record, newEvents);
+      continue;
+    }
+
+    // Новый прибор: под каким производителем его заводить.
+    const named = snapshot.models.filter((model) => sameName(model.name, record.modelName));
+    const byFileManufacturer = record.manufacturerName
+      ? named.find((model) => sameName(model.manufacturerName, record.manufacturerName ?? ""))
+      : undefined;
+    let manufacturerName = "";
+    let modelAction: ImportPlanEquipment["modelAction"] = "unknown";
+    let hiddenModel: ImportModelCatalogEntry | undefined;
+
+    const takeModel = (model: ImportModelCatalogEntry): void => {
+      manufacturerName = model.manufacturerName;
+      modelAction = "known";
+      if (!model.isActive) hiddenModel = model;
+    };
+
+    if (byFileManufacturer) {
+      takeModel(byFileManufacturer);
+    } else if (record.manufacturerName) {
+      // Производитель указан в файле, а такой модели у него ещё нет: заведём модель.
+      manufacturerName = record.manufacturerName;
+      modelAction = "create";
+    } else if (named.length === 1 && named[0]) {
+      takeModel(named[0]);
+    } else if (named.length > 1) {
+      const chosen = options.defaultManufacturer
+        ? named.find((model) => sameName(model.manufacturerName, options.defaultManufacturer ?? ""))
+        : undefined;
+      if (chosen) {
+        takeModel(chosen);
+      } else {
+        issues.push({
+          row: record.row, code: "model_ambiguous",
+          problem: `Модель «${record.modelName}» есть у нескольких производителей: ${named.map((model) => model.manufacturerName).join(", ")}`,
+          fix: "Добавьте в файл столбец «Производитель» или выберите производителя на экране импорта"
+        });
+      }
+    } else if (options.defaultManufacturer) {
+      manufacturerName = options.defaultManufacturer;
+      modelAction = "create";
+    } else {
+      issues.push({
+        row: record.row, code: "model_not_in_catalog",
+        problem: `Модели «${record.modelName}» нет в справочнике моделей`,
+        fix: "Выберите производителя на экране импорта (модель заведём) либо добавьте модель в справочник заранее"
+      });
+    }
+
+    // Скрытую модель или скрытого производителя база на прибор не поставит:
+    // говорим об этом здесь, а не отказом с идентификатором на последнем шаге.
+    if (hiddenModel) {
+      issues.push({
+        row: record.row, code: "model_hidden",
+        problem: `Модель «${hiddenModel.name}» у производителя «${hiddenModel.manufacturerName}» скрыта в справочнике`,
+        fix: "Верните модель в справочнике кнопкой «Показать» и повторите пробный импорт"
+      });
+      manufacturerName = "";
+    }
+    const manufacturerEntry = manufacturerName
+      ? snapshot.manufacturers.find((item) => sameName(item.name, manufacturerName))
+      : undefined;
+    if (manufacturerEntry && !manufacturerEntry.isActive) {
+      issues.push({
+        row: record.row, code: "manufacturer_hidden",
+        problem: `Производитель «${manufacturerEntry.name}» скрыт в справочнике`,
+        fix: "Верните производителя в справочнике кнопкой «Показать» и повторите пробный импорт"
+      });
+      manufacturerName = "";
+    }
+
+    const blocked = !manufacturerName;
+    equipment.push({
+      row: record.row,
+      serialNumber: record.serialNumber,
+      serialKey: record.serialKey,
+      modelName: record.modelName,
+      manufacturerName,
+      action: blocked ? "blocked" : "create",
+      modelAction,
+      differences: [],
+      eventsCreate: blocked ? 0 : newEvents.length,
+      eventsExisting: blocked ? 0 : seenEvents,
+      eventsBlocked: blocked ? events.length : 0
     });
+    if (blocked) continue;
+
+    if (modelAction === "create") {
+      plannedModels.add(`${catalogKey(manufacturerName)}\u001f${catalogKey(record.modelName)}`);
+      if (!manufacturerEntry) plannedManufacturers.add(catalogKey(manufacturerName));
+    }
+    // Площадку и плательщика импорт не заводит: их ведёт раздел «Клиенты».
+    // Чего нет в справочнике — говорим сразу, а прибор создаём без привязки.
+    const siteMatches = record.siteName
+      ? snapshot.sites.filter((name) => sameName(name, record.siteName ?? "")).length
+      : 0;
+    if (record.siteName && siteMatches === 0) {
+      issues.push({
+        row: record.row, code: "site_not_found",
+        problem: `Площадки «${record.siteName}» нет в справочнике`,
+        fix: "Прибор создадим без площадки: добавьте площадку в «Клиентах» и привяжите прибор вручную"
+      });
+    }
+    if (record.siteName && siteMatches > 1) {
+      issues.push({
+        row: record.row, code: "site_ambiguous",
+        problem: `Площадок с названием «${record.siteName}» несколько — они у разных организаций`,
+        fix: "Прибор создадим без площадки: привяжите его к нужной площадке вручную"
+      });
+    }
+    const site = siteMatches === 1 ? record.siteName : undefined;
+    const payer = record.payerName && snapshot.payers.some((name) => sameName(name, record.payerName ?? ""))
+      ? record.payerName
+      : undefined;
+    if (record.payerName && !payer) {
+      issues.push({
+        row: record.row, code: "payer_not_found",
+        problem: `Плательщика «${record.payerName}» нет в справочнике`,
+        fix: "Прибор создадим без плательщика: добавьте плательщика в «Клиентах» и привяжите прибор вручную"
+      });
+    }
+    writeEquipment.push({
+      serialNumber: record.serialNumber,
+      manufacturer: manufacturerName,
+      model: record.modelName,
+      ...(site ? { site } : {}),
+      ...(payer ? { payer } : {}),
+      ...(record.notes ? { notes: record.notes } : {}),
+      ...(record.meterReading !== undefined ? { meterReading: record.meterReading } : {})
+    });
+    addEvents(record, newEvents);
   }
 
   const dataRows = reading.sheetRows - reading.serviceRows;
