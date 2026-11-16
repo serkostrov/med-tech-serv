@@ -21,6 +21,7 @@ import {
   type EquipmentAssignmentKind,
   type NewEquipmentAssignmentChange
 } from "./equipment-changes.js";
+import { referenceAttributesSummary } from "./reference-display.js";
 import {
   equipmentHistoryDescription,
   equipmentHistoryEventLabel,
@@ -2736,7 +2737,7 @@ function AdminReferencesPage() {
     const relatedKeys = [...new Set(descriptor?.fields.map((field) => field.referenceCatalog).filter((value): value is string => Boolean(value)) ?? [])];
     const [values, ...related] = await Promise.all([m2Api.listCatalogValues(key), ...relatedKeys.map((relatedKey) => m2Api.listCatalogValues(relatedKey))]);
     setRecords(values);
-    setRelatedValues((current) => ({ ...current, ...Object.fromEntries(relatedKeys.map((relatedKey, index) => [relatedKey, related[index]?.filter((value) => value.isActive) ?? []])) }));
+    setRelatedValues((current) => ({ ...current, ...Object.fromEntries(relatedKeys.map((relatedKey, index) => [relatedKey, related[index] ?? []])) }));
   };
 
   useEffect(() => {
@@ -2832,7 +2833,7 @@ function AdminReferencesPage() {
         <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th><th scope="col">Параметры</th><th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
           return <tr className={!record.isActive ? "reference-admin-table__inactive" : ""} key={record.id}>
             <td><strong>{record.name}</strong></td>
-            <td className="muted">{Object.entries(record.attributes).filter(([key]) => key !== "sortOrder").map(([key, value]) => `${selected.fields.find((field) => field.key === key)?.label ?? key}: ${typeof value === "boolean" ? value ? "да" : "нет" : String(value)}`).join(" · ") || "—"}</td>
+            <td className="muted">{referenceAttributesSummary(selected.fields, record.attributes, relatedValues)}</td>
             <td><StatusBadge tone={record.isActive ? "success" : "neutral"}>{record.isActive ? "Активно" : "Неактивно"}</StatusBadge></td>
             <td><div className="reference-admin-actions">
               <IconButton disabled={index === 0} icon="moveUp" label="Выше" onClick={() => void moveRecord(record, "up")} />
@@ -2844,7 +2845,7 @@ function AdminReferencesPage() {
         })}{records.length === 0 ? <tr><td colSpan={4}><ResourceState description="Нажмите «Добавить запись», чтобы значение появилось в заявках." status="empty" title={`В списке «${selected.label}» пока нет записей`} /></td></tr> : null}</tbody></table></div>
       </section> : null}
     </div>
-    <DialogForm busy={saving} description="Запись появится в списке и будет доступна в заявках." error={formError} key={`${selected?.key ?? "catalog"}-${editingId ?? "closed"}`} onOpenChange={(open) => { if (!open) setEditingId(null); }} onSubmit={saveRecord} open={editingId !== null} submitLabel={editingId === "new" ? "Добавить запись" : "Сохранить изменения"} title={editingId === "new" ? `Добавить: ${selected?.label ?? "запись"}` : `Изменить: ${selected?.label ?? "запись"}`}><label className="field-wide">Наименование<input autoFocus onChange={(event) => setEditingName(event.target.value)} required value={editingName} /></label>{selected?.fields.filter((field) => !field.readOnly).map((field) => <label key={field.key}>{field.label}{field.type === "reference" && field.referenceCatalog ? <Select onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.value || null }))} required={field.required} value={String(editingAttributes[field.key] ?? "")}><option value="">Не выбрано</option>{(relatedValues[field.referenceCatalog] ?? []).map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select> : field.type === "boolean" ? <span className="field-check"><input checked={editingAttributes[field.key] === true} onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.checked }))} type="checkbox" /> Включено</span> : <input onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: field.type === "integer" || field.type === "number" ? (event.target.value === "" ? null : Number(event.target.value)) : event.target.value || null }))} required={field.required} type={field.type === "integer" || field.type === "number" ? "number" : "text"} value={String(editingAttributes[field.key] ?? "")} />}</label>)}</DialogForm>
+    <DialogForm busy={saving} description="Запись появится в списке и будет доступна в заявках." error={formError} key={`${selected?.key ?? "catalog"}-${editingId ?? "closed"}`} onOpenChange={(open) => { if (!open) setEditingId(null); }} onSubmit={saveRecord} open={editingId !== null} submitLabel={editingId === "new" ? "Добавить запись" : "Сохранить изменения"} title={editingId === "new" ? `Добавить: ${selected?.label ?? "запись"}` : `Изменить: ${selected?.label ?? "запись"}`}><label className="field-wide">Наименование<input autoFocus onChange={(event) => setEditingName(event.target.value)} required value={editingName} /></label>{selected?.fields.filter((field) => !field.readOnly).map((field) => <label key={field.key}>{field.label}{field.type === "reference" && field.referenceCatalog ? <Select onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.value || null }))} required={field.required} value={String(editingAttributes[field.key] ?? "")}><option value="">Не выбрано</option>{(relatedValues[field.referenceCatalog] ?? []).filter((value) => value.isActive || String(editingAttributes[field.key] ?? "") === value.id).map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select> : field.type === "boolean" ? <span className="field-check"><input checked={editingAttributes[field.key] === true} onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.checked }))} type="checkbox" /> Включено</span> : <input onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: field.type === "integer" || field.type === "number" ? (event.target.value === "" ? null : Number(event.target.value)) : event.target.value || null }))} required={field.required} type={field.type === "integer" || field.type === "number" ? "number" : "text"} value={String(editingAttributes[field.key] ?? "")} />}</label>)}</DialogForm>
     <ConfirmationDialog confirmLabel="Скрыть" description={deactivating ? <>«{deactivating.name}» скроется из новых операций. Если запись уже используется, история сохранится.</> : null} onConfirm={async () => { if (deactivating) await removeRecord(deactivating); }} onOpenChange={(open) => { if (!open) setDeactivating(null); }} open={Boolean(deactivating)} title="Скрыть запись?" />
   </>;
 }

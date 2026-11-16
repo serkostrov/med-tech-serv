@@ -357,7 +357,7 @@ export function PricePage() {
                         onChange={(event) => toggleSelected(line.key, event.target.checked)}
                         type="checkbox"
                       /></td> : null}
-                      <td><strong>{line.workTypeName}</strong><small>{line.guaranteeCategoryName} · {line.workTypeCode}</small></td>
+                      <td><strong>{line.workTypeName}</strong><small>{line.guaranteeCategoryName}</small><code className="price-code" title="Код вида работ: по нему сверяют позицию со складом и бухгалтерией">{line.workTypeCode}</code></td>
                       <td className="numeric">{line.current
                         ? <strong>{priceLineAmountText(line)}</strong>
                         : <span className="is-empty">{priceLineAmountText(line)}</span>}</td>

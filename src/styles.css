@@ -8786,6 +8786,21 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* ===== Прайс: цены по видам работ ===== */
 .price-table td.numeric strong { white-space: nowrap; }
+/* Код вида работ нужен для сверки со складом и бухгалтерией, но читаться он
+   должен как код, а не как продолжение названия: отдельная строка-плашка. */
+.price-code {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: 5px;
+  color: var(--color-muted);
+  background: #f4f7f9;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
+}
 .price-history-row td { padding: 0 14px 12px; background: #f8fafb; }
 .data-table tbody tr.price-history-row:hover td { background: #f8fafb; }
 .price-history__empty { margin: 10px 0 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
