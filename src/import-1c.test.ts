@@ -5,6 +5,7 @@ import {
   buildImportPlan,
   columnLetter,
   historySourceKey,
+  issueSeverity,
   readImportDate,
   readImportFile,
   readImportNumber,
@@ -15,6 +16,8 @@ import { CUSTOMER_SAMPLE_PATH, customerSampleWorkbook } from "./import-sample.te
 /** Справочник моделей стенда: ровно то, что заводит миграция 0001. */
 const CATALOG: ImportSnapshot = {
   manufacturers: ["Beckman Coulter", "Mindray"],
+  sites: ["Мариинская больница", "ГП № 87"],
+  payers: ["МедТехСервис"],
   models: [
     { id: "m-dxh800", name: "DxH-800", manufacturerId: "bc", manufacturerName: "Beckman Coulter" },
     { id: "m-au480", name: "AU 480", manufacturerId: "bc", manufacturerName: "Beckman Coulter" },
@@ -24,7 +27,7 @@ const CATALOG: ImportSnapshot = {
   historyKeys: []
 };
 
-const EMPTY_BASE: ImportSnapshot = { manufacturers: [], models: [], equipment: [], historyKeys: [] };
+const EMPTY_BASE: ImportSnapshot = { manufacturers: [], models: [], sites: [], payers: [], equipment: [], historyKeys: [] };
 
 test("дата из клетки: по-русски день впереди, число Excel тоже дата", () => {
   assert.deepEqual(readImportDate("15.03.2023"), { ok: true, date: "2023-03-15" });
@@ -217,7 +220,10 @@ test("ошибки показываются по строкам, а не одн�
   // У каждой строки сказано, что не так и что делать.
   assert.ok(plan.issues.every((issue) => issue.problem.length > 0 && issue.fix.length > 0));
   assert.match(String(plan.issues.find((issue) => issue.row === 10)?.problem), /повторяет строку 9/u);
-  assert.equal(plan.summary.errorRows, 7);
+  // Повтор строки — предупреждение: данные уже перенесены строкой 9.
+  assert.deepEqual(plan.issues.filter((issue) => issueSeverity(issue.code) === "warning").map((issue) => issue.row), [10]);
+  assert.equal(plan.summary.errorRows, 6);
+  assert.equal(plan.summary.warningRows, 1);
   assert.equal(plan.summary.eventsCreate, 1);
   assert.equal(plan.summary.equipmentCreate, 1);
 });
@@ -229,7 +235,7 @@ test("приборы списком: обычная таблица с загол
       ["Серийный номер", "Производитель", "Модель", "Площадка", "Плательщик", "Показание счётчика", "Примечание"],
       ["BE49081", "Beckman Coulter", "DxH-800", "Мариинская больница", "МедТехСервис", "1 200", "из 1С"],
       ["BE49081", "Beckman Coulter", "DxH-800", null, null, null, null],
-      ["BE49090", "Beckman Coulter", "DxH-9000", null, null, "много", null],
+      ["BE49090", "Beckman Coulter", "DxH-9000", "Неизвестная больница", "Нет такого плательщика", "много", null],
       [null, "Mindray", "BS-620", null, null, null, null]
     ]
   }]);
@@ -245,8 +251,15 @@ test("приборы списком: обычная таблица с загол
   assert.deepEqual(plan.issues.map((issue) => [issue.row, issue.code]), [
     [3, "equipment_duplicate_in_file"],
     [4, "number_invalid"],
+    [4, "site_not_found"],
+    [4, "payer_not_found"],
     [5, "serial_missing"]
   ]);
+  // Площадки и плательщика из файла нет в справочниках: прибор создаём без них.
+  assert.equal(plan.write.equipment[1]?.site, undefined);
+  assert.equal(plan.write.equipment[1]?.payer, undefined);
+  assert.equal(plan.summary.errorRows, 1);
+  assert.equal(plan.summary.warningRows, 2);
   assert.equal(plan.summary.equipmentCreate, 2);
   assert.equal(plan.summary.modelsCreate, 1);
   assert.equal(plan.summary.manufacturersCreate, 0);

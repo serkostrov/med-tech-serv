@@ -40,7 +40,23 @@ export type ImportIssueCode =
   | "equipment_duplicate_in_file"
   | "model_not_in_catalog"
   | "model_ambiguous"
+  | "site_not_found"
+  | "payer_not_found"
   | "number_invalid";
+
+/**
+ * Замечание либо не пускает строку в базу («error»), либо только предупреждает
+ * («warning»): строка перенесётся, но человек должен знать, с какой оговоркой.
+ */
+export type ImportIssueSeverity = "error" | "warning";
+
+const WARNING_CODES: readonly ImportIssueCode[] = [
+  "duplicate_in_file", "equipment_duplicate_in_file", "number_invalid", "site_not_found", "payer_not_found"
+];
+
+export function issueSeverity(code: ImportIssueCode): ImportIssueSeverity {
+  return WARNING_CODES.includes(code) ? "warning" : "error";
+}
 
 /** Строка файла, с которой что-то не так: где, что и что с этим делать. */
 export interface ImportRowIssue {
@@ -572,6 +588,9 @@ export interface ImportExistingEquipment {
 export interface ImportSnapshot {
   readonly models: readonly ImportModelCatalogEntry[];
   readonly manufacturers: readonly string[];
+  /** Названия площадок и плательщиков из справочников: импорт их не заводит. */
+  readonly sites: readonly string[];
+  readonly payers: readonly string[];
   /** Приборы базы по серийным номерам из файла. */
   readonly equipment: readonly ImportExistingEquipment[];
   /** Уже записанные source_key событий по этим приборам. */
@@ -626,6 +645,7 @@ export interface ImportPlanSummary {
   readonly dataRows: number;
   readonly readyRows: number;
   readonly errorRows: number;
+  readonly warningRows: number;
   readonly equipmentCreate: number;
   readonly equipmentExists: number;
   readonly equipmentBlocked: number;
@@ -759,12 +779,34 @@ export function buildImportPlan(
           plannedManufacturers.add(normalizeHeader(manufacturerName));
         }
       }
+      // Площадку и плательщика импорт не заводит: их ведёт раздел «Клиенты».
+      // Чего нет в справочнике — говорим сразу, а прибор создаём без привязки.
+      const site = record.siteName && snapshot.sites.some((name) => sameName(name, record.siteName ?? ""))
+        ? record.siteName
+        : undefined;
+      if (record.siteName && !site) {
+        issues.push({
+          row: record.row, code: "site_not_found",
+          problem: `Площадки «${record.siteName}» нет в справочнике`,
+          fix: "Прибор создадим без площадки: добавьте площадку в «Клиентах» и привяжите прибор вручную"
+        });
+      }
+      const payer = record.payerName && snapshot.payers.some((name) => sameName(name, record.payerName ?? ""))
+        ? record.payerName
+        : undefined;
+      if (record.payerName && !payer) {
+        issues.push({
+          row: record.row, code: "payer_not_found",
+          problem: `Плательщика «${record.payerName}» нет в справочнике`,
+          fix: "Прибор создадим без плательщика: добавьте плательщика в «Клиентах» и привяжите прибор вручную"
+        });
+      }
       writeEquipment.push({
         serialNumber: record.serialNumber,
         manufacturer: manufacturerName,
         model: record.modelName,
-        ...(record.siteName ? { site: record.siteName } : {}),
-        ...(record.payerName ? { payer: record.payerName } : {}),
+        ...(site ? { site } : {}),
+        ...(payer ? { payer } : {}),
         ...(record.notes ? { notes: record.notes } : {}),
         ...(record.meterReading !== undefined ? { meterReading: record.meterReading } : {})
       });
@@ -799,7 +841,9 @@ export function buildImportPlan(
   }
 
   const dataRows = reading.sheetRows - reading.serviceRows;
-  const errorRows = new Set(issues.filter((issue) => issue.row > 0).map((issue) => issue.row)).size;
+  const rowsWith = (severity: ImportIssueSeverity): number => new Set(
+    issues.filter((issue) => issue.row > 0 && issueSeverity(issue.code) === severity).map((issue) => issue.row)
+  ).size;
   const eventsCreate = equipment.reduce((total, item) => total + item.eventsCreate, 0);
   const eventsExisting = equipment.reduce((total, item) => total + item.eventsExisting, 0);
   const eventsBlocked = equipment.reduce((total, item) => total + item.eventsBlocked, 0);
@@ -815,7 +859,8 @@ export function buildImportPlan(
       serviceRows: reading.serviceRows,
       dataRows,
       readyRows: readyEquipment + eventsCreate + eventsExisting,
-      errorRows,
+      errorRows: rowsWith("error"),
+      warningRows: rowsWith("warning"),
       equipmentCreate: writeEquipment.length,
       equipmentExists: equipment.filter((item) => item.action === "exists").length,
       equipmentBlocked: equipment.filter((item) => item.action === "blocked").length,
@@ -827,4 +872,17 @@ export function buildImportPlan(
     },
     write: { equipment: writeEquipment, events: writeEvents }
   };
+}
+
+/** Что база действительно записала: возвращает функция import_equipment_history (0054). */
+export interface ImportWriteResult {
+  readonly sourceName: string;
+  readonly manufacturersCreated: number;
+  readonly modelsCreated: number;
+  readonly equipmentCreated: number;
+  readonly equipmentAlready: number;
+  readonly eventsCreated: number;
+  readonly eventsAlready: number;
+  /** События, для которых прибора в базе так и не нашлось: они не записаны. */
+  readonly eventsWithoutEquipment: number;
 }

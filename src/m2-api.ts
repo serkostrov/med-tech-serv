@@ -9,6 +9,14 @@ import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
+import { normalizeEquipmentSerial } from "./equipment-passport.js";
+import type {
+  ImportExistingEquipment,
+  ImportSnapshot,
+  ImportWriteEquipment,
+  ImportWriteEvent,
+  ImportWriteResult
+} from "./import-1c.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
   AccessRoleResponse,
@@ -2077,6 +2085,105 @@ export class M2ApiClient {
       client: text(details, "client"),
       description: text(details, "description"),
       source: { kind: "manual", id: text(row, "id") }
+    };
+  }
+
+  /**
+   * Снимок базы для пробного импорта (экран «Импорт»): справочник моделей,
+   * названия площадок и плательщиков, приборы по серийным номерам из файла и
+   * уже записанные ключи их истории. Только чтение: ничего не меняет.
+   */
+  public async importSnapshot(serialNumbers: readonly string[]): Promise<ImportSnapshot> {
+    const keys = [...new Set(serialNumbers.map(normalizeEquipmentSerial).filter(Boolean))];
+    const [manufacturers, models, sites, payers] = await Promise.all([
+      // Скрытые записи справочника тоже нужны: название в них уже занято.
+      this.db().from("manufacturers").select("id, name"),
+      this.db().from("equipment_models").select("id, name, manufacturer_id"),
+      this.db().from("sites").select("name").eq("is_active", true),
+      this.db().from("payers").select("name").eq("is_active", true)
+    ]);
+    throwIfError(manufacturers.error);
+    throwIfError(models.error);
+    throwIfError(sites.error);
+    throwIfError(payers.error);
+    const manufacturerNames = new Map((manufacturers.data ?? [])
+      .map((item) => [text(asRow(item), "id"), text(asRow(item), "name")]));
+
+    const equipment: ImportExistingEquipment[] = [];
+    // Серийные номера передаём порциями: в условии in.() их может быть много.
+    for (let offset = 0; offset < keys.length; offset += 100) {
+      const { data, error } = await this.db()
+        .from("equipment")
+        .select("id, serial_number, manufacturer:manufacturers(name), model:equipment_models(name)")
+        .in("serial_number_normalized", keys.slice(offset, offset + 100));
+      throwIfError(error);
+      for (const item of data ?? []) {
+        const row = asRow(item);
+        equipment.push({
+          id: text(row, "id"),
+          serialNumber: text(row, "serial_number"),
+          modelName: text(related(row, "model"), "name"),
+          manufacturerName: text(related(row, "manufacturer"), "name")
+        });
+      }
+    }
+
+    const historyKeys: string[] = [];
+    const ids = equipment.map((item) => item.id);
+    for (let offset = 0; offset < ids.length; offset += 100) {
+      const { data, error } = await this.db()
+        .from("equipment_history")
+        .select("source_key")
+        .in("equipment_id", ids.slice(offset, offset + 100))
+        .not("source_key", "is", null);
+      throwIfError(error);
+      for (const item of data ?? []) historyKeys.push(text(asRow(item), "source_key"));
+    }
+
+    return {
+      manufacturers: [...manufacturerNames.values()],
+      models: (models.data ?? []).map((item) => {
+        const row = asRow(item);
+        const manufacturerId = text(row, "manufacturer_id");
+        return {
+          id: text(row, "id"),
+          name: text(row, "name"),
+          manufacturerId,
+          manufacturerName: manufacturerNames.get(manufacturerId) ?? ""
+        };
+      }),
+      sites: (sites.data ?? []).map((item) => text(asRow(item), "name")),
+      payers: (payers.data ?? []).map((item) => text(asRow(item), "name")),
+      equipment,
+      historyKeys
+    };
+  }
+
+  /**
+   * Запись подтверждённого импорта: одна транзакция в базе (функция 0054).
+   * Существующие приборы не переписывает, повтор того же файла ничего не добавляет.
+   */
+  public async applyEquipmentImport(
+    sourceName: string,
+    write: { readonly equipment: readonly ImportWriteEquipment[]; readonly events: readonly ImportWriteEvent[] }
+  ): Promise<ImportWriteResult> {
+    const { data, error } = await this.db().rpc("import_equipment_history", {
+      p_source_name: sourceName,
+      p_equipment: write.equipment,
+      p_events: write.events
+    });
+    throwIfError(error, "Не получилось записать импорт");
+    const row = asRow(data);
+    const count = (key: string): number => numberValue(row[key]) ?? 0;
+    return {
+      sourceName: text(row, "sourceName") || sourceName,
+      manufacturersCreated: count("manufacturersCreated"),
+      modelsCreated: count("modelsCreated"),
+      equipmentCreated: count("equipmentCreated"),
+      equipmentAlready: count("equipmentAlready"),
+      eventsCreated: count("eventsCreated"),
+      eventsAlready: count("eventsAlready"),
+      eventsWithoutEquipment: count("eventsWithoutEquipment")
     };
   }
 

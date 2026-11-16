@@ -72,6 +72,7 @@ import { installedReservationNumbers } from "./reservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { PricePage } from "./PricePage.js";
+import { ImportPage } from "./ImportPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { preselectedEngineerId } from "./engineer-competencies.js";
@@ -3129,6 +3130,7 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
     case "price": return <PricePage />;
+    case "import": return <ImportPage />;
     default: return <CoordinatorTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
   }
 }
@@ -3399,7 +3401,8 @@ const navigationPermission: Partial<Record<NavigationId, string>> = {
   tasks: "tasks.read", maintenance: "tasks.assign", equipment: "equipment.read", engineers: "tasks.assign",
   warehouse: "warehouse.read", reservations: "warehouse.read", inventory: "warehouse.read", handoff: "warehouse.write",
   notifications: "notifications.read", reports: "reports.read", customers: "references.read", references: "references.read", finance: "finance.read",
-  price: "price.read", access: "users.read"
+  // Перенос данных из 1С — то же право, что и завести прибор руками.
+  price: "price.read", access: "users.read", import: "equipment.write"
 };
 
 function navigationForSession(role: AppRole, user: ApiSessionUser | null | undefined): readonly NavigationItem[] {
