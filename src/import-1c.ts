@@ -417,8 +417,8 @@ function pushEvent(state: MutableReading, draft: EventDraft): void {
 }
 
 /**
- * Проверяет строку события и складывает его. Возвращает false, если строка
- * не годится: тогда про неё уже сказано замечанием.
+ * Проверяет строку события и складывает его. Если строка не годится, событие
+ * не создаётся, а про строку остаётся замечание с подсказкой.
  */
 function readEventRow(options: {
   readonly state: MutableReading;
