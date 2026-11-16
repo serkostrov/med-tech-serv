@@ -18,6 +18,7 @@ import { formatRussianCount } from "./equipment-changes.js";
 import { companyToday } from "./task-dates.js";
 import {
   ALL_CATEGORIES_LABEL,
+  MAX_PRICE,
   PRICE_NOT_SET_HINT,
   PRICE_NOT_SET_LABEL,
   bulkPriceItems,
@@ -35,6 +36,7 @@ import {
   priceLines,
   priceRowActiveOn,
   priceRowPeriodText,
+  priceScopeKey,
   type BulkPriceMode,
   type PriceGuaranteeCategory,
   type PriceLine,
@@ -215,6 +217,17 @@ export function PricePage() {
       setFormError("Укажите дату, с которой действует цена");
       return;
     }
+    if (amount > MAX_PRICE) {
+      setFormError(`Цена слишком большая: не больше ${formatMoney(MAX_PRICE)}`);
+      return;
+    }
+    // Иначе «Сохранить» без единой правки завело бы второй период с той же суммой,
+    // и в истории появились бы две одинаковые записи подряд. База такую запись тоже
+    // пропускает, но человеку нужно сказать, а не молча отрапортовать «Цена сохранена».
+    if (editingActive && editingActive.amount === amount && editingActive.includeGuaranteeWork === guaranteeDraft) {
+      setFormError("Цена и так такая: менять нечего");
+      return;
+    }
     setSaving(true);
     setFormError(null);
     try {
@@ -264,8 +277,18 @@ export function PricePage() {
     }
   };
 
+  // История берётся по выбранной в окне категории, а не по той, с которой окно открыли:
+  // категорию в окне меняют, и подсказка про будущую цену должна смотреть на нужную историю.
+  const editingHistory = editing
+    ? rows.filter((row) => row.workTypeCode === editing.workTypeCode
+        && priceScopeKey(row.guaranteeCategoryId) === priceScopeKey(categoryDraft || null))
+    : [];
+  // Цена, действующая на выбранную дату: по ней видно, что менять нечего.
+  const editingActive = editing && validFromDraft
+    ? editingHistory.find((row) => priceRowActiveOn(row, validFromDraft))
+    : undefined;
   // Позже выбранной даты уже есть цена: новая будет закрыта её началом и действующей не станет.
-  const laterPrice = editing && validFromDraft ? nextPriceAfter(editing.history, validFromDraft) : undefined;
+  const laterPrice = editing && validFromDraft ? nextPriceAfter(editingHistory, validFromDraft) : undefined;
   const columns = canWrite ? 7 : 5;
   const editorTitle = editing ? `Цена · ${editing.workTypeName}` : "Цена вида работ";
 

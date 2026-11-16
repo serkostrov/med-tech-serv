@@ -207,13 +207,22 @@ export interface BulkPriceChange {
 
 const NO_BASE_PRICE_REASON = "Цены ещё нет: процентом и прибавкой считать не из чего";
 const SAME_PRICE_REASON = "Цена и так такая";
+const TOO_LARGE_REASON = "Цена слишком большая";
+
+/**
+ * Предел столбца `numeric(14, 2)` в базе. Больше неё база отвергает весь вызов целиком,
+ * не называя строку, поэтому такие строки отсекаем здесь и показываем это в предпросмотре.
+ */
+export const MAX_PRICE = 999999999999.99;
 
 /** Что получится у выбранных строк: показываем до применения, вместе с причинами пропуска. */
 export function previewBulkPrices(lines: readonly PriceLine[], input: BulkPriceInput): readonly BulkPriceChange[] {
   return lines.map((line) => {
     const before = line.current?.amount;
     const after = nextPriceAmount(before, input);
-    const skipReason = after === undefined ? NO_BASE_PRICE_REASON : after === before ? SAME_PRICE_REASON : undefined;
+    const skipReason = after === undefined
+      ? NO_BASE_PRICE_REASON
+      : after === before ? SAME_PRICE_REASON : after > MAX_PRICE ? TOO_LARGE_REASON : undefined;
     return {
       key: line.key,
       workTypeCode: line.workTypeCode,
@@ -264,7 +273,11 @@ export function formatMoney(amount: number): string {
 export function parseAmount(value: string): number | null {
   const normalized = value.replace(/[\s ]/gu, "").replace(",", ".");
   if (!/^\d+(?:\.\d+)?$/u.test(normalized)) return null;
-  return roundToKopecks(Number(normalized));
+  const parsed = Number(normalized);
+  // Число из трёхсот с лишним знаков превращается в Infinity, а округление копеек на нём
+  // бросает исключение. Поле читается прямо при отрисовке окна, так что это был бы белый экран.
+  if (!Number.isFinite(parsed)) return null;
+  return roundToKopecks(parsed);
 }
 
 /** Процент или прибавка из поля ввода: со знаком, «-10» и «−10» одинаково. */

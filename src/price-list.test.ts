@@ -12,6 +12,7 @@ import {
   canDeletePriceRow,
   effectivePriceRow,
   filterPriceLines,
+  MAX_PRICE,
   formatMoney,
   guaranteeWorkLabel,
   nextPriceAfter,
@@ -457,5 +458,27 @@ describe("прайс: экран и его место в приложении", 
     assert.match(html, /Цены заданы/u);
     // Права ещё не прочитаны: кнопок правки на экране нет.
     assert.doesNotMatch(html, /Изменить выбранные/u);
+  });
+});
+
+describe("прайс: пределы суммы", () => {
+  it("цена из трёхсот знаков не роняет окно, а просто не читается", () => {
+    // Раньше такое число превращалось в Infinity и округление копеек бросало исключение
+    // прямо при отрисовке окна массового изменения: страница становилась белой.
+    assert.equal(parseAmount("9".repeat(400)), null);
+    assert.equal(parseAmount("1e400"), null);
+    assert.equal(parseAmount("1 500,50"), 1500.5);
+  });
+
+  it("слишком большая цена отсекается в предпросмотре, а не отказом базы по всему списку", () => {
+    const lines = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2026-11-16" });
+    const changes = previewBulkPrices(lines, { mode: "fixed", value: MAX_PRICE + 1 });
+    // База отвергла бы весь вызов целиком, не назвав строку. Поэтому не отправляем вовсе.
+    assert.deepEqual(new Set(changes.map((change) => change.skipReason)), new Set(["Цена слишком большая"]));
+    assert.deepEqual(bulkPriceItems(changes), []);
+    // Ровно предел проходит.
+    const atLimit = previewBulkPrices(lines, { mode: "fixed", value: MAX_PRICE });
+    assert.equal(atLimit[0]?.skipReason, undefined);
+    assert.equal(atLimit[0]?.after, MAX_PRICE);
   });
 });

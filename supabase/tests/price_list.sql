@@ -214,16 +214,33 @@ SELECT pg_temp.check(pg_temp.set_price('d_p1', 'diagnostics', NULL, 1000, pg_tem
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..∞=1000', pg_temp.d('p1')),
   'первая цена действует бессрочно');
 
-SELECT pg_temp.check(pg_temp.set_price('d_p2', 'diagnostics', NULL, 1200, pg_temp.d('p2')) IS NOT NULL,
+SELECT pg_temp.check(pg_temp.set_price('d_today', 'diagnostics', NULL, 1200, pg_temp.d('today')) IS NOT NULL,
   'новая цена с более поздней даты');
-SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1200', pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2')),
+SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1200', pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today')),
   'прошлая цена закрыта днём начала новой, история осталась');
 
 -- Исправление цены тем же числом: та же строка, второй период не появляется.
-SELECT pg_temp.check(pg_temp.set_price('d_p2_fix', 'diagnostics', NULL, 1300, pg_temp.d('p2'), true) = pg_temp.uid('d_p2'),
-  'цена тем же числом исправляется в той же строке');
-SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1300+г', pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2')),
+SELECT pg_temp.check(pg_temp.set_price('d_today_fix', 'diagnostics', NULL, 1300, pg_temp.d('today'), true) = pg_temp.uid('d_today'),
+  'цена сегодняшним числом исправляется в той же строке');
+SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1300+г', pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today')),
   'после исправления изменились только сумма и пометка про гарантию');
+
+-- Цену прошедшего дня не переписываем: по ней уже могли выставить счета, а прежней
+-- суммы потом не найти — журнал изменений денежные поля намеренно вырезает.
+SELECT pg_temp.expect_message(
+  format('SELECT public.set_work_price(%L, NULL, 999, %L, false)', 'diagnostics', pg_temp.d('p1')),
+  'Цена с этого числа уже действовала, её сумму не переписываем: заведите цену с новой даты',
+  'цену прошедшего дня переписать нельзя');
+SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1300+г', pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today')),
+  'после отказа история цен осталась прежней');
+
+-- «Сохранить» без единой правки не режет действующий период надвое.
+SELECT pg_temp.check(pg_temp.set_price('d_same', 'diagnostics', NULL, 1300, pg_temp.d('today'), true) = pg_temp.uid('d_today'),
+  'повтор той же цены тем же числом возвращает ту же строку');
+SELECT pg_temp.check(pg_temp.set_price('d_same_later', 'diagnostics', NULL, 1300, pg_temp.d('tomorrow'), true) = pg_temp.uid('d_today'),
+  'цена и так такая: с завтрашнего числа второй период не заводится');
+SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1300+г', pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today')),
+  'повтор той же цены не добавил в историю ни одного периода');
 
 -- Цена вперёд и ещё одна между действующей и будущей.
 SELECT pg_temp.check(pg_temp.set_price('d_f2', 'diagnostics', NULL, 2000, pg_temp.d('f2')) IS NOT NULL,
@@ -231,7 +248,7 @@ SELECT pg_temp.check(pg_temp.set_price('d_f2', 'diagnostics', NULL, 2000, pg_tem
 SELECT pg_temp.check(pg_temp.set_price('d_f1', 'diagnostics', NULL, 1800, pg_temp.d('f1')) IS NOT NULL,
   'ещё одна цена между действующей и уже заведённой будущей');
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..%s=1300+г | %s..%s=1800 | %s..∞=2000',
-                       pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2'), pg_temp.d('f1'),
+                       pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today'), pg_temp.d('f1'),
                        pg_temp.d('f1'), pg_temp.d('f2'), pg_temp.d('f2')),
   'периоды не пересеклись: у новой цены сразу выставлен конец по началу будущей');
 
@@ -271,7 +288,7 @@ SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('p1') -
   'до первой цены цены нет');
 SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('p1')) = 1000,
   'в день начала действует уже новая цена');
-SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('p2') - 1) = 1000,
+SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('today') - 1) = 1000,
   'в последний день периода действует прошлая цена');
 SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('today')) = 1300,
   'сегодня действует текущая цена');
@@ -296,7 +313,7 @@ SELECT pg_temp.expect_message(
   format('INSERT INTO public.price_list (work_type_code, valid_from, amount) VALUES (%L, %L, 777)', 'repair', pg_temp.d('today')),
   'Цену заводят только через прайс: добавить строку напрямую нельзя', 'прямой INSERT в прайс запрещён');
 SELECT pg_temp.expect_message(
-  format('UPDATE public.price_list SET amount = 1 WHERE id = %L', pg_temp.uid('d_p2')),
+  format('UPDATE public.price_list SET amount = 1 WHERE id = %L', pg_temp.uid('d_today')),
   'Цену меняют только через прайс: править строку напрямую нельзя', 'прямой UPDATE цены запрещён');
 SELECT pg_temp.expect_message(
   format('UPDATE public.price_list SET valid_to = NULL WHERE id = %L', pg_temp.uid('d_p1')),
@@ -317,7 +334,7 @@ SELECT pg_temp.expect_message(
   'Цену удаляют только через прайс: удалить строку напрямую нельзя', 'администратору прямое удаление тоже запрещено');
 SELECT pg_temp.act_as_nobody();
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..%s=1300+г | %s..%s=1800 | %s..∞=2000',
-                       pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2'), pg_temp.d('f1'),
+                       pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today'), pg_temp.d('f1'),
                        pg_temp.d('f1'), pg_temp.d('f2'), pg_temp.d('f2')),
   'после попыток прямой записи прайс не изменился');
 
@@ -328,7 +345,7 @@ SELECT pg_temp.expect_message(
   'Удалить можно только цену, которая ещё не начала действовать: история цен из прайса не удаляется',
   'прошлую цену удалить нельзя');
 SELECT pg_temp.expect_message(
-  format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('d_p2')),
+  format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('d_today')),
   'Удалить можно только цену, которая ещё не начала действовать: история цен из прайса не удаляется',
   'действующую цену удалить нельзя');
 SELECT pg_temp.expect_message(
@@ -337,10 +354,10 @@ SELECT pg_temp.expect_message(
 
 SELECT public.delete_future_work_price(pg_temp.uid('d_f1'));
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..%s=1300+г | %s..∞=2000',
-                       pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2'), pg_temp.d('f2'), pg_temp.d('f2')),
+                       pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today'), pg_temp.d('f2'), pg_temp.d('f2')),
   'отменённая будущая цена убрана, действующая снова работает до следующей');
 SELECT public.delete_future_work_price(pg_temp.uid('d_f2'));
-SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1300+г', pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2')),
+SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..∞=1300+г', pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today')),
   'после отмены последней будущей цены действующая снова бессрочная');
 
 -- Цена, начинающаяся сегодня, уже действует: это история, а не план.
@@ -397,7 +414,7 @@ SELECT pg_temp.check(
     ), pg_temp.d('tomorrow')) = 3,
   'массовое изменение применило все три позиции');
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..%s=1300+г | %s..∞=1430+г',
-                       pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
+                       pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
   'массовое изменение закрыло прошлый период так же, как правка по одной цене');
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', pg_temp.uid('cat_standard')::text) = format('%s..%s=1500 | %s..∞=1650', pg_temp.d('p2'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
   'в массовом изменении позиция по категории гарантии живёт отдельно от общей');
@@ -453,7 +470,7 @@ SELECT pg_temp.act_as_nobody();
 SELECT pg_temp.check(pg_temp.timeline('repair', '*') = format('%s..%s=500 | %s..∞=550', pg_temp.d('today'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
   'после отклонённого списка цена ремонта осталась от удачного массового изменения');
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..%s=1300+г | %s..∞=1430+г',
-                       pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
+                       pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
   'после отклонённого списка цена диагностики тоже не изменилась');
 
 -- ---------------------------------------------------------------- Проверки одной цены
@@ -505,7 +522,7 @@ SELECT pg_temp.expect_message(
   format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 1}]'::jsonb, pg_temp.d('f1')),
   'Недостаточно прав: прайс ведёт руководитель', 'координатор цены массово не меняет');
 SELECT pg_temp.expect_message(
-  format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('d_p2')),
+  format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('d_today')),
   'Недостаточно прав: прайс ведёт руководитель', 'координатор цены не удаляет');
 
 SELECT pg_temp.act_as(pg_temp.uid('engineer'));
@@ -556,7 +573,7 @@ SELECT pg_temp.act_as_nobody();
 
 -- Изменения прайса попали в журнал аудита: прайс в списке таблиц аудита с 0001.
 SELECT pg_temp.check((SELECT count(*) > 0 FROM audit_log
-                       WHERE entity_type = 'reference' AND entity_id = pg_temp.uid('d_p2')::text
+                       WHERE entity_type = 'reference' AND entity_id = pg_temp.uid('d_today')::text
                          AND actor_user_id = pg_temp.uid('supervisor')),
   'правка цены записана в журнал аудита на руководителя');
 

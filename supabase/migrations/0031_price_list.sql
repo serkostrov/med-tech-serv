@@ -162,6 +162,21 @@ BEGIN
   -- столкнулись бы на ограничении EXCLUDE текстом про периоды, а не по-человечески.
   PERFORM pg_advisory_xact_lock(hashtextextended('price_list:' || p_work_type_code || ':' || scope, 0));
 
+  -- Цену прошедшего дня не переписываем. Исправить опечатку тем же числом или поправить
+  -- ещё не начавшуюся цену можно, а менять сумму, по которой уже считали счета, нельзя:
+  -- прежнего значения потом не найти, журнал изменений денежные поля намеренно вырезает.
+  -- Нужна другая цена — её заводят с новой даты, и прошлая остаётся в истории как была.
+  IF p_valid_from < (now() AT TIME ZONE 'Europe/Moscow')::date
+     AND EXISTS (
+       SELECT 1 FROM public.price_list AS was
+        WHERE was.work_type_code = p_work_type_code
+          AND was.scope_key = scope
+          AND was.valid_from = p_valid_from
+     ) THEN
+    RAISE EXCEPTION 'Цена с этого числа уже действовала, её сумму не переписываем: заведите цену с новой даты'
+      USING ERRCODE = '23514';
+  END IF;
+
   PERFORM set_config('app.price_chain', 'on', true);
 
   -- Исправление цены тем же числом: правим ту же строку, а не плодим вторую. Второй
@@ -174,6 +189,20 @@ BEGIN
      AND same_day.scope_key = scope
      AND same_day.valid_from = p_valid_from
   RETURNING same_day.* INTO saved;
+
+  IF saved.id IS NULL THEN
+    -- Цена и так такая: второго периода с той же суммой заводить не нужно. Иначе
+    -- «Сохранить» без единой правки резало бы действующий период надвое, и в истории
+    -- появлялись бы две одинаковые записи подряд. Возвращаем ту строку, что уже есть.
+    SELECT * INTO saved
+      FROM public.price_list AS current_row
+     WHERE current_row.work_type_code = p_work_type_code
+       AND current_row.scope_key = scope
+       AND current_row.valid_from <= p_valid_from
+       AND (current_row.valid_to IS NULL OR current_row.valid_to > p_valid_from)
+       AND current_row.amount = price
+       AND current_row.include_guarantee_work = guarantee;
+  END IF;
 
   IF saved.id IS NULL THEN
     -- Если впереди уже заведена цена, новая действует только до её начала: иначе
@@ -212,7 +241,7 @@ REVOKE ALL ON FUNCTION public.set_work_price(text, uuid, numeric, date, boolean)
 GRANT EXECUTE ON FUNCTION public.set_work_price(text, uuid, numeric, date, boolean) TO authenticated;
 
 COMMENT ON FUNCTION public.set_work_price(text, uuid, numeric, date, boolean) IS
-  'Цена вида работ с указанной даты (0031): закрывает прошлый период днём начала новой цены, цену тем же числом правит в той же строке, перед уже заведённой будущей ценой останавливается её началом. Работает с правами вызывающего: нужны price.write и право видеть прайс, автор — вошедший пользователь.';
+  'Цена вида работ с указанной даты (0031): закрывает прошлый период днём начала новой цены, цену сегодняшним или будущим числом правит в той же строке, перед уже заведённой будущей ценой останавливается её началом. Цену прошедшего дня переписать нельзя, а если цена на эту дату уже ровно такая, новый период не заводится и возвращается существующая строка. Работает с правами вызывающего: нужны price.write и право видеть прайс, автор — вошедший пользователь.';
 
 -- ---------------------------------------------------------------------------
 -- 4. Массовое изменение цен
@@ -294,11 +323,13 @@ BEGIN
     -- Позицию, где с этого же числа уже стоит ровно та же цена и та же пометка про
     -- гарантию, не трогаем: записи не нужно, а в ответе интерфейсу важно именно число
     -- реально изменённых позиций (экран показывает его после массового изменения).
+    -- Условие то же, что в set_work_price: цена, действующая на эту дату, уже такая.
     CONTINUE WHEN EXISTS (
       SELECT 1 FROM public.price_list AS price_row
        WHERE price_row.work_type_code = item.work_type_code
          AND price_row.scope_key = coalesce(item.guarantee_category_id::text, '*')
-         AND price_row.valid_from = p_valid_from
+         AND price_row.valid_from <= p_valid_from
+         AND (price_row.valid_to IS NULL OR price_row.valid_to > p_valid_from)
          AND price_row.amount = item.amount
          AND price_row.include_guarantee_work = item.include_guarantee_work
     );
