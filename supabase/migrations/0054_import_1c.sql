@@ -122,7 +122,10 @@ BEGIN
   -- Скрытую модель или скрытого производителя база на прибор не поставит
   -- (страж validate_active_equipment_references, 0001), а завести вторую такую же
   -- не даст уникальный индекс. Говорим об этом словами до записи.
-  SELECT format('«%s» у производителя «%s»', em.name, m.name)
+  SELECT CASE
+           WHEN NOT m.is_active THEN format('производитель «%s»', m.name)
+           ELSE format('модель «%s» у производителя «%s»', em.name, m.name)
+         END
     INTO hidden_pair
     FROM jsonb_array_elements(p_equipment) AS item
     JOIN public.manufacturers AS m
@@ -133,7 +136,7 @@ BEGIN
    WHERE NOT m.is_active OR (em.id IS NOT NULL AND NOT em.is_active)
    LIMIT 1;
   IF hidden_pair IS NOT NULL THEN
-    RAISE EXCEPTION 'В справочнике скрыта модель %: верните её кнопкой «Показать» и повторите импорт', hidden_pair
+    RAISE EXCEPTION 'В справочнике скрыт(а) %: верните запись кнопкой «Показать» и повторите импорт', hidden_pair
       USING ERRCODE = '23514';
   END IF;
 

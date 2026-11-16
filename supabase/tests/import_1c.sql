@@ -246,7 +246,7 @@ SELECT pg_temp.act_as(pg_temp.uid('coord'));
 SELECT pg_temp.expect_refusal_matching(
   'SELECT public.import_equipment_history(''imp54.xlsx'', jsonb_build_array(jsonb_build_object('
   || '''serialNumber'', ''IMP54-HIDDEN-1'', ''manufacturer'', ''IMP54 Hidden'', ''model'', ''IMP54 Скрытая'')), ''[]''::jsonb)',
-  'скрыта модель',
+  'скрыт\(а\) модель',
   'скрытая модель объясняется словами, а не отказом с идентификатором');
 
 -- ---------------------------------------------------------------- Чего импорт не делает молча
