@@ -267,7 +267,9 @@ export function ImportPage() {
                 .map((item) => <option key={item.name} value={item.name}>{item.name}</option>)}
             </Select>
             <span className="form-hint">
-              В выгрузке «история прибора» производителя нет. Выберите его, и модель заведётся в справочнике.
+              {plan.layout === "history-blocks"
+                ? "В выгрузке «история прибора» производителя нет. Выберите его, и модель заведётся в справочнике."
+                : "В файле производитель не указан или модель есть у нескольких. Выберите производителя, и модель заведётся в справочнике."}
             </span>
           </label> : null}
           <div className="import-plan__actions">
