@@ -160,7 +160,7 @@ BEGIN
   INSERT INTO sites (name, organization_id) VALUES ('Позиции: площадка', org) RETURNING id INTO site;
   -- Реквизиты нужны выгрузке для 1С: ИНН и КПП идут в файл из снимка счёта.
   INSERT INTO payers (name, requisites)
-  VALUES ('Позиции: плательщик', '{"inn": "7701234567", "kpp": "770101001"}'::jsonb)
+  VALUES ('Позиции: плательщик', '{"inn": "7701234560", "kpp": "770101001"}'::jsonb)
   RETURNING id INTO payer;
   INSERT INTO manufacturers (name) VALUES ('Позиции: производитель') RETURNING id INTO man;
   INSERT INTO equipment_models (manufacturer_id, name) VALUES (man, 'Позиции: модель') RETURNING id INTO model;
@@ -551,7 +551,7 @@ SELECT pg_temp.check((SELECT count(*) FROM public.invoice_export_rows(pg_temp.ui
   'в выгрузке столько строк, сколько в счёте');
 SELECT pg_temp.check((SELECT format('%s/%s/%s/%s', invoice_number, payer_inn, payer_kpp, invoice_date)
     FROM public.invoice_export_rows(pg_temp.uid('inv_spend')) LIMIT 1)
-  = (SELECT number FROM invoices WHERE id = pg_temp.uid('inv_spend')) || '/7701234567/770101001/' || pg_temp.d('today')::text,
+  = (SELECT number FROM invoices WHERE id = pg_temp.uid('inv_spend')) || '/7701234560/770101001/' || pg_temp.d('today')::text,
   'в выгрузке номер счёта, дата и плательщик с ИНН и КПП');
 SELECT pg_temp.check((SELECT string_agg(format('%s:%s:%s', item_type, item_code, trim_scale(line_total)), ' | ' ORDER BY item_type)
     FROM public.invoice_export_rows(pg_temp.uid('inv_spend')))
