@@ -3868,15 +3868,15 @@ export class M2ApiClient {
     throwIfError(breakdown.error, "Не получилось построить отчёт");
     // Миграции на стенд применяют по одной, и 0045 может отстать от 0044. Разрез,
     // функции которого ещё нет, остаётся пустым — валить из-за него весь отчёт нельзя.
-    const rowsOf = (result: { readonly data: unknown; readonly error: { readonly code?: string; readonly message?: string } | null } | null, fallback: string): readonly unknown[] => {
+    const cutRowsOf = (result: { readonly data: unknown; readonly error: { readonly code?: string; readonly message?: string } | null } | null, fallback: string): readonly unknown[] => {
       if (!result || isMissingDatabaseFunction(result.error)) return [];
       throwIfError(result.error, fallback);
       return (result.data ?? []) as readonly unknown[];
     };
-    const partRows = rowsOf(parts, "Не получилось посчитать гарантийность замен");
-    const loadRows = rowsOf(load, "Не получилось посчитать загрузку инженеров");
-    const equipmentSpendRows = rowsOf(equipmentSpend, "Не получилось посчитать затраты по приборам");
-    const payerSpendRows = rowsOf(payerSpend, "Не получилось посчитать затраты по плательщикам");
+    const partRows = cutRowsOf(parts, "Не получилось посчитать гарантийность замен");
+    const loadRows = cutRowsOf(load, "Не получилось посчитать загрузку инженеров");
+    const equipmentSpendRows = cutRowsOf(equipmentSpend, "Не получилось посчитать затраты по приборам");
+    const payerSpendRows = cutRowsOf(payerSpend, "Не получилось посчитать затраты по плательщикам");
     const summaryRow = asRow(Array.isArray(summary.data) ? summary.data[0] : summary.data);
     const cuts = (section: string): readonly ReportCutItem[] => ((breakdown.data ?? []) as readonly unknown[])
       .map((item: unknown) => asRow(item))
