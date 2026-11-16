@@ -189,11 +189,7 @@ export function reservationRegistrySheets(items: readonly StockReservationRecord
   }];
 }
 
-/**
- * Все строки реестра под текущим отбором, а не только открытая страница: выгрузка
- * должна совпадать с тем, что реестр нашёл. Читаем страницами, как отдаёт сервер,
- * и упираемся в предел, чтобы случайный отбор на всю базу не положил браузер.
- */
+/** Предел выгрузки: случайный отбор на всю базу не должен положить браузер. */
 export const REGISTRY_EXPORT_MAX_ROWS = 20_000;
 
 /**
@@ -204,6 +200,12 @@ export function registryExportNote(rows: number, maxRows = REGISTRY_EXPORT_MAX_R
   return rows >= maxRows ? ". Это предел выгрузки, уточните отбор — в реестре их больше" : "";
 }
 
+/**
+ * Все строки реестра под текущим отбором, а не только открытая страница: выгрузка
+ * должна совпадать с тем, что реестр нашёл. Читаем страницами, как отдаёт сервер.
+ * Последняя страница дочитывается целиком, поэтому строк бывает чуть больше предела —
+ * обрывать её на середине значило бы отдать неполную страницу без предупреждения.
+ */
 export async function allRegistryRows<Item>(
   load: (limit: number, offset: number) => Promise<{ readonly items: readonly Item[]; readonly total: number }>,
   pageSize = 500,
