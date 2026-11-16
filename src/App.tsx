@@ -1697,7 +1697,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const exportExcel = async () => {
     setExporting(true);
     try {
-      const rows = await allRegistryRows<TaskApiRecord>((limit, offset) => m2Api.tasksPage({
+      const { rows, truncated } = await allRegistryRows<TaskApiRecord>((limit, offset) => m2Api.tasksPage({
         ...(appliedFilters.search ? { search: appliedFilters.search } : {}), ...(appliedFilters.status ? { status: appliedFilters.status } : {}),
         ...(appliedFilters.engineerId ? { engineerId: appliedFilters.engineerId } : {}), ...(appliedFilters.siteId ? { siteId: appliedFilters.siteId } : {}),
         ...(appliedFilters.workTypeCode ? { workTypeCode: appliedFilters.workTypeCode } : {}),
@@ -1714,7 +1714,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         workTypes: Object.fromEntries(workTypes.map((item) => [item.code, item.name])),
         statuses: Object.fromEntries(taskStatuses.map((item) => [item.code, item.name]))
       }), registryFileName("Задачи"));
-      toast.success(`В файле ${formatRussianCount(rows.length, ["задача", "задачи", "задач"])}${registryExportNote(rows.length)}`, { title: "Задачи выгружены" });
+      toast.success(`В файле ${formatRussianCount(rows.length, ["задача", "задачи", "задач"])}${registryExportNote(truncated)}`, { title: "Задачи выгружены" });
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить задачи", { title: "Файл не выгрузился" });
     } finally {
@@ -2558,7 +2558,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   const exportExcel = async () => {
     setExporting(true);
     try {
-      const rows = await allRegistryRows<EquipmentApiRecord>((limit, offset) => m2Api.equipmentPage({
+      const { rows, truncated } = await allRegistryRows<EquipmentApiRecord>((limit, offset) => m2Api.equipmentPage({
         limit,
         offset,
         ...(filters.search ? { search: filters.search } : {}),
@@ -2569,7 +2569,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
       }));
       const statuses = Object.fromEntries(references.statuses.map((item) => [item.code, item.name]));
       await downloadWorkbook(equipmentRegistrySheets(rows, statuses), registryFileName(engineer ? "Мои приборы" : "Приборы"));
-      toast.success(`В файле ${formatRussianCount(rows.length, ["прибор", "прибора", "приборов"])}${registryExportNote(rows.length)}`, { title: "Приборы выгружены" });
+      toast.success(`В файле ${formatRussianCount(rows.length, ["прибор", "прибора", "приборов"])}${registryExportNote(truncated)}`, { title: "Приборы выгружены" });
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить приборы", { title: "Файл не выгрузился" });
     } finally {

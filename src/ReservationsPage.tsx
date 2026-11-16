@@ -198,12 +198,18 @@ export function ReservationsPage() {
   };
 
   // Выгрузка реестра резервов со всей цепочкой: состояние, задача, кому выдали, когда.
-  // Читаем все резервы состояния страницами, а не только те 500 (или 100 закрытых),
-  // что держит окно на экране, и применяем к ним тот же отбор, что виден на вкладке.
+  // Читаем все резервы страницами, а не только те 500 (или 100 закрытых), что держит
+  // окно на экране, и применяем к ним тот же отбор, что виден сейчас. Набор берём по
+  // виду, а не по вкладке: вкладки есть только у списка, а доска показывает
+  // действующие и закрытые разом, кроме снятых, — файл должен совпадать с экраном.
   const exportRegistry = async () => {
     setExporting(true);
     try {
-      const rows = filterReservations(await m2Api.allStockReservations(tab === "closed" ? "closed" : "active"), appliedFilters);
+      const loaded = view === "board"
+        ? [...await m2Api.allStockReservations("active"), ...await m2Api.allStockReservations("closed")]
+            .filter((item) => item.status !== "cancelled")
+        : await m2Api.allStockReservations(tab === "closed" ? "closed" : "active");
+      const rows = filterReservations(loaded, appliedFilters);
       if (rows.length === 0) {
         toast.warning("По этому отбору резервов нет: выгружать нечего", { title: "Выгружать нечего" });
         return;
@@ -219,7 +225,7 @@ export function ReservationsPage() {
 
   return <>
     <PageIntro
-      actions={<Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || visible.length === 0} onClick={() => void exportRegistry()} variant="secondary">Скачать в Excel</Button>}
+      actions={<Button busy={exporting} busyLabel="Готовим файл…" disabled={loading} onClick={() => void exportRegistry()} variant="secondary">Скачать в Excel</Button>}
       description="Запчасти под задачи: собрать, выдать инженеру, принять обратно."
       title="Резервы"
       titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать резервы" onValueChange={changeView} value={view} />}

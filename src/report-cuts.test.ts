@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { cutRows, reportBarsTotal } from "./OperationsPages.js";
+import { cutRows, reportBarsTotal } from "./report-cuts.js";
 import type { ReportCutItem } from "./m2-api.js";
 
 const cut = (code: string, value: number): ReportCutItem => ({ code, name: `Строка ${code}`, value, closed: 0, overdue: 0 });

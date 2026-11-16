@@ -9,6 +9,7 @@ import { formatRussianCount } from "./equipment-changes.js";
 import { formatMoney, parseAmount } from "./price-list.js";
 import { companyToday } from "./task-dates.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
+import { CUT_ROWS_ON_SCREEN, cutRows, reportBarsTotal } from "./report-cuts.js";
 import { reportFileName, reportWorkbook } from "./report-export.js";
 import { allRegistryRows, downloadWorkbook, inventoryRegistrySheets, registryExportNote, registryFileName } from "./registry-export.js";
 import { XLSX_MIME } from "./xlsx.js";
@@ -233,9 +234,9 @@ export function WarehousePage() {
   const exportExcel = async () => {
     setExporting(true);
     try {
-      const rows = await allRegistryRows<InventoryPartRecord>((limit, offset) => m2Api.inventoryPartPage({ ...filters, limit, offset }));
+      const { rows, truncated } = await allRegistryRows<InventoryPartRecord>((limit, offset) => m2Api.inventoryPartPage({ ...filters, limit, offset }));
       await downloadWorkbook(inventoryRegistrySheets(rows), registryFileName("Склад"));
-      toast.success(`В файле ${formatRussianCount(rows.length, ["позиция", "позиции", "позиций"])}${registryExportNote(rows.length)}`, { title: "Склад выгружен" });
+      toast.success(`В файле ${formatRussianCount(rows.length, ["позиция", "позиции", "позиций"])}${registryExportNote(truncated)}`, { title: "Склад выгружен" });
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить склад", { title: "Файл не выгрузился" });
     } finally {
@@ -306,17 +307,6 @@ function periodForPreset(preset: ReportPreset, today = companyToday()): { readon
   return { from: startOfMonth(today, monthsBack), to: today };
 }
 
-/**
- * От чего считать доли в полосах. Когда на экране часть строк разреза, доли должны
- * остаться теми же, что в выгрузке, то есть от всего разреза, — иначе видимые строки
- * всегда складывались бы в сто процентов. Переданный итог меньше показанного не бывает:
- * если он почему-то меньше, берём показанное, чтобы доли не ушли за сто процентов.
- */
-export function reportBarsTotal(items: readonly { readonly value: number }[], whole?: number): number {
-  const shown = items.reduce((sum, item) => sum + item.value, 0);
-  return Math.max(shown, whole ?? 0);
-}
-
 function ReportBars({
   items,
   empty,
@@ -358,29 +348,6 @@ function requestsWord(count: number): string {
   if (ones === 1) return "заявка";
   if (ones >= 2 && ones <= 4) return "заявки";
   return "заявок";
-}
-
-/**
- * Разрезы по приборам, площадкам и инженерам могут быть длинными: на экране показываем
- * первые строки, остальные целиком уходят в выгрузку. В файле обрезки нет.
- */
-const CUT_ROWS_ON_SCREEN = 8;
-
-/**
- * Первые строки разреза для экрана. Цвет полосы берётся из кода, поэтому код
- * оставляем только там, где он из справочника («wear», «G»): у приборов, площадок
- * и инженеров это идентификаторы записей, и класс по ним смысла не имеет.
- */
-export function cutRows(
-  items: readonly ReportCutItem[],
-  colored: boolean
-): readonly { readonly code?: string; readonly key: string; readonly name: string; readonly value: number }[] {
-  return items.slice(0, CUT_ROWS_ON_SCREEN).map((item) => ({
-    ...(colored ? { code: item.code } : {}),
-    key: item.code,
-    name: item.name,
-    value: item.value
-  }));
 }
 
 /** Доля занятых дней периода: 6 из 12 — «50%». */
@@ -587,6 +554,7 @@ export function ReportsPage() {
                       empty="Запчасти за период не меняли."
                       items={report.partsByCondition.map((item) => ({ code: item.code, name: `${item.name} · ${item.quantity} шт.`, value: item.positionCount }))}
                       keepOrder
+                      total={partPositions}
                     />
                   : <p className="report-bars__empty">Запчасти за период не меняли.</p>}
               </CutCard>
@@ -630,9 +598,9 @@ export function ReportsPage() {
             эти таблицы не показываем, и в выгрузке у них листа затрат тоже нет.
             Период со счетами, но без новых заявок — обычное дело, поэтому таблицы
             стоят за условием «заявок нет», а не внутри него. */}
-        {report.canSeeFinance && report.databaseCuts ? <>
+        {report.canSeeFinance && report.databaseSpend ? <>
           <SpendTable items={report.equipmentSpend} meta="позиции счетов периода, привязанные к задачам прибора; отменённые счета не считаем" nameColumn="Прибор" title="Затраты по приборам" />
-          <SpendTable items={report.payerSpend} meta="итоги счетов периода целиком, вместе с ручной корректировкой, поэтому сумма больше, чем в затратах по приборам" nameColumn="Плательщик" title="Затраты по плательщикам" />
+          <SpendTable items={report.payerSpend} meta="итоги счетов периода целиком: с ручной корректировкой и с работами по задачам без прибора, поэтому сумма не сходится с затратами по приборам" nameColumn="Плательщик" title="Затраты по плательщикам" />
         </> : null}
       </> : null}
     </div>

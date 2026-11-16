@@ -85,7 +85,7 @@ describe("Excel file", () => {
 const NO_CUTS = {
   tasksByReason: [], worksByModifier: [], tasksByEquipment: [], tasksBySite: [], tasksByEngineer: [],
   partsByCondition: [], engineerLoad: [], equipmentSpend: [], payerSpend: [],
-  canSeeFinance: false, databaseCuts: false
+  canSeeFinance: false, databaseCuts: false, databaseSpend: false
 } as const;
 
 describe("report export", () => {
@@ -128,6 +128,7 @@ describe("report export", () => {
     const full: OperationsReportRecord = {
       ...report,
       databaseCuts: true,
+      databaseSpend: true,
       canSeeFinance: true,
       tasksByReason: [{ code: "wear", name: "Износ", value: 2, closed: 1, overdue: 0 }, { code: "unset", name: "Причина не указана", value: 1, closed: 0, overdue: 1 }],
       worksByModifier: [{ code: "N", name: "Н · вина пользователя", value: 3, closed: 1, overdue: 1 }],
@@ -169,6 +170,7 @@ describe("report export", () => {
     const full: OperationsReportRecord = {
       ...report,
       databaseCuts: true,
+      databaseSpend: true,
       canSeeFinance: false,
       tasksByReason: [{ code: "wear", name: "Износ", value: 3, closed: 1, overdue: 1 }],
       equipmentSpend: [{ id: "eq-1", name: "Beckman AU 480 · SN-1", taskCount: 2, invoiceCount: 2, workAmount: 2000, partsAmount: 500, totalAmount: 2500 }],

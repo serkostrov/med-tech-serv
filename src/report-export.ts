@@ -107,7 +107,7 @@ function reportSpendSheet(report: OperationsReportRecord): XlsxSheet | undefined
     ...(report.payerSpend.length
       ? [
           [],
-          ["По плательщикам", "итоги счетов целиком, вместе с корректировкой: сумма больше, чем по приборам"],
+          ["По плательщикам", "итоги счетов целиком: с корректировкой и с работами по задачам без прибора"],
           [{ bold: "Плательщики" }, { bold: "Корректировка" }, { bold: "Заявок" }, { bold: "Счетов" }, { bold: "Работы" }, { bold: "Запчасти" }, { bold: "Итого" }] as XlsxCell[],
           ...report.payerSpend.map((item): XlsxCell[] => [
             item.name,

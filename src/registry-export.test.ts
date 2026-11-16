@@ -3,6 +3,7 @@ import { describe, it } from "node:test";
 import {
   allRegistryRows,
   equipmentRegistrySheets,
+  registryExportNote,
   inventoryRegistrySheets,
   registryFileName,
   reservationRegistrySheets,
@@ -187,29 +188,46 @@ describe("чтение всех строк реестра", () => {
   it("читает страницами, пока не соберёт всё найденное", async () => {
     const all = Array.from({ length: 7 }, (_, index) => index);
     const calls: number[] = [];
-    const rows = await allRegistryRows(async (limit, offset) => {
+    const { rows, truncated } = await allRegistryRows(async (limit, offset) => {
       calls.push(offset);
       return { items: all.slice(offset, offset + limit), total: all.length };
     }, 3);
     assert.deepEqual(rows, all);
     assert.deepEqual(calls, [0, 3, 6]);
+    assert.equal(truncated, false);
   });
 
-  it("останавливается на пределе, а не тянет всю базу", async () => {
-    const rows = await allRegistryRows(async (limit, offset) => ({
+  it("останавливается на пределе и говорит, что собрано не всё", async () => {
+    const { rows, truncated } = await allRegistryRows(async (limit, offset) => ({
       items: Array.from({ length: limit }, (_, index) => offset + index),
       total: 10_000
     }), 100, 250);
     assert.equal(rows.length, 300, "последняя страница читается целиком и на ней чтение кончается");
+    assert.equal(truncated, true);
+  });
+
+  it("реестр ровно в размер предела не считается обрезанным", async () => {
+    const { rows, truncated } = await allRegistryRows(async (limit, offset) => ({
+      items: Array.from({ length: Math.min(limit, 200 - offset) }, (_, index) => offset + index),
+      total: 200
+    }), 100, 200);
+    assert.equal(rows.length, 200);
+    assert.equal(truncated, false, "всё найденное в файле, предупреждать не о чем");
   });
 
   it("пустая страница останавливает чтение, даже если подсчёт больше", async () => {
     let calls = 0;
-    const rows = await allRegistryRows(async () => {
+    const { rows, truncated } = await allRegistryRows(async () => {
       calls += 1;
       return { items: calls === 1 ? [1, 2] : [], total: 100 };
     }, 2);
     assert.deepEqual(rows, [1, 2]);
     assert.equal(calls, 2, "второй пустой ответ прекращает цикл");
+    assert.equal(truncated, true, "подсчёт обещал больше строк, чем сервер отдал");
+  });
+
+  it("приписка появляется только у обрезанной выгрузки", () => {
+    assert.equal(registryExportNote(false), "");
+    assert.match(registryExportNote(true), /предел выгрузки/u);
   });
 });

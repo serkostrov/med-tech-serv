@@ -193,11 +193,11 @@ export function reservationRegistrySheets(items: readonly StockReservationRecord
 export const REGISTRY_EXPORT_MAX_ROWS = 20_000;
 
 /**
- * Приписка к сообщению о выгрузке, когда строк столько, что сработал предел: человек
- * должен знать, что файл неполный, а не думать, что в реестре ровно столько записей.
+ * Приписка к сообщению о выгрузке, когда в файл попало не всё: человек должен знать,
+ * что файл неполный, а не думать, что в реестре ровно столько записей.
  */
-export function registryExportNote(rows: number, maxRows = REGISTRY_EXPORT_MAX_ROWS): string {
-  return rows >= maxRows ? ". Это предел выгрузки, уточните отбор — в реестре их больше" : "";
+export function registryExportNote(truncated: boolean): string {
+  return truncated ? ". Это предел выгрузки, уточните отбор — в реестре их больше" : "";
 }
 
 /**
@@ -205,12 +205,14 @@ export function registryExportNote(rows: number, maxRows = REGISTRY_EXPORT_MAX_R
  * должна совпадать с тем, что реестр нашёл. Читаем страницами, как отдаёт сервер.
  * Последняя страница дочитывается целиком, поэтому строк бывает чуть больше предела —
  * обрывать её на середине значило бы отдать неполную страницу без предупреждения.
+ * Признак truncated говорит, осталось ли что-то за пределом: ровно столько строк,
+ * сколько разрешает предел, — это ещё не обрезка.
  */
 export async function allRegistryRows<Item>(
   load: (limit: number, offset: number) => Promise<{ readonly items: readonly Item[]; readonly total: number }>,
   pageSize = 500,
   maxRows = REGISTRY_EXPORT_MAX_ROWS
-): Promise<readonly Item[]> {
+): Promise<{ readonly rows: readonly Item[]; readonly truncated: boolean }> {
   const rows: Item[] = [];
   let total = 0;
   do {
@@ -221,7 +223,7 @@ export async function allRegistryRows<Item>(
     if (page.items.length === 0) break;
     rows.push(...page.items);
   } while (rows.length < Math.min(total, maxRows));
-  return rows;
+  return { rows, truncated: rows.length < total };
 }
 
 export function registryWorkbook(sheets: readonly XlsxSheet[]): Promise<Uint8Array> {

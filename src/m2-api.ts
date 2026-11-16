@@ -467,10 +467,16 @@ export interface OperationsReportRecord {
   /** Деньги в отчёте показываем только с правом `finance.read`. */
   readonly canSeeFinance: boolean;
   /**
-   * Разрезы считает база (миграции 0044 и 0045). Пока их нет на сервере, остаются
-   * прежние цифры, посчитанные в браузере, а новые разрезы пустые.
+   * Разрезы считает база (миграция 0044). Пока её нет на сервере, остаются прежние
+   * цифры, посчитанные в браузере, а новые разрезы пустые.
    */
   readonly databaseCuts: boolean;
+  /**
+   * Затраты считает база (миграция 0045). Миграции применяют по одной, и 0045 может
+   * отстать от 0044: тогда разрезы по задачам уже есть, а денег ещё нет, и говорить
+   * «счетов за период нет» было бы неправдой.
+   */
+  readonly databaseSpend: boolean;
 }
 
 /** Заявка для выгрузки отчёта в Excel: одна строка листа «Заявки». */
@@ -3693,12 +3699,17 @@ export class M2ApiClient {
    * Все резервы состояния для выгрузки — страницами, а не первые 500 или 100, как окно
    * склада. Порядок тот же, что на экране, плюс номер как добивка: без неё страницы
    * с одинаковым временем могли бы перемешаться и строка потерялась бы.
+   *
+   * Останавливаемся на пустом ответе, а не на короткой странице: сервер отдаёт за раз
+   * не больше своего предела (db-max-rows), и короткая страница ещё не значит, что
+   * резервы кончились. Ценой одного лишнего пустого запроса в конце.
    */
   public async allStockReservations(state: "active" | "closed" = "active"): Promise<readonly StockReservationRecord[]> {
     const pageSize = 500;
     const rows: StockReservationRecord[] = [];
-    // Предел тот же, что у выгрузки реестров: случайный отбор на всю базу не должен
-    // положить браузер.
+    // Предел тот же, что у выгрузки реестров (REGISTRY_EXPORT_MAX_ROWS): случайный
+    // отбор на всю базу не должен положить браузер. Числом, а не ссылкой на константу:
+    // registry-export зависит от этого файла, и обратная связь замкнула бы импорты.
     while (rows.length < 20_000) {
       const offset = rows.length;
       const chunk = await this.loadReservations((select) => {
@@ -3708,8 +3719,8 @@ export class M2ApiClient {
           : request.in("status", [...CLOSED_RESERVATION_STATUSES]).order("updated_at", { ascending: false }).order("number")
         ).range(offset, offset + pageSize - 1);
       }, "Не получилось выгрузить резервы");
+      if (chunk.length === 0) break;
       rows.push(...chunk);
-      if (chunk.length < pageSize) break;
     }
     return rows;
   }
@@ -3873,6 +3884,10 @@ export class M2ApiClient {
       throwIfError(result.error, fallback);
       return (result.data ?? []) as readonly unknown[];
     };
+    // Денег нет не потому, что счетов не было, а потому, что функции ещё нет в базе:
+    // это разные вещи, и интерфейс должен сказать правду.
+    const spendMissing = isMissingDatabaseFunction(equipmentSpend?.error ?? null)
+      || isMissingDatabaseFunction(payerSpend?.error ?? null);
     const partRows = cutRowsOf(parts, "Не получилось посчитать гарантийность замен");
     const loadRows = cutRowsOf(load, "Не получилось посчитать загрузку инженеров");
     const equipmentSpendRows = cutRowsOf(equipmentSpend, "Не получилось посчитать затраты по приборам");
@@ -3974,7 +3989,8 @@ export class M2ApiClient {
         };
       }),
       canSeeFinance,
-      databaseCuts: true
+      databaseCuts: true,
+      databaseSpend: !spendMissing
     };
   }
 
@@ -4052,7 +4068,8 @@ export class M2ApiClient {
       equipmentSpend: [],
       payerSpend: [],
       canSeeFinance,
-      databaseCuts: false
+      databaseCuts: false,
+      databaseSpend: false
     };
   }
 
