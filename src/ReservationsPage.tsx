@@ -69,7 +69,11 @@ export function ReservationsPage() {
   const [canWrite, setCanWrite] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<{ readonly reservation: StockReservationRecord; readonly action: ConfirmedAction } | null>(null);
+  // Два разных файла с одной вкладки: реестр резервов и список «у кого что на руках».
+  // Флаги раздельные, иначе на вкладке «У инженеров» обе кнопки сразу писали бы
+  // «Готовим файл…», и было бы не понять, какая из них работает.
   const [exporting, setExporting] = useState(false);
+  const [exportingEngineers, setExportingEngineers] = useState(false);
   // Условия в полях и условия, по которым сейчас отобран список: как в других реестрах,
   // набранное применяется по «Показать». Резервы уже загружены, поэтому отбираем на месте.
   const [filters, setFilters] = useState<ReservationFilters>(EMPTY_RESERVATION_FILTERS);
@@ -175,7 +179,7 @@ export function ReservationsPage() {
 
   // Выгрузка того, что сейчас на вкладке: по строке на каждую выданную запчасть.
   const exportEngineers = async () => {
-    setExporting(true);
+    setExportingEngineers(true);
     try {
       const url = URL.createObjectURL(new Blob([(await engineerReservationsWorkbook(visible)) as BlobPart], { type: XLSX_MIME }));
       const link = document.createElement("a");
@@ -189,7 +193,7 @@ export function ReservationsPage() {
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить файл", { title: "Файл не выгрузился" });
     } finally {
-      setExporting(false);
+      setExportingEngineers(false);
     }
   };
 
@@ -250,7 +254,7 @@ export function ReservationsPage() {
           <ReservationBoard busyId={busyId} canWrite={canWrite} items={visible} loading={loading} onAction={runFromRow} />
         </>}
     </> : tab === "engineers" ? <DataTableShell
-      action={items.length ? <Button busy={exporting} busyLabel="Готовим файл…" disabled={issuedCount === 0} onClick={() => void exportEngineers()} variant="secondary">Скачать в Excel</Button> : undefined}
+      action={items.length ? <Button busy={exportingEngineers} busyLabel="Готовим файл…" disabled={issuedCount === 0} onClick={() => void exportEngineers()} variant="secondary">Скачать «У инженеров»</Button> : undefined}
       meta={loading ? undefined : `${formatRussianCount(issuedCount, ["запчасть", "запчасти", "запчастей"])} у ${formatRussianCount(groups.length, ["инженера", "инженеров", "инженеров"])}`}
       title="Запчасти у инженеров"
     >

@@ -55,6 +55,13 @@ GRANT EXECUTE ON FUNCTION public.company_day_start(date) TO authenticated;
 -- прежние индексы задач начинаются с этапа, инженера, площадки или вида работ.
 CREATE INDEX IF NOT EXISTS tasks_created_at_idx ON public.tasks (created_at);
 
+-- Загрузка инженеров отбирает по сроку выполнения, а не по дню создания, и смотрит
+-- только назначенные неотменённые задачи. Прежний индекс по инженеру начинается
+-- с engineer_id, и по одному лишь периоду им не воспользоваться.
+CREATE INDEX IF NOT EXISTS tasks_engineer_load_idx
+  ON public.tasks (deadline_to, deadline_from)
+  WHERE engineer_id IS NOT NULL AND status_code <> 'cancelled';
+
 -- ---------------------------------------------------------------------------
 -- 2. Задачи периода
 -- ---------------------------------------------------------------------------
@@ -383,6 +390,11 @@ AS $$
       JOIN public.tasks AS task ON task.engineer_id IS NOT NULL
        -- Отменённая задача инженера не занимает.
        AND task.status_code <> 'cancelled'
+       -- Два условия по самим столбцам: они следуют из условий ниже (там, где срок
+       -- задан, coalesce равен сроку), но планировщик видит их как диапазон и берёт
+       -- индекс tasks_engineer_load_idx вместо чтения всей таблицы задач.
+       AND (task.deadline_to IS NULL OR task.deadline_to >= bounds.period_from)
+       AND (task.deadline_from IS NULL OR task.deadline_from <= bounds.period_to)
        AND coalesce(task.deadline_from, (task.created_at AT TIME ZONE 'Europe/Moscow')::date) <= bounds.period_to
        AND coalesce(task.deadline_to, (task.created_at AT TIME ZONE 'Europe/Moscow')::date) >= bounds.period_from
   ), busy AS (

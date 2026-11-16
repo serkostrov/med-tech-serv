@@ -21,7 +21,16 @@
 -- Миграцию можно применить повторно.
 
 -- ---------------------------------------------------------------------------
--- 1. Затраты по приборам
+-- 1. День счёта
+-- ---------------------------------------------------------------------------
+
+-- Оба разреза отбирают счета по дню счёта: день выставления, а у черновика день
+-- создания. Индекс по этому выражению нужен обоим, иначе каждый отчёт читает все счета.
+CREATE INDEX IF NOT EXISTS invoices_billing_day_idx
+  ON public.invoices ((coalesce(issued_at, created_at)));
+
+-- ---------------------------------------------------------------------------
+-- 2. Затраты по приборам
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION public.report_equipment_spend(p_from date, p_to date)
@@ -68,10 +77,10 @@ AS $$
    WHERE public.app_has_permission('finance.read')
      AND task.equipment_id IS NOT NULL
      AND invoice.status <> 'cancelled'
-     AND (p_from IS NULL
-          OR (coalesce(invoice.issued_at, invoice.created_at) AT TIME ZONE 'Europe/Moscow')::date >= p_from)
-     AND (p_to IS NULL
-          OR (coalesce(invoice.issued_at, invoice.created_at) AT TIME ZONE 'Europe/Moscow')::date <= p_to)
+     -- Отбор по границам-моментам, а не по выражению над столбцом: так он ложится
+     -- на индекс invoices_billing_day_idx, как отбор задач в 0044 на свой.
+     AND (p_from IS NULL OR coalesce(invoice.issued_at, invoice.created_at) >= public.company_day_start(p_from))
+     AND (p_to IS NULL OR coalesce(invoice.issued_at, invoice.created_at) < public.company_day_start(p_to + 1))
    GROUP BY task.equipment_id
    ORDER BY coalesce(sum(item.line_total), 0) DESC, coalesce(max(equipment.serial_number), '')
 $$;
@@ -83,7 +92,7 @@ REVOKE ALL ON FUNCTION public.report_equipment_spend(date, date) FROM PUBLIC, an
 GRANT EXECUTE ON FUNCTION public.report_equipment_spend(date, date) TO authenticated;
 
 -- ---------------------------------------------------------------------------
--- 2. Затраты по плательщикам
+-- 3. Затраты по плательщикам
 -- ---------------------------------------------------------------------------
 
 -- У плательщика считаем и итог счёта, а не только сумму позиций: ручная корректировка
@@ -111,10 +120,8 @@ AS $$
       FROM public.invoices AS invoice
      WHERE public.app_has_permission('finance.read')
        AND invoice.status <> 'cancelled'
-       AND (p_from IS NULL
-            OR (coalesce(invoice.issued_at, invoice.created_at) AT TIME ZONE 'Europe/Moscow')::date >= p_from)
-       AND (p_to IS NULL
-            OR (coalesce(invoice.issued_at, invoice.created_at) AT TIME ZONE 'Europe/Moscow')::date <= p_to)
+       AND (p_from IS NULL OR coalesce(invoice.issued_at, invoice.created_at) >= public.company_day_start(p_from))
+       AND (p_to IS NULL OR coalesce(invoice.issued_at, invoice.created_at) < public.company_day_start(p_to + 1))
   ), lines AS (
     SELECT
       allowed.payer_id,
