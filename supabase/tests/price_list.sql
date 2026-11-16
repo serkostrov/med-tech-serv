@@ -158,6 +158,26 @@ SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.guard_p
                  AND NOT has_function_privilege('anon', 'public.guard_price_list_direct_write()', 'EXECUTE'),
   'стража прайса напрямую не вызвать');
 
+-- Имена и порядок параметров — общая с интерфейсом часть договорённости: PostgREST
+-- передаёт их по именам, и переименование p_valid_from сломало бы экран прайса молча.
+SELECT pg_temp.check((SELECT pg_get_function_arguments(p.oid)
+                        = 'p_work_type_code text, p_guarantee_category_id uuid, p_amount numeric, p_valid_from date, p_include_guarantee_work boolean DEFAULT false'
+                      FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public' AND p.proname = 'set_work_price'),
+  'параметры set_work_price названы и идут как договорились с интерфейсом');
+SELECT pg_temp.check((SELECT pg_get_function_arguments(p.oid) = 'p_items jsonb, p_valid_from date'
+                      FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public' AND p.proname = 'bulk_update_work_prices'),
+  'параметры bulk_update_work_prices названы и идут как договорились с интерфейсом');
+SELECT pg_temp.check((SELECT pg_get_function_arguments(p.oid) = 'p_id uuid'
+                      FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public' AND p.proname = 'delete_future_work_price'),
+  'параметр delete_future_work_price назван как договорились с интерфейсом');
+SELECT pg_temp.check((SELECT pg_get_function_arguments(p.oid) = 'p_work_type_code text, p_guarantee_category_id uuid, p_on date'
+                      FROM pg_proc AS p JOIN pg_namespace AS n ON n.oid = p.pronamespace
+                     WHERE n.nspname = 'public' AND p.proname = 'work_price_on'),
+  'параметры work_price_on названы и идут как договорились с интерфейсом');
+
 SELECT pg_temp.check((SELECT NOT bool_or(p.prosecdef) FROM pg_proc AS p
                        JOIN pg_namespace AS n ON n.oid = p.pronamespace
                       WHERE n.nspname = 'public'
@@ -414,6 +434,16 @@ SELECT pg_temp.expect_message(
 SELECT pg_temp.expect_message(
   format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 999}, {"work_type_code": "ничего-такого", "amount": 100}]'::jsonb, pg_temp.d('f1')),
   'Вид работ не найден в справочнике', 'список с неизвестным видом работ целиком отклонён');
+SELECT pg_temp.expect_message(
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "   ", "amount": 100}]'::jsonb, pg_temp.d('f1')),
+  'В каждой позиции прайса нужен вид работ и цена', 'позиция с кодом из одних пробелов не принимается');
+-- Код вида работ нигде не обрезается: отказ один и тот же в списке и при правке по одной.
+SELECT pg_temp.expect_message(
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair ", "amount": 100}]'::jsonb, pg_temp.d('f1')),
+  'Вид работ не найден в справочнике', 'в списке код с пробелом на конце не принимается');
+SELECT pg_temp.expect_message(
+  format('SELECT * FROM public.set_work_price(%L, NULL, 100, %L)', 'repair ', pg_temp.d('f1')),
+  'Вид работ не найден в справочнике', 'при правке по одной код с пробелом на конце тоже не принимается');
 -- Отказ посреди списка: первая позиция уже записалась бы, если бы вызов не был целым.
 -- Отрицательную цену предварительная проверка не ловит — её отвергает set_work_price.
 SELECT pg_temp.expect_message(
@@ -486,7 +516,7 @@ SELECT pg_temp.expect_message(
   format('SELECT * FROM public.set_work_price(%L, NULL, 1, %L)', 'repair', pg_temp.d('f1')),
   'Недостаточно прав: прайс ведёт руководитель', 'инженер цену не меняет');
 SELECT pg_temp.expect_message(
-  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 1}]'::jsonb, pg_temp.d('f1')),
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[]'::jsonb, pg_temp.d('f1')),
   'Недостаточно прав: прайс ведёт руководитель', 'инженер цены массово не меняет');
 SELECT pg_temp.expect_message(
   format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('pa_f2')),
@@ -497,7 +527,7 @@ SELECT pg_temp.check((SELECT count(*) = 0 FROM public.price_list), 'кладов
 SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('today')) IS NULL,
   'кладовщику цена на дату не отдаётся');
 SELECT pg_temp.expect_message(
-  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 1}]'::jsonb, pg_temp.d('f1')),
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[]'::jsonb, pg_temp.d('f1')),
   'Недостаточно прав: прайс ведёт руководитель', 'кладовщик цены массово не меняет');
 SELECT pg_temp.expect_message(
   format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('pa_f2')),
@@ -512,8 +542,10 @@ SELECT pg_temp.expect_message(
   format('SELECT * FROM public.set_work_price(%L, NULL, 1, %L)', 'repair', pg_temp.d('f1')),
   'Недостаточно прав: менять цены может только тот, кому виден прайс',
   'без права смотреть прайс цену не сохранить');
+-- Нагрузка заведомо негодная: если бы массовое изменение не проверяло права само,
+-- отказ пришёл бы про пустой список, а не про права.
 SELECT pg_temp.expect_message(
-  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 1}]'::jsonb, pg_temp.d('f1')),
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[]'::jsonb, pg_temp.d('f1')),
   'Недостаточно прав: менять цены может только тот, кому виден прайс',
   'без права смотреть прайс цены массово не изменить');
 SELECT pg_temp.expect_message(
