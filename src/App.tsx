@@ -11,6 +11,7 @@ import {
   type NavigationItem
 } from "./navigation.js";
 import { hasEquipmentSerialConflict } from "./equipment-passport.js";
+import { formatMeterReading, meterReadingRefusal } from "./meter-reading.js";
 import { canHideReferenceValue, referenceEditPayload } from "./reference-edit.js";
 import {
   formatEquipmentAssignmentChange,
@@ -907,6 +908,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       if (startTime && finishTime && finishTime < startTime) throw new Error("Время окончания работ раньше времени начала");
       const visitDate = visitRaw ? taskCalendarDate(visitRaw) : null;
       if (visitDate && task.callDate && visitDate < task.callDate) throw new Error(`Дата выезда раньше даты вызова (${formatTaskDate(task.callDate)})`);
+      // Счётчик прибора только растёт: уменьшение не принимает и база (миграция 0038).
+      const meterRefusal = meterReadingRefusal(numberField("meterReading") ?? undefined, card.equipment?.lastMeterReading);
+      if (meterRefusal) throw new Error(meterRefusal);
       // Отправляем только изменённое: координатор, поправив опечатку в старой задаче, не запишет в неё чужую дату.
       const visitChanged = visitDate !== (task.visitDate ?? null);
       const startChanged = startTime !== companyTime(task.workStartedAt);
@@ -1255,7 +1259,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         <label>Начало работ<input autoComplete="off" defaultValue={companyTime(task.workStartedAt)} inputMode="decimal" name="workStartTime" placeholder="чч:мм, например 9:30" /></label>
         <label>Окончание работ<input autoComplete="off" defaultValue={companyTime(task.workFinishedAt)} inputMode="decimal" name="workFinishTime" placeholder="чч:мм, например 13:15" /></label>
       </div>
-      {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
+      {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min={card.equipment?.lastMeterReading ?? 0} name="meterReading" placeholder={card.equipment?.lastMeterReading === undefined ? "Если есть на приборе" : `Не меньше ${formatMeterReading(card.equipment.lastMeterReading)}`} step="any" title={card.equipment?.lastMeterReading === undefined ? undefined : `Последнее показание прибора ${formatMeterReading(card.equipment.lastMeterReading)}: счётчик только растёт`} type="number" /></label> : null}
       {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
       <ResultReservationChecks hasEquipment={Boolean(task.equipmentId)} reservations={reservations} />
       <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
