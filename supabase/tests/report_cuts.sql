@@ -463,6 +463,36 @@ SELECT pg_temp.check(
   AND (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0,
   'наблюдателю отчётов без finance.read затраты не отдаются');
 
+-- ---------------------------------------------------------------- Задача без срока
+-- Перенесённые из 1С задачи могут быть без периода выполнения: ограничение на сроки
+-- заведено как NOT VALID и старые строки не проверяет. Для загрузки инженеров у такой
+-- задачи занятым считается день создания. Проверяем, что условия по самим столбцам,
+-- добавленные ради индекса, эту ветку не отрезали.
+SELECT pg_temp.act_as_nobody();
+ALTER TABLE public.tasks DROP CONSTRAINT IF EXISTS tasks_execution_period_required;
+SET session_replication_role = replica;
+INSERT INTO tasks (id, title, work_type_code, status_code, priority, equipment_id, site_id, payer_id,
+                   engineer_id, call_date, created_at, created_by)
+VALUES (gen_random_uuid(), 'Без срока, перенесена из 1С', 'repair', 'assigned', 'planned',
+        pg_temp.uid('eq1'), pg_temp.uid('site1'), pg_temp.uid('payer1'), pg_temp.uid('engineer'),
+        pg_temp.d('mid'), public.company_day_start(pg_temp.d('mid')) + interval '9 hours',
+        pg_temp.uid('coordinator'));
+SET session_replication_role = origin;
+
+SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
+SELECT pg_temp.check(
+  (SELECT task_count FROM public.report_engineer_load(pg_temp.d('from'), pg_temp.d('today'))
+    WHERE engineer_id = pg_temp.uid('engineer')) = 3,
+  'задача без срока попадает в загрузку инженера');
+SELECT pg_temp.check(
+  (SELECT busy_days FROM public.report_engineer_load(pg_temp.d('from'), pg_temp.d('today'))
+    WHERE engineer_id = pg_temp.uid('engineer')) = 4,
+  'у задачи без срока занят день создания, и это ещё один день к трём прежним');
+SELECT pg_temp.check(
+  (SELECT busy_days FROM public.report_engineer_load(pg_temp.d('today'), pg_temp.d('today'))
+    WHERE engineer_id = pg_temp.uid('engineer')) IS NULL,
+  'в период без её дня создания задача без срока не попадает');
+
 -- ---------------------------------------------------------------- Аноним
 SELECT pg_temp.act_as_nobody();
 SET LOCAL ROLE anon;
