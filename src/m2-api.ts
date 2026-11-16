@@ -395,6 +395,51 @@ export interface StockReservationRecord {
   readonly updatedAt: string;
 }
 
+/** Строка разреза отчёта: сколько заявок, сколько из них закрыто и сколько просрочено. */
+export interface ReportCutItem {
+  readonly code: string;
+  readonly name: string;
+  readonly value: number;
+  readonly closed: number;
+  readonly overdue: number;
+}
+
+/** Гарантийность замен запчастей: Г (гарантийная), Н (новая), Б (бывшая в употреблении). */
+export interface ReportPartConditionItem {
+  readonly code: string;
+  readonly name: string;
+  readonly taskCount: number;
+  readonly positionCount: number;
+  readonly quantity: number;
+}
+
+/** Загрузка одного инженера за период: задачи и занятые дни из периода. */
+export interface ReportEngineerLoadItem {
+  readonly engineerId: string;
+  readonly name: string;
+  readonly taskCount: number;
+  readonly closedCount: number;
+  readonly overdueCount: number;
+  readonly busyDays: number;
+  readonly periodDays: number;
+  readonly workHours: number;
+}
+
+/** Затраты по прибору или плательщику за период. Видны только с правом `finance.read`. */
+export interface ReportSpendItem {
+  readonly id: string;
+  readonly name: string;
+  /** Уточнение в строке: заводской номер прибора, площадка и плательщик. */
+  readonly detail?: string;
+  readonly taskCount: number;
+  readonly invoiceCount: number;
+  readonly workAmount: number;
+  readonly partsAmount: number;
+  /** Ручная корректировка счёта: только в разрезе по плательщикам. */
+  readonly adjustmentAmount?: number;
+  readonly totalAmount: number;
+}
+
 export interface OperationsReportRecord {
   readonly period: { readonly from: string; readonly to: string };
   readonly metrics: {
@@ -408,6 +453,24 @@ export interface OperationsReportRecord {
   readonly tasksByStatus: readonly { readonly code: string; readonly name: string; readonly value: number }[];
   readonly tasksByWorkType: readonly { readonly code: string; readonly name: string; readonly value: number }[];
   readonly tasksByMonth: readonly { readonly key: string; readonly name: string; readonly value: number }[];
+  /** Причины обращений из акта: износ, вина пользователя, гарантийный случай. */
+  readonly tasksByReason: readonly ReportCutItem[];
+  /** Гарантийность работ: Г, Н и «не отмечено». */
+  readonly worksByModifier: readonly ReportCutItem[];
+  readonly tasksByEquipment: readonly ReportCutItem[];
+  readonly tasksBySite: readonly ReportCutItem[];
+  readonly tasksByEngineer: readonly ReportCutItem[];
+  readonly partsByCondition: readonly ReportPartConditionItem[];
+  readonly engineerLoad: readonly ReportEngineerLoadItem[];
+  readonly equipmentSpend: readonly ReportSpendItem[];
+  readonly payerSpend: readonly ReportSpendItem[];
+  /** Деньги в отчёте показываем только с правом `finance.read`. */
+  readonly canSeeFinance: boolean;
+  /**
+   * Разрезы считает база (миграции 0044 и 0045). Пока их нет на сервере, остаются
+   * прежние цифры, посчитанные в браузере, а новые разрезы пустые.
+   */
+  readonly databaseCuts: boolean;
 }
 
 /** Заявка для выгрузки отчёта в Excel: одна строка листа «Заявки». */
@@ -3737,7 +3800,139 @@ export class M2ApiClient {
     throwIfError(error, fallback);
   }
 
+  /**
+   * Отчёт за период. Разрезы считает база (миграции 0044 и 0045): на стенде тысячи
+   * задач, и тянуть их в браузер ради восьми разбивок нельзя. Деньги приходят только
+   * с правом `finance.read` — и спрашиваем мы их тоже только с ним, чтобы в журнале
+   * сервера не было лишних запросов от инженера.
+   *
+   * Пока миграций нет на сервере, отчёт откатывается к прежнему расчёту в браузере:
+   * страница продолжает показывать старые цифры, новые разрезы остаются пустыми,
+   * и об этом говорит флаг databaseCuts.
+   */
   public async operationsReport(from: string, to: string): Promise<OperationsReportRecord> {
+    const canSeeFinance = await this.hasPermission("finance.read");
+    const [summary, breakdown, parts, load] = await Promise.all([
+      this.db().rpc("report_task_summary", { p_from: from, p_to: to }),
+      this.db().rpc("report_task_breakdown", { p_from: from, p_to: to }),
+      this.db().rpc("report_part_warranty", { p_from: from, p_to: to }),
+      this.db().rpc("report_engineer_load", { p_from: from, p_to: to })
+    ]);
+    if (isMissingDatabaseFunction(summary.error) || isMissingDatabaseFunction(breakdown.error)) {
+      return this.operationsReportInBrowser(from, to, canSeeFinance);
+    }
+    throwIfError(summary.error, "Не получилось построить отчёт");
+    throwIfError(breakdown.error, "Не получилось построить отчёт");
+    throwIfError(parts.error, "Не получилось построить отчёт");
+    throwIfError(load.error, "Не получилось построить отчёт");
+    const spend = canSeeFinance
+      ? await Promise.all([
+          this.db().rpc("report_equipment_spend", { p_from: from, p_to: to }),
+          this.db().rpc("report_payer_spend", { p_from: from, p_to: to })
+        ])
+      : [];
+    for (const result of spend) throwIfError(result.error, "Не получилось посчитать затраты");
+    const summaryRow = asRow(Array.isArray(summary.data) ? summary.data[0] : summary.data);
+    const cuts = (section: string): readonly ReportCutItem[] => ((breakdown.data ?? []) as readonly unknown[])
+      .map((item: unknown) => asRow(item))
+      .filter((row: Row) => text(row, "section") === section)
+      .map((row: Row) => ({
+        code: text(row, "item_code"),
+        name: text(row, "item_name"),
+        value: numberValue(row.task_count) ?? 0,
+        closed: numberValue(row.closed_count) ?? 0,
+        overdue: numberValue(row.overdue_count) ?? 0
+      }));
+    const taskCount = numberValue(summaryRow.task_count) ?? 0;
+    const months = new Map(cuts("month").map((item) => [item.code, item.value] as const));
+    return {
+      period: { from, to },
+      metrics: {
+        taskCount,
+        closedCount: numberValue(summaryRow.closed_count) ?? 0,
+        closedOnTimePercent: numberValue(summaryRow.closed_on_time_percent) ?? 0,
+        overdueCount: numberValue(summaryRow.overdue_count) ?? 0,
+        activeEngineerCount: numberValue(summaryRow.engineer_count) ?? 0,
+        belowMinimumCount: 0
+      },
+      tasksByStatus: cuts("status").map((item) => ({
+        code: item.code,
+        // Названия этапов в отчёте те же, что в остальном интерфейсе.
+        name: TASK_STATUS_LABELS[item.code] ?? item.name,
+        value: item.value
+      })),
+      tasksByWorkType: cuts("work_type"),
+      // Пустые месяцы периода тоже нужны: иначе в графике пропадёт провал.
+      tasksByMonth: reportMonthsInRange(from, to).map((key) => ({
+        key,
+        name: reportMonthLabel(key),
+        value: months.get(key) ?? 0
+      })),
+      tasksByReason: cuts("reason"),
+      worksByModifier: cuts("modifier"),
+      tasksByEquipment: cuts("equipment"),
+      tasksBySite: cuts("site"),
+      tasksByEngineer: cuts("engineer"),
+      partsByCondition: ((parts.data ?? []) as readonly unknown[]).map((item: unknown) => {
+        const row = asRow(item);
+        return {
+          code: text(row, "condition_code"),
+          name: text(row, "condition_name"),
+          taskCount: numberValue(row.task_count) ?? 0,
+          positionCount: numberValue(row.position_count) ?? 0,
+          quantity: numberValue(row.quantity) ?? 0
+        };
+      }),
+      engineerLoad: ((load.data ?? []) as readonly unknown[]).map((item: unknown) => {
+        const row = asRow(item);
+        return {
+          engineerId: text(row, "engineer_id"),
+          name: text(row, "engineer_name"),
+          taskCount: numberValue(row.task_count) ?? 0,
+          closedCount: numberValue(row.closed_count) ?? 0,
+          overdueCount: numberValue(row.overdue_count) ?? 0,
+          busyDays: numberValue(row.busy_days) ?? 0,
+          periodDays: numberValue(row.period_days) ?? 0,
+          workHours: numberValue(row.work_hours) ?? 0
+        };
+      }),
+      equipmentSpend: ((spend[0]?.data ?? []) as readonly unknown[]).map((item: unknown) => {
+        const row = asRow(item);
+        const serial = text(row, "serial_number");
+        const model = optionalText(row, "equipment_name");
+        return {
+          id: text(row, "equipment_id"),
+          name: [model, serial].filter(Boolean).join(" · ") || serial,
+          ...(optionalText(row, "site_name") || optionalText(row, "payer_name")
+            ? { detail: [optionalText(row, "site_name"), optionalText(row, "payer_name")].filter(Boolean).join(" · ") }
+            : {}),
+          taskCount: numberValue(row.task_count) ?? 0,
+          invoiceCount: numberValue(row.invoice_count) ?? 0,
+          workAmount: numberValue(row.work_amount) ?? 0,
+          partsAmount: numberValue(row.parts_amount) ?? 0,
+          totalAmount: numberValue(row.total_amount) ?? 0
+        };
+      }),
+      payerSpend: ((spend[1]?.data ?? []) as readonly unknown[]).map((item: unknown) => {
+        const row = asRow(item);
+        return {
+          id: text(row, "payer_id"),
+          name: text(row, "payer_name"),
+          taskCount: numberValue(row.task_count) ?? 0,
+          invoiceCount: numberValue(row.invoice_count) ?? 0,
+          workAmount: numberValue(row.work_amount) ?? 0,
+          partsAmount: numberValue(row.parts_amount) ?? 0,
+          adjustmentAmount: numberValue(row.adjustment_amount) ?? 0,
+          totalAmount: numberValue(row.total_amount) ?? 0
+        };
+      }),
+      canSeeFinance,
+      databaseCuts: true
+    };
+  }
+
+  /** Прежний расчёт в браузере: страховка на время, пока на сервере нет миграций 0044 и 0045. */
+  private async operationsReportInBrowser(from: string, to: string, canSeeFinance: boolean): Promise<OperationsReportRecord> {
     const bounds = reportPeriodBounds(from, to);
     // «Сегодня» по Москве один раз на весь отчёт, а не на каждую задачу.
     const today = companyToday();
@@ -3799,7 +3994,18 @@ export class M2ApiClient {
         key,
         name: reportMonthLabel(key),
         value: byMonth.get(key) ?? 0
-      }))
+      })),
+      tasksByReason: [],
+      worksByModifier: [],
+      tasksByEquipment: [],
+      tasksBySite: [],
+      tasksByEngineer: [],
+      partsByCondition: [],
+      engineerLoad: [],
+      equipmentSpend: [],
+      payerSpend: [],
+      canSeeFinance,
+      databaseCuts: false
     };
   }
 
