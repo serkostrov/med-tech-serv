@@ -30,6 +30,7 @@ import {
   priceRowPeriodText,
   previewBulkPrices,
   zeroPriceCount,
+  zeroPriceWarning,
   roundToKopecks,
   type PriceListRow
 } from "./price-list.js";
@@ -311,6 +312,8 @@ describe("прайс: пересчёт процентом и суммой", () =
   it("у прибавки и у суммы своя причина про минус", () => {
     const lines = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2026-11-16" });
     assert.equal(previewBulkPrices(lines, { mode: "delta", value: -5000 })[0]?.skipReason, "Цена ушла ниже нуля: проверьте прибавку");
+    // Поле «Сумма» минус не принимает, но правило держим и для него: через функцию
+    // пересчёта ходит не только окно, и обнулять отрицательную сумму всё равно нельзя.
     assert.equal(previewBulkPrices(lines, { mode: "fixed", value: -10 })[0]?.skipReason, "Цена ниже нуля: укажите сумму от нуля");
     assert.deepEqual(bulkPriceItems(previewBulkPrices(lines, { mode: "fixed", value: -10 })), []);
   });
@@ -507,6 +510,15 @@ describe("прайс: экран и его место в приложении", 
 });
 
 describe("прайс: ноль говорит о себе сам", () => {
+  it("предупреждение о нулевых ценах согласовано целиком, а не только числом", () => {
+    assert.equal(zeroPriceWarning(0), "");
+    assert.equal(zeroPriceWarning(1), "Станет бесплатной 1 строка: в счёт такая работа не попадёт.");
+    assert.equal(zeroPriceWarning(2), "Станут бесплатными 2 строки: в счёт такие работы не попадут.");
+    assert.equal(zeroPriceWarning(5), "Станут бесплатными 5 строк: в счёт такие работы не попадут.");
+    assert.equal(zeroPriceWarning(11), "Станут бесплатными 11 строк: в счёт такие работы не попадут.");
+    assert.equal(zeroPriceWarning(21), "Станет бесплатной 21 строка: в счёт такая работа не попадёт.");
+  });
+
   it("в окне правки объясняет, что значит нулевая цена (находка 39)", async () => {
     const page = await readFile(new URL("./PricePage.tsx", import.meta.url), "utf8");
     assert.match(page, /parseAmount\(amountDraft\) === 0 \?/u);
@@ -516,9 +528,9 @@ describe("прайс: ноль говорит о себе сам", () => {
   it("в массовом изменении предупреждает про нули отдельной строкой (находка 40)", async () => {
     const page = await readFile(new URL("./PricePage.tsx", import.meta.url), "utf8");
     assert.match(page, /const zeroCount = zeroPriceCount\(changes\);/u);
-    assert.match(page, /zeroCount === 0 \? null :/u);
-    assert.match(page, /в счёт такие работы не попадут/u);
-    assert.match(page, /form-hint form-hint--warning/u);
+    assert.match(page, /zeroCount === 0 \? null : <p className="form-hint form-hint--warning">\{zeroPriceWarning\(zeroCount\)\}<\/p>/u);
+    // У пропущенной строки новая сумма не должна выглядеть результатом.
+    assert.match(page, /change\.skipReason \? <span className="is-empty">\{formatMoney\(change\.after\)\}<\/span>/u);
   });
 });
 

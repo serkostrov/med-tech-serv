@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
 import type { ReferenceCatalogDescriptor, ReferenceCatalogValue } from "./m2-api.js";
-import { referenceAttributeText, referenceAttributesSummary, referenceValueName } from "./reference-display.js";
+import { isSelectedReference, referenceAttributeText, referenceAttributesSummary, referenceValueName } from "./reference-display.js";
 
 const modelFields: ReferenceCatalogDescriptor["fields"] = [
   { key: "manufacturerId", label: "Производитель", type: "reference", required: true, referenceCatalog: "manufacturers" },
@@ -53,6 +53,24 @@ describe("справочники: на экране названия, а не к
     );
     assert.equal(summary, "Производитель: Beckman Coulter · Категория: Биохимические анализаторы");
     assert.doesNotMatch(summary, /m-bc/u);
+  });
+
+  it("битая привязка видна, а незагруженный справочник просто молчит", () => {
+    // Справочник загружен, записи в нём нет — об этом нужно сказать, а не спрятать строку.
+    assert.equal(referenceAttributeText(modelFields[0], "нет-такого", related), "запись не найдена");
+    // Справочник ещё не пришёл: показывать нечего, но и код показывать нельзя.
+    assert.equal(referenceAttributeText(modelFields[0], "нет-такого", {}), "—");
+    assert.match(referenceAttributesSummary(modelFields, { manufacturerId: "удалённый" }, related), /запись не найдена/u);
+  });
+
+  it("выбранную запись узнаёт и по идентификатору, и по коду", () => {
+    const value = { id: "3f2a7c10", code: "m-bc", name: "Beckman Coulter", isActive: false, attributes: {} };
+    assert.equal(isSelectedReference(value, "3f2a7c10"), true);
+    assert.equal(isSelectedReference(value, "m-bc"), true);
+    assert.equal(isSelectedReference(value, "другое"), false);
+    assert.equal(isSelectedReference(value, ""), false);
+    assert.equal(isSelectedReference(value, null), false);
+    assert.equal(isSelectedReference(value, undefined), false);
   });
 
   it("пустые параметры не превращаются в «null» и не занимают место", () => {

@@ -225,7 +225,9 @@ describe("shared UI architecture", () => {
     assert.match(operations, /className="table-scroll engineer-load-scroll"/u);
     assert.match(css, /\.equipment-registry-scroll\s*\{\s*container-type:\s*inline-size;\s*\}/u);
     assert.match(css, /\.engineer-load-scroll\s*\{\s*container-type:\s*inline-size;\s*\}/u);
-    assert.match(css, /@container \(max-width: 680px\)[\s\S]*?\.equipment-registry-table thead \{ display: none; \}/u);
+    // Карточки включаются там же, где таблица перестаёт помещаться: min-width у `.data-table` — 760px.
+    assert.match(css, /\.data-table\s*\{[^}]*min-width:\s*760px/su);
+    assert.match(css, /@container \(max-width: 760px\)[\s\S]*?\.equipment-registry-table thead \{ display: none; \}/u);
     assert.match(css, /@container \(max-width: 760px\)[\s\S]*?\.engineer-load-table thead \{ display: none; \}/u);
     // Серийный номер не рвётся по буквам: нужен селектор сильнее, чем `.data-table td`.
     assert.match(css, /\.equipment-registry-table td\.equipment-registry-table__serial\s*\{[^}]*white-space:\s*nowrap/u);

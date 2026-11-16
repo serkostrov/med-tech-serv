@@ -1,4 +1,5 @@
 import { formatIsoCalendarDate } from "./date-format.js";
+import { russianCountForm } from "./equipment-changes.js";
 
 /**
  * Строка прайса: цена вида работ, действующая с `validFrom` по `validTo`
@@ -261,6 +262,19 @@ export interface BulkPriceItem {
  */
 export function zeroPriceCount(changes: readonly BulkPriceChange[]): number {
   return changes.filter((change) => !change.skipReason && change.after === 0).length;
+}
+
+/**
+ * Предупреждение о нулевых ценах: согласовано целиком, а не только числом.
+ * «Станет бесплатной 1 строка: в счёт такая работа не попадёт.»
+ */
+export function zeroPriceWarning(count: number): string {
+  if (count === 0) return "";
+  return russianCountForm(count, [
+    `Станет бесплатной ${count} строка: в счёт такая работа не попадёт.`,
+    `Станут бесплатными ${count} строки: в счёт такие работы не попадут.`,
+    `Станут бесплатными ${count} строк: в счёт такие работы не попадут.`
+  ]);
 }
 
 /** Строки, которые уйдут в базу: без пропущенных и без тех, где цена не меняется. */

@@ -23,6 +23,25 @@ function expressionBefore(source: string, closeIndex: number): string | null {
   return null;
 }
 
+/**
+ * Куски исходника внутри вызова общего помощника: там слово уже выбрано по форме числа,
+ * и склеенным оно только выглядит («Станет бесплатной ${count} строка…»).
+ */
+function helperCallRanges(source: string): readonly (readonly [number, number])[] {
+  const ranges: (readonly [number, number])[] = [];
+  for (const match of source.matchAll(/(?:formatRussianCount|russianCountForm)\s*\(/gu)) {
+    let depth = 0;
+    for (let index = match.index + match[0].length - 1; index < source.length; index += 1) {
+      if (source[index] === "(") depth += 1;
+      else if (source[index] === ")") {
+        depth -= 1;
+        if (depth === 0) { ranges.push([match.index, index]); break; }
+      }
+    }
+  }
+  return ranges;
+}
+
 async function sourceFiles(): Promise<readonly string[]> {
   const root = new URL("./", import.meta.url);
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
@@ -87,22 +106,23 @@ describe("окончания в числах", () => {
     assert.match(price, /russianCountForm\(items\.length, \["Изменится", "Изменятся", "Изменятся"\]\)/u);
   });
 
-  it("нигде в интерфейсе число не склеено со словом напрямую", async () => {
+  it("счётчик штук нигде не склеен со словом напрямую", async () => {
     const files = await sourceFiles();
     const violations: string[] = [];
     for (const file of files) {
       const source = await readFile(file, "utf8");
-      const lines = source.split("\n");
-      for (const [index, line] of lines.entries()) {
-        for (const match of line.matchAll(/\}[  ]?([А-Яа-яЁё]+)/gu)) {
-          const word = match[1] ?? "";
-          if (UNCHANGED_AFTER_NUMBER.has(word)) continue;
-          const expression = expressionBefore(line, match.index);
-          if (expression === null || !COUNT_EXPRESSION.test(expression)) continue;
-          // Слово уже взято из общего помощника, дальше по строке идёт обычный текст.
-          if (/(?:formatRussianCount|russianCountForm)\s*\(/u.test(expression)) continue;
-          violations.push(`${file.split("/src/")[1] ?? file}:${index + 1} — «${expression.trim()} ${word}»`);
-        }
+      const ranges = helperCallRanges(source);
+      for (const match of source.matchAll(/\}[ \u00A0]?([А-Яа-яЁё]+)/gu)) {
+        const word = match[1] ?? "";
+        if (UNCHANGED_AFTER_NUMBER.has(word)) continue;
+        // Внутри вызова помощника все три формы написаны рядом, проверять нечего.
+        if (ranges.some(([from, to]) => match.index > from && match.index < to)) continue;
+        const expression = expressionBefore(source, match.index);
+        if (expression === null || !COUNT_EXPRESSION.test(expression)) continue;
+        // Слово уже взято из общего помощника, дальше идёт обычный текст.
+        if (/(?:formatRussianCount|russianCountForm)\s*\(/u.test(expression)) continue;
+        const line = source.slice(0, match.index).split("\n").length;
+        violations.push(`${file.split("/src/")[1] ?? file}:${line} — «${expression.trim()} ${word}»`);
       }
     }
     assert.deepEqual(violations, [], `Число нужно считать через formatRussianCount:\n${violations.join("\n")}`);

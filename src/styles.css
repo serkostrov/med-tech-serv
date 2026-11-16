@@ -8382,8 +8382,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .equipment-registry-actions { gap: 4px; }
 /* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана. */
 .equipment-registry-scroll { container-type: inline-size; }
-/* Узко (телефон): прибор карточкой, подпись над каждым значением, слова целиком. */
-@container (max-width: 680px) {
+/* Карточки включаются ровно там, где таблица перестаёт помещаться (её min-width 760px),
+   иначе осталась бы полоса ширин, где реестр ездит вбок внутри карточки раздела. */
+@container (max-width: 760px) {
   .equipment-registry-table { min-width: 0; }
   .equipment-registry-table thead { display: none; }
   .equipment-registry-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 14px; padding: 14px 12px; border-bottom: 1px solid var(--color-border-soft); }
@@ -8549,7 +8550,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .competency-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .competency-tags .tag { max-width: 100%; padding: 3px 8px; overflow-wrap: break-word; white-space: normal; }
 .engineer-load-table td:first-child { min-width: 140px; }
-.engineer-load-table .competency-tags { min-width: 200px; }
+/* 200px здесь не давали таблице уместиться на ноутбуке 1280: карточка раздела там 985
+   точек, а таблице нужно было 992, и она ездила вбок на семь точек. Теги и так переносятся. */
+.engineer-load-table .competency-tags { min-width: 160px; }
 /* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана. */
 .engineer-load-scroll { container-type: inline-size; }
 /* Узко (телефон): инженер карточкой. Раньше «Загрузка», «Открытые», «В работе»,

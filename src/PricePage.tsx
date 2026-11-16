@@ -30,6 +30,7 @@ import {
   parseAmount,
   parseSignedNumber,
   zeroPriceCount,
+  zeroPriceWarning,
   previewBulkPrices,
   priceLineAmountText,
   priceLineNextText,
@@ -471,13 +472,11 @@ export function PricePage() {
               <span className="price-preview__name"><strong>{change.workTypeName}</strong><small>{change.guaranteeCategoryName}</small></span>
               <span className="price-preview__amounts">
                 {change.before === undefined ? <span className="is-empty">{PRICE_NOT_SET_LABEL}</span> : formatMoney(change.before)}
-                {change.after === undefined ? null : <> → <strong>{formatMoney(change.after)}</strong></>}
+                {change.after === undefined ? null : <> → {change.skipReason ? <span className="is-empty">{formatMoney(change.after)}</span> : <strong>{formatMoney(change.after)}</strong>}</>}
               </span>
               {change.skipReason ? <small className="price-preview__skip">{change.skipReason}</small> : null}
             </li>)}</ul>}
-        {zeroCount === 0 ? null : <p className="form-hint form-hint--warning">
-          {`${russianCountForm(zeroCount, ["Станет", "Станут", "Станут"])} бесплатными ${formatRussianCount(zeroCount, ["строка", "строки", "строк"])}: в счёт такие работы не попадут.`}
-        </p>}
+        {zeroCount === 0 ? null : <p className="form-hint form-hint--warning">{zeroPriceWarning(zeroCount)}</p>}
         {bulkNumber === null ? null : <p className="form-hint">
           {items.length === 0
             ? "Ни одна строка не изменится."

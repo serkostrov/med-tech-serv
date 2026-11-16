@@ -114,7 +114,6 @@ export function formatEquipmentAssignmentDate(value: string): string {
   return formatDisplayDate(value, true);
 }
 
-/** Склонение счётчика: 1 запись, 2 записи, 5 записей. */
 /**
  * Форма слова по числу: «1 строка», «2 строки», «5 строк».
  * Годится не только для существительных, но и для глагола рядом с числом
@@ -126,6 +125,7 @@ export function russianCountForm(count: number, forms: readonly [string, string,
   return n > 10 && n < 20 ? forms[2] : n1 === 1 ? forms[0] : n1 >= 2 && n1 <= 4 ? forms[1] : forms[2];
 }
 
+/** Склонение счётчика: 1 запись, 2 записи, 5 записей. */
 export function formatRussianCount(count: number, forms: readonly [string, string, string]): string {
   return `${count} ${russianCountForm(count, forms)}`;
 }
