@@ -124,9 +124,11 @@ BEGIN
   INSERT INTO files (task_id, kind, original_name, content_type, byte_size, storage_key, uploaded_by)
   VALUES (second, 'act', 'act2.jpg', 'image/jpeg', 10, 'k/act2', (SELECT id FROM ids WHERE k = 'coord'))
   RETURNING id INTO act_b;
-  INSERT INTO task_closures (task_id, act_file_id, submitted_by) VALUES
-    ((SELECT id FROM ids WHERE k = 'task_fresh'), act_a, (SELECT id FROM ids WHERE k = 'eng')),
-    (second, act_b, (SELECT id FROM ids WHERE k = 'eng'));
+  -- Моменты сдачи разные: в жизни наряды сдают не в одну микросекунду, а паспорт прибора
+  -- берёт показание последней сдачи. Одинаковое время сделало бы проверку случайной.
+  INSERT INTO task_closures (task_id, act_file_id, submitted_by, submitted_at) VALUES
+    ((SELECT id FROM ids WHERE k = 'task_fresh'), act_a, (SELECT id FROM ids WHERE k = 'eng'), now() - interval '2 hours'),
+    (second, act_b, (SELECT id FROM ids WHERE k = 'eng'), now() - interval '1 hour');
 END $$;
 
 -- ---------------------------------------------------------------- Случай из аудита
