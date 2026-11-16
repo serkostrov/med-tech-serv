@@ -121,16 +121,28 @@ export function taskRegistrySheets(
 }
 
 const INVENTORY_HEADER = [
-  "Артикул", "Наименование", "На складе", "В резерве", "Доступно",
+  "Артикул", "Артикулы поставщиков", "Наименование", "На складе",
+  "Гарантийных", "Новых", "Б/у",
+  "В резерве", "Доступно",
   "У инженеров", "Минимальный остаток", "Ниже минимума", "В работе", "Примечания"
 ];
 
-/** Лист «Склад»: остатки номенклатуры. Цен здесь нет — они закрыты в базе. */
+/**
+ * Лист «Склад»: остатки номенклатуры. Цен здесь нет — они закрыты в базе.
+ *
+ * Разбивка по состояниям стоит сразу за общим остатком, как в таблице на экране
+ * («Г · Н · Б»): по файлу должно быть видно то же, что видно в реестре, иначе
+ * выгрузка и экран расходятся и их начинают сверять руками.
+ */
 export function inventoryRegistrySheets(items: readonly InventoryPartRecord[]): readonly XlsxSheet[] {
   const rows: XlsxCell[][] = items.map((item) => [
     item.articleNumber,
+    item.aliases ?? "",
     item.name,
     item.onHandQuantity,
+    item.onHandByCondition.G,
+    item.onHandByCondition.N,
+    item.onHandByCondition.B,
     item.reservedQuantity,
     item.availableQuantity,
     item.withEngineersQuantity,
@@ -143,7 +155,7 @@ export function inventoryRegistrySheets(items: readonly InventoryPartRecord[]): 
     name: "Склад",
     rows: [INVENTORY_HEADER, ...rows],
     headerRow: 1,
-    widths: [20, 40, 12, 12, 12, 14, 20, 15, 10, 40]
+    widths: [20, 26, 40, 12, 13, 10, 8, 12, 12, 14, 20, 15, 10, 40]
   }];
 }
 

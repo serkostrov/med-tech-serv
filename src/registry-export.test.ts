@@ -108,7 +108,7 @@ describe("выгрузка реестра задач", () => {
 describe("выгрузка склада", () => {
   const parts: InventoryPartRecord[] = [
     {
-      id: "p-1", articleNumber: "ART-1", name: "Клапан", minimumStock: 5, isActive: true,
+      id: "p-1", articleNumber: "ART-1", aliases: "VLV-1, 77-200", name: "Клапан", minimumStock: 5, isActive: true,
       onHandQuantity: 2, reservedQuantity: 1, availableQuantity: 1, withEngineersQuantity: 3,
       onHandByCondition: { G: 1, N: 1, B: 0 }, availableByCondition: { G: 1, N: 0, B: 0 },
       belowMinimum: true, notes: "Заказан"
@@ -124,8 +124,16 @@ describe("выгрузка склада", () => {
   it("отдаёт остатки и подсветку минимума словами", () => {
     const [sheet] = inventoryRegistrySheets(parts);
     assert.equal(sheet?.name, "Склад");
-    assert.deepEqual(sheet?.rows[1], ["ART-1", "Клапан", 2, 1, 1, 3, 5, "Да", "Да", "Заказан"]);
-    assert.deepEqual(sheet?.rows[2], ["ART-2", "Шланг", 0, 0, 0, 0, 0, "", "", ""]);
+    assert.deepEqual(sheet?.rows[1], ["ART-1", "VLV-1, 77-200", "Клапан", 2, 1, 1, 0, 1, 1, 3, 5, "Да", "Да", "Заказан"]);
+    assert.deepEqual(sheet?.rows[2], ["ART-2", "", "Шланг", 0, 0, 0, 0, 0, 0, 0, 0, "", "", ""]);
+  });
+
+  it("разбивка по состояниям сходится с общим остатком и стоит сразу за ним", () => {
+    const [sheet] = inventoryRegistrySheets(parts);
+    const header = sheet?.rows[0] ?? [];
+    assert.deepEqual(header.slice(3, 7), ["На складе", "Гарантийных", "Новых", "Б/у"]);
+    const row = sheet?.rows[1] ?? [];
+    assert.equal(Number(row[4]) + Number(row[5]) + Number(row[6]), Number(row[3]));
   });
 
   it("в выгрузке склада нет ни одного столбца с ценой: цены закрыты в базе", () => {
