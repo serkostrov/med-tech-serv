@@ -2588,6 +2588,12 @@ function notificationErrorText(code: string): string {
   return code.split(":").map((part) => NOTIFICATION_ERROR_TEXT[part.trim()] ?? part.trim()).filter(Boolean).join(": ");
 }
 
+/** Ярлык события для подписи под темой письма: пустая строка, если тема его уже называет. */
+function eventLabelOutsideSubject(subject: string | undefined, label: string): string {
+  if (!subject) return "";
+  return subject.toLocaleLowerCase("ru-RU").includes(label.toLocaleLowerCase("ru-RU")) ? "" : label;
+}
+
 function NotificationsPage() {
   const { pageSize, pageSizeRef, setPageSize } = usePageSize("notifications");
   const [items, setItems] = useState<readonly NotificationJournalRecord[]>([]);
@@ -2652,8 +2658,10 @@ function NotificationsPage() {
                   <td className="notification-table__when">{formatDisplayDate(notification.createdAt, true)}</td>
                   <td>{notification.recipientAddress}</td>
                   <td><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button><small>{[
-                    // Без темы ярлык события уже стоит заголовком строки: второй раз его не печатаем.
-                    notification.subject ? eventLabel[notification.eventCode] ?? "Событие склада" : "",
+                    // Ярлык события печатаем, только если его нет в теме: без темы он уже стоит
+                    // заголовком строки, а в теме вроде «Новый резерв запчастей по задаче З-1»
+                    // повторял бы её начало слово в слово.
+                    eventLabelOutsideSubject(notification.subject, eventLabel[notification.eventCode] ?? "Событие склада"),
                     notification.attempts > 1 ? `попыток: ${notification.attempts}` : ""
                   ].filter(Boolean).join(" · ")}</small></td>
                   <td>{channelLabel[notification.channel] ?? notification.channel}</td>
