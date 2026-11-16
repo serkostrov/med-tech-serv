@@ -405,7 +405,9 @@ AS $$
   )
   SELECT
     engineer_tasks.engineer_id,
-    coalesce(engineer.full_name, 'Инженер удалён'),
+    -- Инженер, которого удалили, в задаче становится NULL, и такие строки отсеяны
+    -- выше. Имени нет только тогда, когда строку сотрудника не отдали правила строк.
+    coalesce(engineer.full_name, 'Инженер'),
     count(*)::integer,
     count(*) FILTER (WHERE engineer_tasks.is_closed)::integer,
     count(*) FILTER (WHERE engineer_tasks.is_overdue)::integer,
@@ -415,7 +417,7 @@ AS $$
     FROM engineer_tasks
     LEFT JOIN public.users AS engineer ON engineer.id = engineer_tasks.engineer_id
    GROUP BY engineer_tasks.engineer_id, engineer.full_name
-   ORDER BY count(*) DESC, coalesce(engineer.full_name, 'Инженер удалён')
+   ORDER BY count(*) DESC, coalesce(engineer.full_name, 'Инженер')
 $$;
 
 COMMENT ON FUNCTION public.report_engineer_load(date, date) IS
