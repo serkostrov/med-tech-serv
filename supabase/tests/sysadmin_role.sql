@@ -112,4 +112,13 @@ SELECT pg_temp.check(NOT public.app_has_permission('finance.read'),
   'обычному администратору деньги по-прежнему недоступны');
 SELECT pg_temp.act_as_nobody();
 
+-- Новое право из будущей миграции достаётся системному администратору само.
+INSERT INTO permissions (code, name, is_sensitive) VALUES ('future.thing', 'Право из будущей миграции', false);
+SELECT pg_temp.check(
+  EXISTS (SELECT 1 FROM access_role_permissions WHERE role_key = 'sysadmin' AND permission_code = 'future.thing'),
+  'право, заведённое после миграции, сразу есть у системного администратора');
+SELECT pg_temp.check(
+  NOT EXISTS (SELECT 1 FROM access_role_permissions WHERE role_key = 'admin' AND permission_code = 'future.thing'),
+  'обычному администратору новое право само не достаётся');
+
 ROLLBACK;

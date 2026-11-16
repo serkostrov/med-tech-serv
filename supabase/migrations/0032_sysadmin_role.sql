@@ -20,5 +20,28 @@ SELECT 'sysadmin', available.code
   FROM permissions AS available
 ON CONFLICT DO NOTHING;
 
+-- Чтобы «все права» не устарели: новое право из будущей миграции сразу достаётся
+-- системному администратору. Без этого список прав разошёлся бы с обещанием роли,
+-- и заметили бы это только тогда, когда он чего-то не увидел.
+CREATE OR REPLACE FUNCTION public.grant_new_permission_to_sysadmin()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  INSERT INTO public.access_role_permissions (role_key, permission_code)
+  VALUES ('sysadmin', NEW.code)
+  ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END $$;
+
+REVOKE ALL ON FUNCTION public.grant_new_permission_to_sysadmin() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS permissions_grant_to_sysadmin ON permissions;
+CREATE TRIGGER permissions_grant_to_sysadmin
+  AFTER INSERT ON permissions
+  FOR EACH ROW EXECUTE FUNCTION public.grant_new_permission_to_sysadmin();
+
 COMMENT ON TABLE access_roles IS
   'Роли доступа. Встроенные: администратор ведёт учётные записи и настройки, системный администратор видит всё (0032), остальные роли работают по ТЗ.';
