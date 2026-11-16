@@ -9187,3 +9187,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Карточка счёта: под ценой — откуда она, у скидки — ссылка «Добавить» или «Изменить» */
 .invoice-line__source { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; font-weight: 400; white-space: nowrap; }
 .invoice-correct-link { display: block; margin-top: 4px; font-size: 13px; }
+
+/* История цен в окне: над таблицей — для какой категории приборов эта цена */
+.price-history { display: grid; gap: 10px; }
+.price-history__scope { margin: 0; color: var(--color-muted); font-size: 13px; }

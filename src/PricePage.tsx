@@ -5,6 +5,7 @@ import {
   ConfirmationDialog,
   DataTableShell,
   DatePicker,
+  Dialog,
   DialogForm,
   MetricCard,
   PageIntro,
@@ -73,29 +74,60 @@ function categoryOptions(values: readonly ReferenceCatalogValue[], rows: readonl
     .map((value) => ({ id: value.id, name: value.name }));
 }
 
-/** История цен строки: периоды сверху вниз от новых к старым, будущую цену можно убрать. */
-function PriceHistory({ line, today, canWrite, onDelete }: {
-  readonly line: PriceLine;
+/**
+ * История цен строки — в отдельном окне, а не раскрытием строки таблицы: в раскрытой
+ * строке было непонятно, что это и к чему относится. Периоды от новых к старым,
+ * будущую цену можно убрать, отсюда же — сразу изменить цену.
+ */
+function PriceHistoryDialog({ line, today, canWrite, onClose, onDelete, onEdit }: {
+  readonly line: PriceLine | null;
   readonly today: string;
   readonly canWrite: boolean;
-  readonly onDelete: (row: PriceListRow) => void;
+  readonly onClose: () => void;
+  readonly onDelete: (line: PriceLine, row: PriceListRow) => void;
+  readonly onEdit: (line: PriceLine) => void;
 }) {
-  if (line.history.length === 0) return <p className="price-history__empty">{PRICE_NOT_SET_HINT}</p>;
-  return <ul className="price-history__list">
-    {line.history.map((row) => {
-      const future = row.validFrom > today;
-      const active = priceRowActiveOn(row, today);
-      return <li key={row.id}>
-        <strong>{formatMoney(row.amount)}</strong>
-        <span>{priceRowPeriodText(row)}</span>
-        <small>{guaranteeWorkLabel(row.includeGuaranteeWork)}</small>
-        {active ? <StatusBadge tone="success">Действует</StatusBadge> : future ? <StatusBadge tone="purple">Ещё не началась</StatusBadge> : <StatusBadge tone="neutral">В истории</StatusBadge>}
-        {canWrite && canDeletePriceRow(row, today)
-          ? <Button className="button--compact" onClick={() => onDelete(row)} variant="ghost">Убрать</Button>
-          : null}
-      </li>;
-    })}
-  </ul>;
+  return <Dialog
+    description="Какая цена действовала и с какого по какое число. В счёт берётся цена, которая действовала в день работ."
+    footer={<>
+      <Button onClick={onClose} variant="secondary">Закрыть</Button>
+      {canWrite && line ? <Button onClick={() => onEdit(line)}>{line.current ? "Изменить цену" : "Задать цену"}</Button> : null}
+    </>}
+    onOpenChange={(open) => { if (!open) onClose(); }}
+    open={Boolean(line)}
+    size="lg"
+    title={line ? `История цен · ${line.workTypeName}` : "История цен"}
+  >
+    {line ? <div className="price-history">
+      <p className="price-history__scope">{line.guaranteeCategoryName}</p>
+      {line.history.length === 0
+        ? <p className="price-history__empty">{PRICE_NOT_SET_HINT}</p>
+        : <div className="table-scroll"><table className="data-table">
+          <thead><tr>
+            <th className="numeric" scope="col">Цена</th>
+            <th scope="col">Период</th>
+            <th scope="col">Гарантия</th>
+            <th scope="col">Сейчас</th>
+            {canWrite ? <th scope="col"><span className="sr-only">Действия</span></th> : null}
+          </tr></thead>
+          <tbody>{line.history.map((row) => {
+            const future = row.validFrom > today;
+            const active = priceRowActiveOn(row, today);
+            return <tr key={row.id}>
+              <td className="numeric"><strong>{formatMoney(row.amount)}</strong></td>
+              <td>{priceRowPeriodText(row)}</td>
+              <td>{guaranteeWorkLabel(row.includeGuaranteeWork)}</td>
+              <td>{active
+                ? <StatusBadge tone="success">Действует</StatusBadge>
+                : future ? <StatusBadge tone="purple">Ещё не началась</StatusBadge> : <StatusBadge tone="neutral">В истории</StatusBadge>}</td>
+              {canWrite ? <td>{canDeletePriceRow(row, today)
+                ? <Button className="button--compact" onClick={() => onDelete(line, row)} variant="ghost">Убрать</Button>
+                : null}</td> : null}
+            </tr>;
+          })}</tbody>
+        </table></div>}
+    </div> : null}
+  </Dialog>;
 }
 
 /**
@@ -111,7 +143,8 @@ export function PricePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [canWrite, setCanWrite] = useState(false);
   const [search, setSearch] = useState("");
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(() => new Set());
+  // Открытая история — по ключу строки: после правки цены окно показывает свежую историю.
+  const [historyKey, setHistoryKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -175,14 +208,7 @@ export function PricePage() {
   const planned = lines.filter((line) => line.next).length;
   const counting = loading && rows.length === 0;
 
-  const toggleHistory = (key: string) => {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(key)) next.delete(key);
-      else next.add(key);
-      return next;
-    });
-  };
+  const historyLine = historyKey ? lines.find((line) => line.key === historyKey) ?? null : null;
 
   const toggleSelected = (key: string, on: boolean) => {
     setSelected((current) => {
@@ -351,7 +377,6 @@ export function PricePage() {
                   {canWrite ? <th scope="col"><span className="sr-only">Действия</span></th> : null}
                 </tr></thead>
                 <tbody>{visible.map((line) => {
-                  const open = expanded.has(line.key);
                   const nextText = priceLineNextText(line);
                   return <React.Fragment key={line.key}>
                     <tr className={selected.has(line.key) ? "data-table__selected" : ""}>
@@ -370,27 +395,29 @@ export function PricePage() {
                         ? <StatusBadge tone={line.current.includeGuaranteeWork ? "info" : "neutral"}>{guaranteeWorkLabel(line.current.includeGuaranteeWork)}</StatusBadge>
                         : "—"}</td>
                       <td>{line.history.length === 0 ? <span className="muted">—</span> : <button
-                        aria-controls={`price-history-${line.key}`}
-                        aria-expanded={open}
                         className="text-button"
-                        onClick={() => toggleHistory(line.key)}
+                        onClick={() => setHistoryKey(line.key)}
                         type="button"
-                      >{open ? "Скрыть историю" : `Все цены · ${line.history.length}`}</button>}</td>
+                      >{formatRussianCount(line.history.length, ["цена", "цены", "цен"])}</button>}</td>
                       {canWrite ? <td><div className="table-actions"><Button
                         className="button--compact"
                         onClick={() => openEditor(line)}
                         variant={line.current ? "secondary" : "primary"}
                       >{line.current ? "Изменить цену" : "Задать цену"}</Button></div></td> : null}
                     </tr>
-                    {open ? <tr className="price-history-row" id={`price-history-${line.key}`}>
-                      <td colSpan={columns}>
-                        <PriceHistory canWrite={canWrite} line={line} onDelete={(row) => setDeleting({ line, row })} today={today} />
-                      </td>
-                    </tr> : null}
                   </React.Fragment>;
                 })}</tbody>
               </table></div>}
     </DataTableShell>
+
+    <PriceHistoryDialog
+      canWrite={canWrite}
+      line={historyLine}
+      onClose={() => setHistoryKey(null)}
+      onDelete={(line, row) => { setHistoryKey(null); setDeleting({ line, row }); }}
+      onEdit={(line) => { setHistoryKey(null); openEditor(line); }}
+      today={today}
+    />
 
     <DialogForm
       busy={saving}
