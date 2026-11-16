@@ -100,6 +100,35 @@ BEGIN
   INSERT INTO ids VALUES ('equipment', eq), ('fresh', eq_fresh), ('task', task), ('task_fresh', task2);
 END $$;
 
+-- Второй открытый наряд по тому же прибору: ремонт и ТО идут одновременно — обычное дело.
+DO $$
+DECLARE
+  second uuid; act_a uuid; act_b uuid; wt text;
+BEGIN
+  SELECT code INTO wt FROM work_types WHERE is_active ORDER BY code LIMIT 1;
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id, created_by,
+                     call_date, deadline_from, deadline_to, status_code, call_reason, work_description, visit_date)
+  SELECT 'ТО по тому же прибору', wt, task.equipment_id, task.site_id, task.payer_id, task.engineer_id, task.created_by,
+         current_date, current_date, current_date + 7, 'in_progress', 'ТО', 'Плановое ТО', current_date
+    FROM tasks AS task WHERE task.id = (SELECT id FROM ids WHERE k = 'task_fresh')
+  RETURNING id INTO second;
+  INSERT INTO ids VALUES ('task_second', second);
+
+  INSERT INTO files (task_id, kind, original_name, content_type, byte_size, storage_key, uploaded_by)
+  SELECT t.id, 'photo', 'photo' || g || '.jpg', 'image/jpeg', 10, 'k/' || t.id || '/' || g,
+         (SELECT id FROM ids WHERE k = 'coord')
+    FROM (VALUES ((SELECT id FROM ids WHERE k = 'task_fresh')), (second)) AS t(id), generate_series(1, 3) AS g;
+  INSERT INTO files (task_id, kind, original_name, content_type, byte_size, storage_key, uploaded_by)
+  VALUES ((SELECT id FROM ids WHERE k = 'task_fresh'), 'act', 'act1.jpg', 'image/jpeg', 10, 'k/act1', (SELECT id FROM ids WHERE k = 'coord'))
+  RETURNING id INTO act_a;
+  INSERT INTO files (task_id, kind, original_name, content_type, byte_size, storage_key, uploaded_by)
+  VALUES (second, 'act', 'act2.jpg', 'image/jpeg', 10, 'k/act2', (SELECT id FROM ids WHERE k = 'coord'))
+  RETURNING id INTO act_b;
+  INSERT INTO task_closures (task_id, act_file_id, submitted_by) VALUES
+    ((SELECT id FROM ids WHERE k = 'task_fresh'), act_a, (SELECT id FROM ids WHERE k = 'eng')),
+    (second, act_b, (SELECT id FROM ids WHERE k = 'eng'));
+END $$;
+
 -- ---------------------------------------------------------------- Случай из аудита
 SELECT pg_temp.act_as(pg_temp.uid('eng'));
 SELECT pg_temp.expect_russian_refusal(
@@ -140,10 +169,54 @@ SELECT pg_temp.check(pg_temp.rows_affected(
   'выше самого большого известного показания принимается');
 SELECT pg_temp.act_as_nobody();
 
+-- ---------------------------------------------------------------- Два открытых наряда по прибору
+-- Главная дыра первой редакции: при вводе второго показания первое ещё нигде не записано,
+-- обе проверки на вводе проходят, а в журнал ложится убывающий ряд.
+-- Берём прибор без показаний: в журнале показаний ничего не стираем, он неизменяем.
+UPDATE tasks SET call_reason = 'Шум', work_description = 'Заменён узел', visit_date = current_date
+ WHERE id IN (pg_temp.uid('task_fresh'), pg_temp.uid('task_second'));
+SELECT pg_temp.act_as(pg_temp.uid('eng'));
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.tasks SET meter_reading = 1000 WHERE id = %L', (SELECT id FROM ids WHERE k = 'task_fresh'))) = 1,
+  'в первый наряд вписали 1000: прибор был без показаний');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.tasks SET meter_reading = 500 WHERE id = %L', (SELECT id FROM ids WHERE k = 'task_second'))) = 1,
+  'во второй наряд вписали 500: на этот момент сравнивать ещё не с чем');
+SELECT pg_temp.act_as_nobody();
+
+UPDATE tasks SET status_code = 'under_review' WHERE id = pg_temp.uid('task_fresh');
+UPDATE tasks SET status_code = 'under_review' WHERE id = pg_temp.uid('task_second');
+UPDATE tasks SET status_code = 'closed' WHERE id = pg_temp.uid('task_fresh');
+SELECT pg_temp.check((SELECT last_meter_reading FROM equipment WHERE id = pg_temp.uid('fresh')) = 1000,
+  'первый наряд приняли: в паспорте 1000');
+SELECT pg_temp.expect_russian_refusal(
+  format('UPDATE public.tasks SET status_code = ''closed'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'task_second')),
+  'второй наряд с показанием 500 не принять: в журнал убывающий ряд не попадёт');
+SELECT pg_temp.check(
+  NOT EXISTS (SELECT 1 FROM equipment_meter_readings WHERE equipment_id = pg_temp.uid('fresh') AND reading = 500),
+  'в истории счётчика нет упавшего показания');
+SELECT pg_temp.check((SELECT last_meter_reading FROM equipment WHERE id = pg_temp.uid('fresh')) = 1000,
+  'и в паспорте по-прежнему 1000');
+
+-- Поправили показание в задаче — и она принимается. На проверке это делает координатор:
+-- инженеру сданная задача уже не принадлежит.
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.check(pg_temp.rows_affected(
+  format('UPDATE public.tasks SET meter_reading = 1200 WHERE id = %L', (SELECT id FROM ids WHERE k = 'task_second'))) = 1,
+  'координатор поправил показание на 1200');
+SELECT pg_temp.act_as_nobody();
+UPDATE tasks SET status_code = 'closed' WHERE id = pg_temp.uid('task_second');
+SELECT pg_temp.check((SELECT last_meter_reading FROM equipment WHERE id = pg_temp.uid('fresh')) = 1200,
+  'после правки наряд принят, в паспорте 1200');
+
 -- Служебное: запрет работает от владельца схемы и напрямую не вызывается.
 SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'guard_task_meter_reading_growth'),
   'запрет работает от владельца схемы');
 SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.guard_task_meter_reading_growth()', 'EXECUTE'),
   'запрет напрямую не вызвать');
+SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'guard_meter_reading_history_growth'),
+  'проверка журнала показаний работает от владельца схемы');
+SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.guard_meter_reading_history_growth()', 'EXECUTE'),
+  'проверку журнала показаний напрямую не вызвать');
 
 ROLLBACK;
