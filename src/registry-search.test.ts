@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { describe, it } from "node:test";
 import { M2ApiClient, searchTextPattern, searchTokens } from "./m2-api.js";
 
@@ -55,6 +55,8 @@ describe("склад: фильтр, сортировка, поиск и свод
     assert.ok(registry, "запрос к представлению склада");
     const [select] = fake.step(registry, "select");
     assert.match(String(select?.[0]), /available_quantity, with_engineers_quantity, below_minimum/u);
+    // Псевдонимы (0047) и остатки по состояниям (0050) приходят тем же запросом.
+    assert.match(String(select?.[0]), /aliases, on_hand_guarantee, on_hand_new, on_hand_used, available_guarantee, available_new, available_used/u);
     assert.deepEqual(select?.[1], { count: "exact" });
     assert.deepEqual(fake.step(registry, "eq"), [["is_active", true], ["below_minimum", true]]);
     assert.deepEqual(fake.step(registry, "ilike"), [["search_text", "%клапан%"], ["search_text", "%50\\%\\_%"]]);
@@ -71,7 +73,9 @@ describe("склад: фильтр, сортировка, поиск и свод
     assert.equal(page.nextOffset, undefined);
     assert.deepEqual(page.items[0], {
       id: "p1", articleNumber: "A-1", name: "Клапан", minimumStock: 5, notes: undefined, isActive: true,
-      onHandQuantity: 4, reservedQuantity: 1, availableQuantity: 3, withEngineersQuantity: 2, belowMinimum: true
+      onHandQuantity: 4, reservedQuantity: 1, availableQuantity: 3, withEngineersQuantity: 2, belowMinimum: true,
+      // Псевдонимы (0047) и остатки по состояниям (0050): в этой строке их нет, значит нули.
+      onHandByCondition: { G: 0, N: 0, B: 0 }, availableByCondition: { G: 0, N: 0, B: 0 }
     });
   });
 
@@ -315,8 +319,17 @@ describe("миграция 0025", () => {
   });
 
   it("в представлении склада есть все столбцы, которые выбирает, фильтрует и сортирует склад", async () => {
-    const sql = await readFile(new URL("../supabase/migrations/0025_warehouse_and_equipment_search.sql", import.meta.url), "utf8");
-    const view = sql.slice(sql.indexOf("CREATE OR REPLACE VIEW public.inventory_part_registry"), sql.indexOf("FROM public.parts AS p"));
+    // Представление пересобирают поздние миграции (0047 — псевдонимы, 0050 — состояния):
+    // проверяем ту, что применяется последней, иначе тест отстанет от базы.
+    const directory = new URL("../supabase/migrations/", import.meta.url);
+    const names = (await readdir(directory)).filter((name) => name.endsWith(".sql")).sort();
+    let view = "";
+    for (const name of names) {
+      const sql = await readFile(new URL(name, directory), "utf8");
+      const start = sql.indexOf("CREATE OR REPLACE VIEW public.inventory_part_registry");
+      if (start >= 0) view = sql.slice(start, sql.indexOf("FROM public.parts AS p", start));
+    }
+    assert.ok(view.includes("below_minimum"), "определение представления склада найдено");
     const fake = fakeSupabase({ inventory_part_registry: { data: [], count: 0 }, "rpc:inventory_part_summary": { data: [] } });
     await new M2ApiClient(fake.client).inventoryPartPage({ search: "клапан", state: "low", sort: "available_desc" });
     const [registry] = fake.of("inventory_part_registry");

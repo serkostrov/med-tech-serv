@@ -103,7 +103,11 @@ describe("Supabase row mapping", () => {
     // их отменяют или отключают. Удаляются только строки, которые пересохраняются целиком.
     const source = await readFile(new URL("./m2-api.ts", import.meta.url), "utf8");
     const deleted = [...source.matchAll(/from\("([a-z_]+)"\)\.delete\(\)/gu)].map((match) => match[1]).sort();
-    assert.deepEqual(deleted, ["access_role_permissions", "maintenance_plans", "site_payers", "task_parts"]);
+    // part_aliases (0047) — не запись о деле, а подпись к запчасти: артикул поставщика
+    // перестали принимать, и псевдоним убирают. Сама запчасть, её остаток и движения
+    // остаются на месте — движения склада не удаляются ни одним запросом (0014).
+    assert.deepEqual(deleted, ["access_role_permissions", "maintenance_plans", "part_aliases", "site_payers", "task_parts"]);
+    assert.ok(!/from\("stock_movements"\)\.delete\(\)/u.test(source), "движения склада не удаляются");
     assert.match(source, /public async removeSite\(id: string\)[^\n]*\n\s*return \{ mode: "deactivated", after: await this\.updateSite\(id, \{ isActive: false \}\) \};/u);
     assert.match(source, /public async removeContact\([^\n]*\n\s*return \{ mode: "deactivated", after: await this\.updateContact\(siteId, contactId, \{ isActive: false \}\) \};/u);
     assert.match(source, /public async removePayer\(id: string\)[^\n]*\n\s*return this\.updatePayer\(id, \{ isActive: false \}\);/u);
