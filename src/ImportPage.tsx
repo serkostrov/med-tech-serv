@@ -72,6 +72,7 @@ const COLUMN_LABELS: Readonly<Record<string, string>> = {
 export function ImportPage() {
   const fileRef = useRef<HTMLInputElement | null>(null);
   const [canWrite, setCanWrite] = useState<boolean | undefined>(undefined);
+  const [canWriteReferences, setCanWriteReferences] = useState(true);
   const [fileName, setFileName] = useState("");
   const [reading, setReading] = useState<ImportReading | undefined>(undefined);
   const [snapshot, setSnapshot] = useState<ImportSnapshot | undefined>(undefined);
@@ -83,6 +84,7 @@ export function ImportPage() {
 
   useEffect(() => {
     void m2Api.hasPermission("equipment.write").then(setCanWrite).catch(() => setCanWrite(false));
+    void m2Api.hasPermission("references.write").then(setCanWriteReferences).catch(() => setCanWriteReferences(true));
   }, []);
 
   const plan = useMemo(
@@ -164,6 +166,9 @@ export function ImportPage() {
   const blockingSheetIssue = sheetIssues.find((issue) => issueSeverity(issue.code) === "error");
   const shownIssues = plan?.issues.slice(0, MAX_SHOWN_ISSUES) ?? [];
   const writeCount = (plan?.write.equipment.length ?? 0) + (plan?.write.events.length ?? 0);
+  // Новая модель или производитель — это запись в справочник, и база спросит своё право.
+  const needsReferences = (plan?.summary.modelsCreate ?? 0) + (plan?.summary.manufacturersCreate ?? 0) > 0;
+  const referencesRefusal = needsReferences && !canWriteReferences;
 
   return (
     <>
@@ -267,7 +272,7 @@ export function ImportPage() {
           </label> : null}
           <div className="import-plan__actions">
             <Button
-              disabled={writeCount === 0 || busy}
+              disabled={writeCount === 0 || busy || referencesRefusal}
               icon="check"
               onClick={() => setConfirming(true)}
             >
@@ -275,6 +280,9 @@ export function ImportPage() {
                 ? "Записывать нечего"
                 : `Записать ${formatRussianCount(plan.write.equipment.length, DEVICES)} и ${formatRussianCount(plan.write.events.length, EVENTS)}`}
             </Button>
+            {referencesRefusal ? <span className="import-plan__done">
+              Импорт заведёт новую модель в справочнике, а на это у вас нет прав: попросите добавить модель того, кто ведёт справочники
+            </span> : null}
             {written ? <span className="import-plan__done">
               Записано: {formatRussianCount(written.equipmentCreated, DEVICES)}, {formatRussianCount(written.eventsCreated, EVENTS)}
               {written.eventsWithoutEquipment > 0

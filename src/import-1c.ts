@@ -436,7 +436,8 @@ function readEventRow(options: {
   const { state, rowNumber, date, device } = options;
   if (!date.ok) {
     state.issues.push({
-      row: rowNumber, column: columnLetter(options.dateColumn ?? 0),
+      row: rowNumber,
+      ...(options.dateColumn === undefined ? {} : { column: columnLetter(options.dateColumn) }),
       code: date.reason === "empty" ? "date_missing" : "date_invalid",
       problem: date.reason === "empty"
         ? "В строке события нет даты"
@@ -447,7 +448,9 @@ function readEventRow(options: {
   }
   if (date.date > options.today) {
     state.issues.push({
-      row: rowNumber, column: columnLetter(options.dateColumn ?? 0), code: "date_future",
+      row: rowNumber,
+      ...(options.dateColumn === undefined ? {} : { column: columnLetter(options.dateColumn) }),
+      code: "date_future",
       problem: `Дата ${date.date} позже сегодняшней`,
       fix: "Исправьте дату: события будущим числом база не принимает"
     });
@@ -590,7 +593,7 @@ function readEquipmentSheet(
   const withEvents = columns.date !== undefined
     && (columns.workType !== undefined || columns.description !== undefined);
   const clientColumn = columns.client ?? (withEvents ? columns.site : undefined);
-  const siteColumn = withEvents ? columns.site : (columns.site ?? columns.client);
+  const siteColumn = columns.site;
   const byKey = new Map<string, ImportEquipmentRow>();
   const seen = new Map<string, number>();
   for (const row of sheet.rows) {
