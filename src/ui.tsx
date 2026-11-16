@@ -47,6 +47,7 @@ import {
   RotateCcw,
   Search,
   Shield,
+  Tags,
   Trash2,
   Users,
   Wallet,
@@ -79,7 +80,7 @@ import { ToastHost, toast } from "./components/ui/toast.js";
 
 export type IconName =
   | "tasks" | "maintenance" | "equipment" | "engineers" | "warehouse" | "customers" | "notifications"
-  | "reports" | "references" | "finance" | "reservations" | "inventory" | "handoff"
+  | "reports" | "references" | "finance" | "price" | "reservations" | "inventory" | "handoff"
   | "plus" | "bell" | "check" | "search" | "filter" | "arrow" | "back" | "clock"
   | "info" | "close" | "users" | "shield" | "mail" | "logout"
   | "edit" | "hide" | "show" | "disable" | "enable" | "open" | "relocate" | "ignore" | "restore"
@@ -96,6 +97,7 @@ const icons: Readonly<Record<IconName, LucideIcon>> = {
   reports: BarChart3,
   references: BookOpen,
   finance: Wallet,
+  price: Tags,
   reservations: Bookmark,
   inventory: Package,
   handoff: ArrowLeftRight,

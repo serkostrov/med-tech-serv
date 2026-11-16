@@ -21,7 +21,7 @@ describe("web process navigation", () => {
     assert.equal(hasNavigationItem("engineer", "maintenance"), false);
     assert.deepEqual(getRoleNavigation("admin").map((item) => item.id), [
       "tasks", "equipment", "maintenance", "engineers", "warehouse", "reservations",
-      "customers", "finance", "reports", "notifications", "references", "access"
+      "customers", "finance", "price", "reports", "notifications", "references", "access"
     ]);
     assert.equal(hasNavigationItem("admin", "tasks"), true);
   });
@@ -29,11 +29,15 @@ describe("web process navigation", () => {
   it("keeps the coordinator sidebar aligned with the approved demo structure", () => {
     assert.deepEqual(
       getRoleNavigation("coordinator").map((item) => item.label),
-      ["Задачи", "Приборы", "План ТО", "Инженеры", "Склад", "Резервы", "Клиенты", "Счета", "Отчёты", "Уведомления", "Справочники"]
+      ["Задачи", "Приборы", "План ТО", "Инженеры", "Склад", "Резервы", "Клиенты", "Счета", "Прайс", "Отчёты", "Уведомления", "Справочники"]
     );
     // Резервы координатор открывает тем же окном, что и кладовщик; действия в нём — по warehouse.write.
     assert.equal(hasNavigationItem("coordinator", "reservations"), true);
     assert.equal(hasNavigationItem("engineer", "reservations"), false);
+    // Прайс ведёт руководитель, счета выставляет координатор: раздел офисный, в поле и на складе он не нужен.
+    assert.equal(hasNavigationItem("coordinator", "price"), true);
+    assert.equal(hasNavigationItem("engineer", "price"), false);
+    assert.equal(hasNavigationItem("warehouse", "price"), false);
   });
 
   it("shows the warehouse workflow without office-only sections", () => {
