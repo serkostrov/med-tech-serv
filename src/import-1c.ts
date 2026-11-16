@@ -616,7 +616,9 @@ function readEquipmentSheet(
       state.issues.push({
         row: row.number, column: columnLetter(columns.model ?? columns.device ?? 0), code: "model_missing",
         problem: `У прибора ${serialNumber} не указана модель`,
-        fix: "Впишите модель прибора: без неё прибор в реестре не создать"
+        fix: withEvents
+          ? "Впишите модель в первой строке прибора: без неё не создать ни прибор, ни эту запись истории"
+          : "Впишите модель прибора: без неё прибор в реестре не создать"
       });
       continue;
     }
