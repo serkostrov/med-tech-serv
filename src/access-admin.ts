@@ -17,3 +17,51 @@ export interface EmployeeRoleSource {
 export function initialEmployeeRoleKey(employee?: EmployeeRoleSource): string {
   return employee?.accessRoleKey ?? employee?.role ?? "";
 }
+
+/** Почему вход этому сотруднику отключать нельзя: подпись в строке и полная причина. */
+export interface EmployeeDisableBlock {
+  /** Короткая подпись под ФИО в списке. */
+  readonly note: string;
+  /** Целая фраза: что нельзя и что делать вместо этого. */
+  readonly reason: string;
+}
+
+export interface DisableCandidate {
+  readonly id: string;
+  readonly isActive: boolean;
+  /** Базовая роль сотрудника. */
+  readonly role?: string;
+}
+
+/**
+ * Можно ли отключить вход сотруднику, и если нет — почему.
+ *
+ * Запрет держит база (миграция 0035), экран его повторяет, чтобы сказать об этом до
+ * подтверждения, а не сырой ошибкой после. Раньше кнопка «Отключить» рисовалась у всех:
+ * администратор выключал себе вход одним нажатием, а про последнего администратора
+ * узнавал из сообщения базы уже после того, как подтвердил отключение.
+ */
+export function employeeDisableBlock(
+  employee: DisableCandidate,
+  viewer: { readonly id: string; readonly activeAdminCount: number }
+): EmployeeDisableBlock | null {
+  if (!employee.isActive) return null;
+  if (employee.id === viewer.id) {
+    return {
+      note: "это вы",
+      reason: "Себе вход отключать нельзя: вы сразу потеряете доступ к системе. Попросите другого администратора"
+    };
+  }
+  if (employee.role === "admin" && viewer.activeAdminCount <= 1) {
+    return {
+      note: "последний администратор",
+      reason: "Это последний администратор: без него некому вести учётные записи, роли и настройки. Сначала добавьте второго администратора и включите ему вход"
+    };
+  }
+  return null;
+}
+
+/** Сколько администраторов сейчас могут войти: по этому числу решается запрет выше. */
+export function activeAdminCount(employees: readonly DisableCandidate[]): number {
+  return employees.filter((employee) => employee.isActive && employee.role === "admin").length;
+}

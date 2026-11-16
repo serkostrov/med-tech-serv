@@ -1569,6 +1569,10 @@ export class M2ApiClient {
   }
 
   public async updateAccessUser(id: string, input: Readonly<Record<string, unknown>>): Promise<AccessUserRecord> {
+    // Себе вход не отключают (миграция 0035): говорим это до запроса, а не сырой ошибкой базы.
+    if (input.isActive === false && id === (await this.cachedSession()).id) {
+      throw new M2ApiError(400, "Себе вход отключать нельзя: вы сразу потеряете доступ к системе. Попросите другого администратора");
+    }
     const patch: Row = {};
     if (input.fullName !== undefined) patch.full_name = input.fullName;
     if (input.role !== undefined) patch.role = input.role;
