@@ -180,17 +180,17 @@ function TaskHistory({ journal }: { readonly journal: TaskCardResponse["journal"
           // и подобные названия сами равны ярлыку этапа, и бейдж повторял бы их слово в слово.
           const badge = event.toStatus && title !== (TASK_STATUS_LABELS[event.toStatus] ?? event.toStatus) ? event.toStatus : undefined;
           return <li className="task-history__item" key={event.id}>
-          <span aria-hidden="true" className={`task-history__dot task-history__dot--${event.toStatus ? taskStatusTone(event.toStatus) : "neutral"}`} />
-          <div className="task-history__body">
-            <div className="task-history__line">
-              <strong>{title}</strong>
-              {badge ? <StatusBadge tone={taskStatusTone(badge)}>{TASK_STATUS_LABELS[badge] ?? badge}</StatusBadge> : null}
-              <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time>
+            <span aria-hidden="true" className={`task-history__dot task-history__dot--${event.toStatus ? taskStatusTone(event.toStatus) : "neutral"}`} />
+            <div className="task-history__body">
+              <div className="task-history__line">
+                <strong>{title}</strong>
+                {badge ? <StatusBadge tone={taskStatusTone(badge)}>{TASK_STATUS_LABELS[badge] ?? badge}</StatusBadge> : null}
+                <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time>
+              </div>
+              <span className="task-history__actor">{event.actorName ?? "Система"}</span>
+              {event.comment ? <p className="task-history__comment">{event.comment}</p> : null}
             </div>
-            <span className="task-history__actor">{event.actorName ?? "Система"}</span>
-            {event.comment ? <p className="task-history__comment">{event.comment}</p> : null}
-          </div>
-        </li>;
+          </li>;
         })}
       </ol>
     </section>)}
