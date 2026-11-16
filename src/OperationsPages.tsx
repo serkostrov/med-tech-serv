@@ -1,15 +1,16 @@
 import React, { useEffect, useRef, useState, type FormEvent } from "react";
-import { m2Api, type EngineerOverview, type InventoryPartRecord, type OperationsReportRecord } from "./m2-api.js";
+import { m2Api, type EngineerOverview, type InventoryPartRecord, type OperationsReportRecord, type ReportCutItem, type ReportEngineerLoadItem, type ReportSpendItem } from "./m2-api.js";
 import { InventoryBoard } from "./InventoryBoard.js";
 import { EngineerCompetencyEditor, type CompetencyDraft, type CompetencyReferences } from "./EngineerCompetencyEditor.js";
 import { competenciesToSave, competencyKey, competencyLabel, withManufacturerIds, type EngineerCompetency } from "./engineer-competencies.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, ViewSwitch, toast } from "./ui.js";
 import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
-import { parseAmount } from "./price-list.js";
+import { formatMoney, parseAmount } from "./price-list.js";
 import { companyToday } from "./task-dates.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { reportFileName, reportWorkbook } from "./report-export.js";
+import { allRegistryRows, downloadWorkbook, inventoryRegistrySheets, registryFileName } from "./registry-export.js";
 import { XLSX_MIME } from "./xlsx.js";
 
 function CompetencyTags({ engineer }: { readonly engineer: EngineerOverview }) {
@@ -140,6 +141,7 @@ export function WarehousePage() {
   const [editing, setEditing] = useState<InventoryPartRecord | "new" | null>(null);
   const [receiving, setReceiving] = useState<InventoryPartRecord | null>(null);
   const [deactivating, setDeactivating] = useState<InventoryPartRecord | null>(null);
+  const [exporting, setExporting] = useState(false);
   // Ответ на прежний запрос не должен затереть свежий: доска и страница списка просят
   // разные объёмы, и при быстром переключении ответы могут прийти не по порядку.
   const loadTurn = useRef(0);
@@ -226,10 +228,27 @@ export function WarehousePage() {
       setSaving(false);
     }
   };
+  // Выгрузка всего, что нашёл отбор, а не только открытой страницы. Цен в файле нет:
+  // цена прихода закрыта от ролей API в базе, и складу она на экране тоже не видна.
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const rows = await allRegistryRows<InventoryPartRecord>((limit, offset) => m2Api.inventoryPartPage({ ...filters, limit, offset }));
+      await downloadWorkbook(inventoryRegistrySheets(rows), registryFileName("Склад"));
+      toast.success(`В файле ${formatRussianCount(rows.length, ["позиция", "позиции", "позиций"])}`, { title: "Склад выгружен" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить склад", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
   const draft = editing === "new" ? emptyPart : editing;
   return <>
     <PageIntro
-      actions={<Button icon="plus" onClick={() => { setFormError(null); setEditing("new"); }}>Добавить запчасть</Button>}
+      actions={<>
+        <Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || total === 0} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>
+        <Button icon="plus" onClick={() => { setFormError(null); setEditing("new"); }}>Добавить запчасть</Button>
+      </>}
       description="Новую позицию добавьте кнопкой сверху. Остаток пополняйте кнопкой «Пополнить» в строке таблицы."
       title="Склад"
       titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать склад" onValueChange={changeView} value={view} />}
@@ -326,6 +345,82 @@ function requestsWord(count: number): string {
   return "заявок";
 }
 
+/**
+ * Разрезы по приборам, площадкам и инженерам могут быть длинными: на экране показываем
+ * первые строки, остальные целиком уходят в выгрузку. В файле обрезки нет.
+ */
+const CUT_ROWS_ON_SCREEN = 8;
+
+/** Строки разреза без кода: цвет полосы в этих разрезах не нужен, значения — это записи базы. */
+function cutRows(items: readonly ReportCutItem[]): readonly { readonly key: string; readonly name: string; readonly value: number }[] {
+  return items.slice(0, CUT_ROWS_ON_SCREEN).map((item) => ({ key: item.code, name: item.name, value: item.value }));
+}
+
+/** Доля занятых дней периода: 6 из 12 — «50%». */
+function loadPercent(item: ReportEngineerLoadItem): string {
+  return item.periodDays ? `${Math.round((item.busyDays / item.periodDays) * 100)}%` : "—";
+}
+
+/** Карточка разреза: полосы с подписью о том, сколько строк всего. */
+function CutCard({ title, meta, items, children, wide = false }: {
+  readonly title: string;
+  readonly meta: string;
+  readonly items: readonly ReportCutItem[];
+  readonly children?: React.ReactNode;
+  readonly wide?: boolean;
+}) {
+  if (items.length === 0 && !children) return null;
+  const hidden = Math.max(0, items.length - CUT_ROWS_ON_SCREEN);
+  return (
+    <section className={`card${wide ? " analytics-grid__wide" : ""}`}>
+      <CardHeader meta={hidden ? `${meta} · на экране первые ${CUT_ROWS_ON_SCREEN}, в выгрузке все ${items.length}` : meta} title={title} />
+      {children ?? <ReportBars empty="Нет данных за период." items={cutRows(items)} keepOrder />}
+    </section>
+  );
+}
+
+/** Таблица затрат: по приборам и по плательщикам. Показывается только с правом на деньги. */
+function SpendTable({ title, meta, nameColumn, items }: {
+  readonly title: string;
+  readonly meta: string;
+  readonly nameColumn: string;
+  readonly items: readonly ReportSpendItem[];
+}) {
+  return (
+    <DataTableShell meta={meta} title={title}>
+      <div className="table-scroll">
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th scope="col">{nameColumn}</th>
+              <th scope="col">Заявок</th>
+              <th scope="col">Счетов</th>
+              <th scope="col">Работы</th>
+              <th scope="col">Запчасти</th>
+              <th scope="col">Итого</th>
+            </tr>
+          </thead>
+          <tbody>
+            {items.map((item) => (
+              <tr key={item.id}>
+                <td><strong>{item.name}</strong>{item.detail ? <><br /><small>{item.detail}</small></> : null}</td>
+                <td>{item.taskCount}</td>
+                <td>{item.invoiceCount}</td>
+                <td>{formatMoney(item.workAmount)}</td>
+                <td>{formatMoney(item.partsAmount)}</td>
+                <td><strong>{formatMoney(item.totalAmount)}</strong>{item.adjustmentAmount ? <><br /><small>корректировка {formatMoney(item.adjustmentAmount)}</small></> : null}</td>
+              </tr>
+            ))}
+            {items.length === 0
+              ? <tr><td colSpan={6}><ResourceState description="Выберите другой период: считаем по счетам, выставленным в нём." icon="finance" status="filtered-empty" title="Счетов за этот период нет" /></td></tr>
+              : null}
+          </tbody>
+        </table>
+      </div>
+    </DataTableShell>
+  );
+}
+
 export function ReportsPage() {
   const initial = periodForPreset("half");
   const [period, setPeriod] = useState(initial);
@@ -379,7 +474,7 @@ export function ReportsPage() {
     <div className="report-page">
       <PageIntro
         actions={<Button busy={exporting} busyLabel="Готовим файл…" disabled={!report || loading} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>}
-        description="Сколько заявок за период, что закрыто вовремя и где уже вышел срок."
+        description="Сколько заявок за период, что закрыто вовремя, из-за чего обращались, что по гарантии, куда ушли деньги и чем заняты инженеры."
         title="Отчёты"
       />
       <div className="report-presets" role="group" aria-label="Быстрый период">
@@ -425,6 +520,14 @@ export function ReportsPage() {
             value={String(openCount)}
           />
         </div>
+        {report.databaseCuts
+          ? null
+          : <ResourceState
+              description="Причины обращений, гарантийность, затраты и загрузка инженеров появятся после обновления базы на сервере. Пока показываем заявки, этапы, виды работ и месяцы."
+              icon="reports"
+              status="filtered-empty"
+              title="Разрезы отчёта ещё не считает база"
+            />}
         {report.metrics.taskCount === 0
           ? <ResourceState description="Выберите другой период сверху или дождитесь новых заявок." icon="reports" status="filtered-empty" title="За этот период заявок нет" />
           : <div className="analytics-grid">
@@ -440,7 +543,61 @@ export function ReportsPage() {
                 <CardHeader meta={periodLabel} title="По месяцам" />
                 <ReportBars empty="Нет заявок по месяцам." items={report.tasksByMonth} keepOrder />
               </section>
+              <CutCard items={report.tasksByReason} meta="отметка инженера в акте" title="Причины обращений" />
+              <CutCard items={report.worksByModifier} meta="Г и Н из результата работ" title="Гарантийность работ" />
+              <CutCard items={report.partsByCondition.map((item) => ({ code: item.code, name: item.name, value: item.positionCount, closed: 0, overdue: 0 }))} meta="Г, Н и Б по позициям запчастей" title="Гарантийность замен запчастей">
+                {report.partsByCondition.length
+                  ? <ReportBars
+                      empty="Запчасти за период не меняли."
+                      items={report.partsByCondition.map((item) => ({ code: item.code, name: `${item.name} · ${formatRussianCount(item.quantity, ["штука", "штуки", "штук"])}`, value: item.positionCount }))}
+                      keepOrder
+                    />
+                  : <p className="report-bars__empty">Запчасти за период не меняли.</p>}
+              </CutCard>
+              <CutCard items={report.tasksByEquipment} meta="выезды по приборам" title="Приборы" />
+              <CutCard items={report.tasksBySite} meta="выезды по площадкам" title="Площадки" />
+              <CutCard items={report.tasksByEngineer} meta="выезды по инженерам" title="Инженеры" wide />
             </div>}
+        {report.engineerLoad.length
+          ? <DataTableShell meta={`занятые дни периода · ${periodLabel}`} title="Загрузка инженеров">
+              <div className="table-scroll">
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Инженер</th>
+                      <th scope="col">Заявок</th>
+                      <th scope="col">Закрыто</th>
+                      <th scope="col">Просрочено</th>
+                      <th scope="col">Занятых дней</th>
+                      <th scope="col">Загрузка</th>
+                      <th scope="col">Часы</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {report.engineerLoad.map((item) => (
+                      <tr key={item.engineerId}>
+                        <td><strong>{item.name}</strong></td>
+                        <td>{item.taskCount}</td>
+                        <td>{item.closedCount}</td>
+                        <td>{item.overdueCount || "—"}</td>
+                        <td>{item.busyDays} из {item.periodDays}</td>
+                        <td>{loadPercent(item)}</td>
+                        <td>{item.workHours || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </DataTableShell>
+          : null}
+        {/* Затраты видит только тот, у кого есть право на деньги: инженеру и кладовщику
+            эти таблицы не показываем, и в выгрузке у них листа затрат тоже нет.
+            Период со счетами, но без новых заявок — обычное дело, поэтому таблицы
+            стоят за условием «заявок нет», а не внутри него. */}
+        {report.canSeeFinance && report.databaseCuts ? <>
+          <SpendTable items={report.equipmentSpend} meta="по счетам периода, кроме отменённых" nameColumn="Прибор" title="Затраты по приборам" />
+          <SpendTable items={report.payerSpend} meta="кому выставляем" nameColumn="Плательщик" title="Затраты по плательщикам" />
+        </> : null}
       </> : null}
     </div>
   );

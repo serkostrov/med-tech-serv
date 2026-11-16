@@ -55,6 +55,7 @@ import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
+import { allRegistryRows, downloadWorkbook, equipmentRegistrySheets, registryFileName, taskRegistrySheets } from "./registry-export.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
 import { tasksAvailableForInvoice } from "./invoice-tasks.js";
@@ -1486,6 +1487,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const [mailEquipment, setMailEquipment] = useState<EquipmentApiRecord | undefined>(undefined);
   const [mailRefresh, setMailRefresh] = useState(0);
   const [canAssignEngineer, setCanAssignEngineer] = useState(false);
+  const [exporting, setExporting] = useState(false);
   useEffect(() => { void m2Api.hasPermission("tasks.assign").then(setCanAssignEngineer).catch(() => setCanAssignEngineer(false)); }, []);
   // Порядок карточек общий для всех: расставляет тот, кто может менять задачи (координатор, руководитель).
   const [canArrangeBoard, setCanArrangeBoard] = useState(false);
@@ -1688,12 +1690,39 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         onTaskRouteChange(undefined, true);
       });
   }, [initialTaskId]);
+  // Выгрузка реестра задач: все задачи под текущим отбором, а не только открытая страница.
+  // Фильтры те же, что применены на экране, чтобы файл совпадал с тем, что видно.
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const rows = await allRegistryRows<TaskApiRecord>((limit, offset) => m2Api.tasksPage({
+        ...(appliedFilters.search ? { search: appliedFilters.search } : {}), ...(appliedFilters.status ? { status: appliedFilters.status } : {}),
+        ...(appliedFilters.engineerId ? { engineerId: appliedFilters.engineerId } : {}), ...(appliedFilters.siteId ? { siteId: appliedFilters.siteId } : {}),
+        ...(appliedFilters.workTypeCode ? { workTypeCode: appliedFilters.workTypeCode } : {}),
+        ...(appliedFilters.priority ? { priority: appliedFilters.priority as "urgent" | "planned" } : {}),
+        ...(appliedFilters.periodFrom ? { periodFrom: appliedFilters.periodFrom } : {}), ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
+        ...(appliedFilters.overdue ? { overdue: true } : {}), sort: appliedFilters.sort, limit, offset
+      }));
+      await downloadWorkbook(taskRegistrySheets(rows, {
+        workTypes: Object.fromEntries(workTypes.map((item) => [item.code, item.name])),
+        statuses: Object.fromEntries(taskStatuses.map((item) => [item.code, item.name]))
+      }), registryFileName("Задачи"));
+      toast.success(`В файле ${formatRussianCount(rows.length, ["задача", "задачи", "задач"])}`, { title: "Задачи выгружены" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить задачи", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
   if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
   if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
-        actions={<Button disabled={formDataState === "loading"} icon="plus" onClick={() => void openCreationForm()}>{formDataState === "loading" ? "Открываем форму…" : "Создать задачу"}</Button>}
+        actions={<>
+          <Button busy={exporting} busyLabel="Готовим файл…" disabled={loading} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>
+          <Button disabled={formDataState === "loading"} icon="plus" onClick={() => void openCreationForm()}>{formDataState === "loading" ? "Открываем форму…" : "Создать задачу"}</Button>
+        </>}
         title="Задачи"
         titleAside={<>
           <ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }, { value: "mail", label: "Письма" }]} label="Как показать задачи" onValueChange={(value) => { setRegistryView(value); setSelectedTaskIds(new Set()); setShowCompletedBoard(false); }} value={registryView} />
@@ -2515,11 +2544,37 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
 
   const filteredEmpty = Boolean(filters.search || filters.manufacturer || filters.status || filters.site || filters.payer);
   const initialLoading = loading && records.length === 0;
+  const [exporting, setExporting] = useState(false);
+  // Выгрузка всех найденных приборов, а не открытой страницы: столбцы те же, что в реестре.
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const rows = await allRegistryRows<EquipmentApiRecord>((limit, offset) => m2Api.equipmentPage({
+        limit,
+        offset,
+        ...(filters.search ? { search: filters.search } : {}),
+        ...(filters.manufacturer ? { manufacturer: filters.manufacturer } : {}),
+        ...(filters.status ? { status: filters.status } : {}),
+        ...(filters.site ? { site: filters.site } : {}),
+        ...(filters.payer ? { payer: filters.payer } : {})
+      }));
+      const statuses = Object.fromEntries(references.statuses.map((item) => [item.code, item.name]));
+      await downloadWorkbook(equipmentRegistrySheets(rows, statuses), registryFileName(engineer ? "Мои приборы" : "Приборы"));
+      toast.success(`В файле ${formatRussianCount(rows.length, ["прибор", "прибора", "приборов"])}`, { title: "Приборы выгружены" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить приборы", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <>
       <PageIntro
-        actions={engineer ? undefined : <Button icon="plus" onClick={openCreate}>Добавить прибор</Button>}
+        actions={<>
+          <Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || total === 0} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>
+          {engineer ? null : <Button icon="plus" onClick={openCreate}>Добавить прибор</Button>}
+        </>}
         description={engineer ? "Приборы с ваших заявок и их история обслуживания." : "Найдите прибор, откройте паспорт или добавьте новый."}
         title={engineer ? "Мои приборы" : "Приборы"}
       />

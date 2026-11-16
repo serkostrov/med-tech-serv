@@ -7,6 +7,7 @@ import { formatRussianCount } from "./equipment-changes.js";
 import { companyDateTimeText } from "./task-dates.js";
 import { ReservationSteps } from "./TaskReservations.js";
 import { engineerReservationsFileName, engineerReservationsWorkbook } from "./reservation-export.js";
+import { downloadWorkbook, registryFileName, reservationRegistrySheets } from "./registry-export.js";
 import { XLSX_MIME } from "./xlsx.js";
 import {
   EMPTY_RESERVATION_FILTERS,
@@ -192,8 +193,23 @@ export function ReservationsPage() {
     }
   };
 
+  // Выгрузка реестра резервов: те же строки, что сейчас на экране после отбора,
+  // со всей цепочкой — состояние, задача, кому выдали, когда.
+  const exportRegistry = async () => {
+    setExporting(true);
+    try {
+      await downloadWorkbook(reservationRegistrySheets(visible), registryFileName("Резервы"));
+      toast.success(`В файле ${formatRussianCount(visible.length, ["резерв", "резерва", "резервов"])}`, { title: "Резервы выгружены" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить резервы", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
+
   return <>
     <PageIntro
+      actions={<Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || visible.length === 0} onClick={() => void exportRegistry()} variant="secondary">Скачать в Excel</Button>}
       description="Запчасти под задачи: собрать, выдать инженеру, принять обратно."
       title="Резервы"
       titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать резервы" onValueChange={changeView} value={view} />}

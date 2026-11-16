@@ -314,6 +314,16 @@
 .report-bar--assigned i { background: #d9a400; }
 .report-bar--new i { background: #e07a2e; }
 .report-bar--planned i { background: #7b93a3; }
+/* Причины обращений и гарантийность: износ зелёный, вина пользователя оранжевая,
+   гарантия красная — как в демо, которое заказчик уже видел. */
+.report-bar--wear i { background: var(--color-success); }
+.report-bar--user_fault i { background: #e07a2e; }
+.report-bar--warranty i { background: #c4493c; }
+.report-bar--other i,
+.report-bar--unset i { background: #8a9aa3; }
+.report-bar--G i { background: #c4493c; }
+.report-bar--N i { background: var(--color-success); }
+.report-bar--B i { background: #d9a400; }
 
 @media (max-width: 760px) {
   .task-board {

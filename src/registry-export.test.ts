@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  allRegistryRows,
   equipmentRegistrySheets,
   inventoryRegistrySheets,
   registryFileName,
@@ -179,5 +180,36 @@ describe("имя файла выгрузки", () => {
   it("расширение совпадает с типом файла, который отдаём браузеру", () => {
     assert.ok(registryFileName("Склад").endsWith(".xlsx"));
     assert.match(XLSX_MIME, /spreadsheetml\.sheet/u);
+  });
+});
+
+describe("чтение всех строк реестра", () => {
+  it("читает страницами, пока не соберёт всё найденное", async () => {
+    const all = Array.from({ length: 7 }, (_, index) => index);
+    const calls: number[] = [];
+    const rows = await allRegistryRows(async (limit, offset) => {
+      calls.push(offset);
+      return { items: all.slice(offset, offset + limit), total: all.length };
+    }, 3);
+    assert.deepEqual(rows, all);
+    assert.deepEqual(calls, [0, 3, 6]);
+  });
+
+  it("останавливается на пределе, а не тянет всю базу", async () => {
+    const rows = await allRegistryRows(async (limit, offset) => ({
+      items: Array.from({ length: limit }, (_, index) => offset + index),
+      total: 10_000
+    }), 100, 250);
+    assert.equal(rows.length, 300, "последняя страница читается целиком и на ней чтение кончается");
+  });
+
+  it("пустая страница останавливает чтение, даже если подсчёт больше", async () => {
+    let calls = 0;
+    const rows = await allRegistryRows(async () => {
+      calls += 1;
+      return { items: calls === 1 ? [1, 2] : [], total: 100 };
+    }, 2);
+    assert.deepEqual(rows, [1, 2]);
+    assert.equal(calls, 2, "второй пустой ответ прекращает цикл");
   });
 });

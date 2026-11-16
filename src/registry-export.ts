@@ -15,7 +15,7 @@ import type { EquipmentApiRecord, InventoryPartRecord, StockReservationRecord, T
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import { RESERVATION_CONDITION_LABELS, RESERVATION_STATUS_LABELS, reservationEngineerName } from "./reservations.js";
 import { companyDateText } from "./task-dates.js";
-import { buildXlsxCompressed, type XlsxCell, type XlsxSheet } from "./xlsx.js";
+import { XLSX_MIME, buildXlsxCompressed, type XlsxCell, type XlsxSheet } from "./xlsx.js";
 
 /** Справочник «код → название»: виды работ, этапы, статусы приборов. */
 export type NameByCode = ReadonlyMap<string, string> | Readonly<Record<string, string>>;
@@ -189,6 +189,44 @@ export function reservationRegistrySheets(items: readonly StockReservationRecord
   }];
 }
 
+/**
+ * Все строки реестра под текущим отбором, а не только открытая страница: выгрузка
+ * должна совпадать с тем, что реестр нашёл. Читаем страницами, как отдаёт сервер,
+ * и упираемся в предел, чтобы случайный отбор на всю базу не положил браузер.
+ */
+export async function allRegistryRows<Item>(
+  load: (limit: number, offset: number) => Promise<{ readonly items: readonly Item[]; readonly total: number }>,
+  pageSize = 500,
+  maxRows = 20_000
+): Promise<readonly Item[]> {
+  const rows: Item[] = [];
+  let total = 0;
+  do {
+    const page = await load(pageSize, rows.length);
+    total = page.total;
+    // Сервер отдал пустую страницу: дальше читать нечего, даже если total больше.
+    // Иначе цикл крутился бы до предела на подсчёте, который разошёлся со строками.
+    if (page.items.length === 0) break;
+    rows.push(...page.items);
+  } while (rows.length < Math.min(total, maxRows));
+  return rows;
+}
+
 export function registryWorkbook(sheets: readonly XlsxSheet[]): Promise<Uint8Array> {
   return buildXlsxCompressed(sheets);
+}
+
+/**
+ * Отдать собранный файл браузеру. Один путь для всех выгрузок: ссылка на объект,
+ * клик по ней и освобождение памяти спустя полминуты, чтобы файл успел сохраниться.
+ */
+export async function downloadWorkbook(sheets: readonly XlsxSheet[], fileName: string): Promise<void> {
+  const url = URL.createObjectURL(new Blob([(await registryWorkbook(sheets)) as BlobPart], { type: XLSX_MIME }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.append(link);
+  link.click();
+  link.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 30_000);
 }
