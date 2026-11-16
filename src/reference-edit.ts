@@ -1,5 +1,23 @@
 export type ReferenceAttributeValue = string | number | boolean | null;
 
+/**
+ * Коды значений, на которых держится работа базы: их размечает миграция 0033.
+ * Список повторён здесь для демо-данных и подсказок, но решает всегда база.
+ */
+export const BUILTIN_REFERENCE_CODES: Readonly<Record<string, readonly string[]>> = {
+  // Этапы схемы ТЗ: без них задача не двигается и не закрывается.
+  "task-statuses": ["planned", "new", "assigned", "in_progress", "under_review", "closed", "cancelled"],
+  // «В эксплуатации» — состояние нового прибора, «Списан» — замена удалению.
+  "equipment-statuses": ["in_use", "written_off"],
+  // «ТО по сервисной документации» ставит план ТО, «Прочие работы» требуют часы.
+  "work-types": ["maintenance", "other"]
+};
+
+/** Встроено ли значение справочника в работу базы. */
+export function isBuiltinReferenceCode(catalogKey: string, code: string | undefined): boolean {
+  return Boolean(code) && (BUILTIN_REFERENCE_CODES[catalogKey] ?? []).includes(code ?? "");
+}
+
 /** Значение справочника в объёме, нужном для запрета отключения. */
 export interface HideableReferenceValue {
   readonly name: string;
