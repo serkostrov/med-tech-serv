@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { activeAdminCount, canChangeEmployeeRole, employeeDisableBlock, initialEmployeeRoleKey } from "./access-admin.js";
+import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey } from "./access-admin.js";
 
 describe("роль в форме сотрудника", () => {
   it("у нового сотрудника роль не выбрана", () => {
@@ -56,5 +56,16 @@ describe("смена роли сотруднику", () => {
 
   it("чужую роль меняют как раньше", () => {
     assert.equal(canChangeEmployeeRole("u-eng", "u-admin"), true);
+  });
+});
+
+describe("права роли", () => {
+  it("свою роль не правят: так теряют доступ к учётным записям", () => {
+    assert.equal(canChangeRolePermissions("admin", "admin"), false);
+  });
+
+  it("чужие роли правятся как раньше", () => {
+    assert.equal(canChangeRolePermissions("engineer", "admin"), true);
+    assert.equal(canChangeRolePermissions("admin", undefined), true);
   });
 });

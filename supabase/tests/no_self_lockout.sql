@@ -167,6 +167,29 @@ SELECT pg_temp.check(pg_temp.rows_affected(
   'чужую роль доступа администратор отключает как раньше');
 SELECT pg_temp.act_as_nobody();
 
+-- ---------------------------------------------------------------- Права своей роли
+SELECT pg_temp.act_as(pg_temp.uid('admin1'));
+SELECT pg_temp.check(public.app_has_permission('users.write'),
+  'у администратора есть право вести сотрудников');
+SELECT pg_temp.expect_russian_refusal(
+  'DELETE FROM public.access_role_permissions WHERE role_key = ''admin'' AND permission_code = ''users.write''',
+  'снять право «Изменение сотрудников» со своей роли нельзя');
+SELECT pg_temp.expect_russian_refusal(
+  'INSERT INTO public.access_role_permissions (role_key, permission_code) VALUES (''admin'', ''tasks.read_all'')',
+  'и добавить себе право в свою роль тоже нельзя');
+SELECT pg_temp.check(public.app_has_permission('users.write'),
+  'право на месте, система без управления учётными записями не осталась');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'DELETE FROM public.access_role_permissions WHERE role_key = ''hr'' AND permission_code = ''users.read''') = 1,
+  'права чужой роли администратор меняет как раньше');
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'UPDATE public.access_roles SET name = ''Главный администратор системы'' WHERE key = ''admin''') = 1,
+  'название своей роли правится по-прежнему');
+SELECT pg_temp.act_as_nobody();
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'DELETE FROM public.access_role_permissions WHERE role_key = ''admin'' AND permission_code = ''users.write''') = 1,
+  'без входа обновление базы меняет права любой роли');
+
 -- ---------------------------------------------------------------- Служба и служебные свойства
 -- Без входа (импорт, миграции, служба уведомлений) ограничения «себе» не действуют.
 UPDATE public.users SET is_active = false WHERE id = pg_temp.uid('eng');
