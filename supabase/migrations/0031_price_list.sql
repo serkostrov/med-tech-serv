@@ -108,7 +108,9 @@ AS $$
 DECLARE
   -- Тот же ключ области, что в генерируемом столбце scope_key: цена «для всех» это '*'.
   scope text := coalesce(p_guarantee_category_id::text, '*');
-  price numeric(14, 2);
+  -- Без numeric(14, 2): иначе слишком большая цена падала бы на присваивании сюда
+  -- словами «numeric field overflow» вместо понятного отказа ниже.
+  price numeric;
   guarantee boolean := coalesce(p_include_guarantee_work, false);
   saved public.price_list%ROWTYPE;
   next_from date;
