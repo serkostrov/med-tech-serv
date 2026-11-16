@@ -127,6 +127,20 @@ BEGIN
   INSERT INTO ids VALUES ('cat_supplier', (SELECT id FROM guarantee_categories WHERE code = 'supplier_annual'));
 END $$;
 
+-- Настроенная с ошибкой роль: право менять цены есть, права видеть прайс нет.
+-- Такую роль администратор может собрать в интерфейсе, и отказ ей тоже должен быть
+-- понятным, а не сырым текстом правил строк.
+DO $$
+DECLARE uid uuid := gen_random_uuid();
+BEGIN
+  INSERT INTO access_roles (key, name, base_role, is_builtin) VALUES ('pricer', 'Только запись прайса', 'supervisor', false);
+  INSERT INTO access_role_permissions (role_key, permission_code) VALUES ('pricer', 'price.write');
+  INSERT INTO auth.users (id, email, aud, role) VALUES (uid, 'pricer@test.local', 'authenticated', 'authenticated');
+  INSERT INTO public.users (id, full_name, role, email, is_active, access_role_key)
+  VALUES (uid, 'Тест pricer', 'supervisor', 'pricer@test.local', true, 'pricer');
+  INSERT INTO ids VALUES ('pricer', uid);
+END $$;
+
 -- ---------------------------------------------------------------- Права на функции
 SELECT pg_temp.check(has_function_privilege('authenticated', 'public.set_work_price(text, uuid, numeric, date, boolean)', 'EXECUTE')
                  AND NOT has_function_privilege('anon', 'public.set_work_price(text, uuid, numeric, date, boolean)', 'EXECUTE'),
@@ -144,11 +158,15 @@ SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.guard_p
                  AND NOT has_function_privilege('anon', 'public.guard_price_list_direct_write()', 'EXECUTE'),
   'стража прайса напрямую не вызвать');
 
-SELECT pg_temp.check((SELECT NOT bool_or(prosecdef) FROM pg_proc
-                       WHERE proname IN ('set_work_price', 'bulk_update_work_prices',
-                                         'delete_future_work_price', 'work_price_on')),
+SELECT pg_temp.check((SELECT NOT bool_or(p.prosecdef) FROM pg_proc AS p
+                       JOIN pg_namespace AS n ON n.oid = p.pronamespace
+                      WHERE n.nspname = 'public'
+                        AND p.proname IN ('set_work_price', 'bulk_update_work_prices',
+                                          'delete_future_work_price', 'work_price_on')),
   'все функции прайса работают с правами вызывающего');
-SELECT pg_temp.check((SELECT prosecdef FROM pg_proc WHERE proname = 'guard_price_list_direct_write'),
+SELECT pg_temp.check((SELECT p.prosecdef FROM pg_proc AS p
+                       JOIN pg_namespace AS n ON n.oid = p.pronamespace
+                      WHERE n.nspname = 'public' AND p.proname = 'guard_price_list_direct_write'),
   'страж прайса работает от владельца схемы, как все служебные триггеры');
 
 -- ---------------------------------------------------------------- Права ролей
@@ -197,6 +215,25 @@ SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 
                        pg_temp.d('f1'), pg_temp.d('f2'), pg_temp.d('f2')),
   'периоды не пересеклись: у новой цены сразу выставлен конец по началу будущей');
 
+-- Цена задним числом раньше всей истории: период дотягивается до первой известной цены.
+SELECT pg_temp.check(pg_temp.set_price('de_p2', 'deinstallation', NULL, 100, pg_temp.d('p2')) IS NOT NULL,
+  'первая цена деинсталляции');
+SELECT pg_temp.check(pg_temp.set_price('de_p1', 'deinstallation', NULL, 90, pg_temp.d('p1')) IS NOT NULL,
+  'цена задним числом раньше всей истории');
+SELECT pg_temp.check(pg_temp.timeline('deinstallation', '*') = format('%s..%s=90 | %s..∞=100', pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2')),
+  'цена задним числом встала перед первой известной, периоды не пересеклись');
+
+-- Правка цены, которая ещё не начала действовать: её конец по следующей цене остаётся.
+SELECT pg_temp.check(pg_temp.set_price('pa_today', 'packaging', NULL, 100, pg_temp.d('today')) IS NOT NULL
+                 AND pg_temp.set_price('pa_f1', 'packaging', NULL, 200, pg_temp.d('f1')) IS NOT NULL
+                 AND pg_temp.set_price('pa_f2', 'packaging', NULL, 300, pg_temp.d('f2')) IS NOT NULL,
+  'три периода упаковки подряд: действующий и два вперёд');
+SELECT pg_temp.check(pg_temp.set_price('pa_f1_fix', 'packaging', NULL, 250, pg_temp.d('f1')) = pg_temp.uid('pa_f1'),
+  'будущая цена исправляется в той же строке');
+SELECT pg_temp.check(pg_temp.timeline('packaging', '*') = format('%s..%s=100 | %s..%s=250 | %s..∞=300',
+                       pg_temp.d('today'), pg_temp.d('f1'), pg_temp.d('f1'), pg_temp.d('f2'), pg_temp.d('f2')),
+  'после правки будущей цены её конец по следующей цене сохранился');
+
 -- Цена по категории гарантии живёт своей историей, общей не мешает.
 SELECT pg_temp.check(pg_temp.set_price('d_cat', 'diagnostics', pg_temp.uid('cat_standard'), 1500, pg_temp.d('p2')) IS NOT NULL,
   'цена по категории гарантии');
@@ -232,6 +269,8 @@ SELECT pg_temp.check(public.work_price_on('repair', NULL, pg_temp.d('today')) IS
 SELECT pg_temp.act_as_nobody();
 
 -- ---------------------------------------------------------------- Страж прямой записи
+-- Все проверки идут после удачных вызовов функций прайса в этой же транзакции: значит,
+-- флаг app.price_chain функции за собой убирают и наружу он не протекает.
 SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
 SELECT pg_temp.expect_message(
   format('INSERT INTO public.price_list (work_type_code, valid_from, amount) VALUES (%L, %L, 777)', 'repair', pg_temp.d('today')),
@@ -245,6 +284,13 @@ SELECT pg_temp.expect_message(
 SELECT pg_temp.expect_message(
   format('DELETE FROM public.price_list WHERE id = %L', pg_temp.uid('d_f2')),
   'Цену удаляют только через прайс: удалить строку напрямую нельзя', 'прямой DELETE цены запрещён');
+-- Флаг снимается сразу: следующая же команда в этой транзакции опять под стражем.
+SELECT pg_temp.check(pg_temp.set_price('co_today', 'conservation', NULL, 400, pg_temp.d('today')) IS NOT NULL,
+  'цена консервации через функцию');
+SELECT pg_temp.expect_message(
+  format('UPDATE public.price_list SET amount = 1 WHERE id = %L', pg_temp.uid('co_today')),
+  'Цену меняют только через прайс: править строку напрямую нельзя',
+  'сразу после удачного вызова функции прямая запись снова закрыта');
 SELECT pg_temp.act_as(pg_temp.uid('admin'));
 SELECT pg_temp.expect_message(
   format('DELETE FROM public.price_list WHERE id = %L', pg_temp.uid('d_p1')),
@@ -368,9 +414,17 @@ SELECT pg_temp.expect_message(
 SELECT pg_temp.expect_message(
   format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 999}, {"work_type_code": "ничего-такого", "amount": 100}]'::jsonb, pg_temp.d('f1')),
   'Вид работ не найден в справочнике', 'список с неизвестным видом работ целиком отклонён');
+-- Отказ посреди списка: первая позиция уже записалась бы, если бы вызов не был целым.
+-- Отрицательную цену предварительная проверка не ловит — её отвергает set_work_price.
+SELECT pg_temp.expect_message(
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 999}, {"work_type_code": "diagnostics", "amount": -5}]'::jsonb, pg_temp.d('f1')),
+  'Цена не может быть отрицательной', 'отказ по второй позиции отменяет и первую');
 SELECT pg_temp.act_as_nobody();
 SELECT pg_temp.check(pg_temp.timeline('repair', '*') = format('%s..%s=500 | %s..∞=550', pg_temp.d('today'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
   'после отклонённого списка цена ремонта осталась от удачного массового изменения');
+SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..%s=1300+г | %s..∞=1430+г',
+                       pg_temp.d('p1'), pg_temp.d('p2'), pg_temp.d('p2'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
+  'после отклонённого списка цена диагностики тоже не изменилась');
 
 -- ---------------------------------------------------------------- Проверки одной цены
 SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
@@ -392,11 +446,16 @@ SELECT pg_temp.expect_message(
 SELECT pg_temp.expect_message(
   format('SELECT * FROM public.set_work_price(%L, %L, 100, %L)', 'repair', gen_random_uuid(), pg_temp.d('f1')),
   'Категория гарантии не найдена в справочнике', 'цена по неизвестной категории гарантии не сохраняется');
--- Копейки: в прайсе два знака, значение округляется, а не отрезается молча.
+-- Копейки: в прайсе два знака, лишние округляются при записи.
 SELECT pg_temp.check(pg_temp.set_price('m_kop', 'maintenance', NULL, 1234.567, pg_temp.d('today')) IS NOT NULL,
   'цена с копейками сохраняется');
-SELECT pg_temp.check((SELECT saved.amount = 1234.57 FROM public.set_work_price('maintenance', NULL, 1234.567, pg_temp.d('today')) AS saved),
+SELECT pg_temp.check(pg_temp.timeline('maintenance', '*') = format('%s..∞=1234.57', pg_temp.d('today')),
   'цена округлена до копеек');
+-- Округление идёт до проверки на «слишком большую»: самая большая цена, какая влезает
+-- в столбец, принимается, хотя до округления она больше предела.
+SELECT pg_temp.check((SELECT saved.amount = 999999999999.99
+                      FROM public.set_work_price('other', NULL, 999999999999.994, pg_temp.d('today')) AS saved),
+  'цена на границе столбца принимается, а не считается слишком большой');
 SELECT pg_temp.act_as_nobody();
 
 -- ---------------------------------------------------------------- Кто что видит и кто что меняет
@@ -426,6 +485,12 @@ SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('today'
 SELECT pg_temp.expect_message(
   format('SELECT * FROM public.set_work_price(%L, NULL, 1, %L)', 'repair', pg_temp.d('f1')),
   'Недостаточно прав: прайс ведёт руководитель', 'инженер цену не меняет');
+SELECT pg_temp.expect_message(
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 1}]'::jsonb, pg_temp.d('f1')),
+  'Недостаточно прав: прайс ведёт руководитель', 'инженер цены массово не меняет');
+SELECT pg_temp.expect_message(
+  format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('pa_f2')),
+  'Недостаточно прав: прайс ведёт руководитель', 'инженер цены не удаляет');
 
 SELECT pg_temp.act_as(pg_temp.uid('warehouse'));
 SELECT pg_temp.check((SELECT count(*) = 0 FROM public.price_list), 'кладовщик не видит ни одной цены');
@@ -434,6 +499,27 @@ SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('today'
 SELECT pg_temp.expect_message(
   format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 1}]'::jsonb, pg_temp.d('f1')),
   'Недостаточно прав: прайс ведёт руководитель', 'кладовщик цены массово не меняет');
+SELECT pg_temp.expect_message(
+  format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('pa_f2')),
+  'Недостаточно прав: прайс ведёт руководитель', 'кладовщик цены не удаляет');
+
+-- Роль, которой выдали только запись: отказ по-русски, а не текст правил строк.
+SELECT pg_temp.act_as(pg_temp.uid('pricer'));
+SELECT pg_temp.check((SELECT public.app_has_permission('price.write')
+                       AND NOT public.app_has_any_permission(ARRAY['price.read', 'finance.read'])),
+  'у роли есть запись прайса, но нет просмотра');
+SELECT pg_temp.expect_message(
+  format('SELECT * FROM public.set_work_price(%L, NULL, 1, %L)', 'repair', pg_temp.d('f1')),
+  'Недостаточно прав: менять цены может только тот, кому виден прайс',
+  'без права смотреть прайс цену не сохранить');
+SELECT pg_temp.expect_message(
+  format('SELECT public.bulk_update_work_prices(%L, %L)', '[{"work_type_code": "repair", "amount": 1}]'::jsonb, pg_temp.d('f1')),
+  'Недостаточно прав: менять цены может только тот, кому виден прайс',
+  'без права смотреть прайс цены массово не изменить');
+SELECT pg_temp.expect_message(
+  format('SELECT public.delete_future_work_price(%L)', pg_temp.uid('pa_f2')),
+  'Недостаточно прав: менять цены может только тот, кому виден прайс',
+  'без права смотреть прайс цену не удалить');
 SELECT pg_temp.act_as_nobody();
 
 -- Изменения прайса попали в журнал аудита: прайс в списке таблиц аудита с 0001.

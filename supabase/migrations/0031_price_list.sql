@@ -20,8 +20,12 @@
 --
 -- Функции работают с правами вызывающего (SECURITY INVOKER): правила строк price_list
 -- и так пускают к записи только price.write, а понятный отказ по-русски даёт проверка
--- внутри функции. Сутки считаем по Москве, как просрочку задач в 0027: цена, начавшаяся
--- сегодня, уже действует, даже если на сервере базы ещё вчерашний день.
+-- внутри функции. Писать цены может только тот, кому прайс ещё и виден: функции
+-- возвращают записанную строку, а на чтение строки действует своё правило (price.read
+-- или finance.read). Роль с одним price.write — ошибка настройки, и про неё лучше
+-- сказать прямо, чем отдать сырой отказ правил строк по-английски.
+-- Сутки считаем по Москве, как просрочку задач в 0027: цена, начавшаяся сегодня,
+-- уже действует, даже если на сервере базы ещё вчерашний день.
 
 -- ---------------------------------------------------------------------------
 -- 1. Прайс ведёт руководитель
@@ -114,9 +118,18 @@ DECLARE
   guarantee boolean := coalesce(p_include_guarantee_work, false);
   saved public.price_list%ROWTYPE;
   next_from date;
+  -- Флаг возвращаем как было, а не в 'off': если эту функцию когда-нибудь вызовут
+  -- изнутри другой записи прайса, сброс закрыл бы стражем её собственные строки.
+  outer_flag text := coalesce(current_setting('app.price_chain', true), 'off');
 BEGIN
   IF NOT public.app_has_permission('price.write') THEN
     RAISE EXCEPTION 'Недостаточно прав: прайс ведёт руководитель' USING ERRCODE = '42501';
+  END IF;
+  -- Функция возвращает записанную строку, а читать прайс — отдельное право. Без него
+  -- запись упала бы на правилах строк сырым английским текстом про row-level security.
+  IF NOT public.app_has_any_permission(ARRAY['price.read', 'finance.read']) THEN
+    RAISE EXCEPTION 'Недостаточно прав: менять цены может только тот, кому виден прайс'
+      USING ERRCODE = '42501';
   END IF;
   IF p_valid_from IS NULL THEN
     RAISE EXCEPTION 'Укажите дату, с которой действует цена' USING ERRCODE = '22004';
@@ -127,8 +140,8 @@ BEGIN
   IF p_amount < 0 THEN
     RAISE EXCEPTION 'Цена не может быть отрицательной' USING ERRCODE = '23514';
   END IF;
-  -- В таблице цена с двумя знаками: округляем сами, иначе лишние знаки отрежет
-  -- присваивание столбцу и в прайс попадёт не то, что человек ввёл.
+  -- В таблице цена с двумя знаками. Округляем до проверки на слишком большую, иначе
+  -- 999999999999.994 получило бы отказ, хотя в столбец она прекрасно влезает.
   price := round(p_amount, 2);
   IF price > 999999999999.99 THEN
     RAISE EXCEPTION 'Цена слишком большая' USING ERRCODE = '23514';
@@ -189,7 +202,7 @@ BEGIN
     RETURNING * INTO saved;
   END IF;
 
-  PERFORM set_config('app.price_chain', 'off', true);
+  PERFORM set_config('app.price_chain', outer_flag, true);
 
   RETURN QUERY SELECT saved.id, saved.valid_from, saved.valid_to, saved.amount;
 END
@@ -217,6 +230,10 @@ DECLARE
 BEGIN
   IF NOT public.app_has_permission('price.write') THEN
     RAISE EXCEPTION 'Недостаточно прав: прайс ведёт руководитель' USING ERRCODE = '42501';
+  END IF;
+  IF NOT public.app_has_any_permission(ARRAY['price.read', 'finance.read']) THEN
+    RAISE EXCEPTION 'Недостаточно прав: менять цены может только тот, кому виден прайс'
+      USING ERRCODE = '42501';
   END IF;
   IF p_valid_from IS NULL THEN
     RAISE EXCEPTION 'Укажите дату, с которой действуют новые цены' USING ERRCODE = '22004';
@@ -257,15 +274,18 @@ BEGIN
   -- переписала бы цену первой, и в ответе было бы непонятное число изменённых позиций.
   IF EXISTS (
     SELECT 1 FROM jsonb_array_elements(p_items) AS entry
-     GROUP BY btrim(entry ->> 'work_type_code'),
+     GROUP BY entry ->> 'work_type_code',
               coalesce(nullif(lower(entry ->> 'guarantee_category_id'), ''), '*')
     HAVING count(*) > 1
   ) THEN
     RAISE EXCEPTION 'Одна и та же позиция прайса встречается в списке дважды' USING ERRCODE = '23505';
   END IF;
 
+  -- Код вида работ берём как пришёл, без обрезки пробелов: он приходит из справочника,
+  -- а не из набора руками, и правка по одной цене его тоже не нормализует — лучше
+  -- понятный отказ «вид работ не найден», чем молчаливое исправление чужих данных.
   FOR item IN
-    SELECT btrim(entry ->> 'work_type_code') AS work_type_code,
+    SELECT entry ->> 'work_type_code' AS work_type_code,
            nullif(entry ->> 'guarantee_category_id', '')::uuid AS guarantee_category_id,
            round((entry ->> 'amount')::numeric, 2) AS amount,
            coalesce((entry ->> 'include_guarantee_work')::boolean, false) AS include_guarantee_work
@@ -315,9 +335,16 @@ DECLARE
   -- Сутки по Москве, как просрочка задач в 0027: на стенде сервер базы живёт в UTC,
   -- и по его календарю цена, начавшаяся сегодня утром по Москве, ещё «будущая».
   company_today date := (now() AT TIME ZONE 'Europe/Moscow')::date;
+  outer_flag text := coalesce(current_setting('app.price_chain', true), 'off');
 BEGIN
   IF NOT public.app_has_permission('price.write') THEN
     RAISE EXCEPTION 'Недостаточно прав: прайс ведёт руководитель' USING ERRCODE = '42501';
+  END IF;
+  -- Без права смотреть прайс строку не прочитать, и вместо отказа по правам пришло бы
+  -- «Цена не найдена»: правила строк просто не показали бы её этому пользователю.
+  IF NOT public.app_has_any_permission(ARRAY['price.read', 'finance.read']) THEN
+    RAISE EXCEPTION 'Недостаточно прав: менять цены может только тот, кому виден прайс'
+      USING ERRCODE = '42501';
   END IF;
 
   SELECT * INTO doomed FROM public.price_list AS price_row WHERE price_row.id = p_id;
@@ -331,6 +358,11 @@ BEGIN
 
   PERFORM pg_advisory_xact_lock(
     hashtextextended('price_list:' || doomed.work_type_code || ':' || doomed.scope_key, 0));
+  -- Пока ждали замок, ту же цену мог отменить другой вызов: молча «успешно» ничего
+  -- не делать нельзя, человек должен увидеть тот же отказ, что и при первом промахе.
+  IF NOT EXISTS (SELECT 1 FROM public.price_list AS price_row WHERE price_row.id = p_id) THEN
+    RAISE EXCEPTION 'Цена не найдена' USING ERRCODE = 'P0002';
+  END IF;
 
   SELECT min(ahead.valid_from) INTO next_from
     FROM public.price_list AS ahead
@@ -352,7 +384,7 @@ BEGIN
      AND past.scope_key = doomed.scope_key
      AND past.valid_to = doomed.valid_from;
 
-  PERFORM set_config('app.price_chain', 'off', true);
+  PERFORM set_config('app.price_chain', outer_flag, true);
 END
 $$;
 
