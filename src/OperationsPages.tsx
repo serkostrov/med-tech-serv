@@ -545,11 +545,12 @@ export function ReportsPage() {
               </section>
               <CutCard items={report.tasksByReason} meta="отметка инженера в акте" title="Причины обращений" />
               <CutCard items={report.worksByModifier} meta="Г и Н из результата работ" title="Гарантийность работ" />
+              {/* «шт.» не склоняем: количество бывает дробным (0,5 литра реагента). */}
               <CutCard items={report.partsByCondition.map((item) => ({ code: item.code, name: item.name, value: item.positionCount, closed: 0, overdue: 0 }))} meta="Г, Н и Б по позициям запчастей" title="Гарантийность замен запчастей">
                 {report.partsByCondition.length
                   ? <ReportBars
                       empty="Запчасти за период не меняли."
-                      items={report.partsByCondition.map((item) => ({ code: item.code, name: `${item.name} · ${formatRussianCount(item.quantity, ["штука", "штуки", "штук"])}`, value: item.positionCount }))}
+                      items={report.partsByCondition.map((item) => ({ code: item.code, name: `${item.name} · ${item.quantity} шт.`, value: item.positionCount }))}
                       keepOrder
                     />
                   : <p className="report-bars__empty">Запчасти за период не меняли.</p>}

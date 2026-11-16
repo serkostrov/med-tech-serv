@@ -241,12 +241,15 @@ AS $$
            task.is_closed, task.is_overdue
       FROM period AS task
     UNION ALL
+    -- Названия: «не указан» говорим только тогда, когда ссылки в задаче и правда нет.
+    -- Если ссылка есть, а строки не видно (правила строк справочника строже, чем задач),
+    -- пишем родовое слово — сказать «не указан» значило бы соврать про данные.
     SELECT 'equipment', coalesce(task.equipment_id::text, 'unset'),
            CASE
              WHEN task.equipment_id IS NULL THEN 'Прибор не указан'
-             ELSE concat_ws(' · ',
+             ELSE coalesce(nullif(concat_ws(' · ',
                     nullif(concat_ws(' ', maker.name, model.name), ''),
-                    equipment.serial_number)
+                    equipment.serial_number), ''), 'Прибор')
            END,
            task.is_closed, task.is_overdue
       FROM period AS task
@@ -255,13 +258,15 @@ AS $$
       LEFT JOIN public.manufacturers AS maker ON maker.id = equipment.manufacturer_id
     UNION ALL
     SELECT 'site', coalesce(task.site_id::text, 'unset'),
-           coalesce(site.name, 'Площадка не указана'),
+           CASE WHEN task.site_id IS NULL THEN 'Площадка не указана'
+                ELSE coalesce(site.name, 'Площадка') END,
            task.is_closed, task.is_overdue
       FROM period AS task
       LEFT JOIN public.sites AS site ON site.id = task.site_id
     UNION ALL
     SELECT 'engineer', coalesce(task.engineer_id::text, 'unset'),
-           coalesce(engineer.full_name, 'Инженер не назначен'),
+           CASE WHEN task.engineer_id IS NULL THEN 'Инженер не назначен'
+                ELSE coalesce(engineer.full_name, 'Инженер') END,
            task.is_closed, task.is_overdue
       FROM period AS task
       LEFT JOIN public.users AS engineer ON engineer.id = task.engineer_id
