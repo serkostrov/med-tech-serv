@@ -52,7 +52,8 @@ CREATE OR REPLACE FUNCTION public.meter_reading_conflict(
 RETURNS text
 LANGUAGE plpgsql
 STABLE
-SECURITY DEFINER
+-- Права вызывающего, а не владельца схемы: обе проверки зовут её из триггеров, которые
+-- и так работают от владельца, а отдельная функция с его правами — лишняя дверь в журнал.
 SET search_path = public, pg_temp
 AS $$
 DECLARE
