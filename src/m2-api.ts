@@ -242,6 +242,36 @@ export interface InvoiceApiRecord {
   readonly payerSelection: { readonly source: "equipment" | "manual" | "override"; readonly overrideReason?: string };
   readonly createdAt: string;
   readonly updatedAt: string;
+  /** Даты выставления и передачи в 1С. Приходят в карточке счёта: списку они не нужны. */
+  readonly issuedAt?: string;
+  readonly transferredAt?: string;
+}
+
+/**
+ * Строка счёта: работа или запчасть. Суммы считает база (`line_total` — её столбец),
+ * гарантийная строка видна в счёте, но в сумму не идёт (`excludedFromTotal`).
+ */
+export interface InvoiceItemApiRecord {
+  readonly id: string;
+  readonly itemType: "work" | "part";
+  readonly taskId: string | null;
+  readonly taskNumber: string | null;
+  readonly description: string;
+  readonly quantity: number;
+  readonly unitPrice: number;
+  readonly lineTotal: number;
+  readonly modifier: "G" | "N" | null;
+  readonly excludedFromTotal: boolean;
+}
+
+export interface InvoiceCardResponse {
+  readonly invoice: InvoiceApiRecord;
+  readonly items: readonly InvoiceItemApiRecord[];
+  readonly subtotal: number;
+  readonly adjustmentAmount: number;
+  readonly totalAmount: number;
+  readonly correctionReason: string | null;
+  readonly statusHistory: readonly { readonly status: string; readonly at: string; readonly actorName: string | null }[];
 }
 
 /**
@@ -1175,6 +1205,48 @@ const CATALOG_TABLE: Readonly<Record<string, { readonly table: string; readonly 
   "task-statuses": { table: "task_statuses", id: "code", code: "code" },
   "task-reasons": { table: "task_reasons", id: "code", code: "code" }
 };
+
+/** Шапка счёта: к списочным полям добавлены суммы, причина корректировки и даты жизни счёта. */
+const INVOICE_CARD_SELECT = "id, number, status, created_at, updated_at, payer_id, subtotal, adjustment_amount, "
+  + "total_amount, correction_reason, issued_at, transferred_at, payer:payers!payer_id(id, name, requisites), invoice_tasks(task_id)";
+
+/** Позиция счёта с номером задачи: по нему строки группируются в карточке. */
+const INVOICE_ITEM_SELECT = "id, item_type, task_id, description, quantity, unit_price, line_total, modifier, "
+  + "excluded_from_total, task:tasks(number)";
+
+/** История статусов счёта: сначала с автором по связи changed_by → users, затем без него. */
+const INVOICE_HISTORY_SELECTS: readonly string[] = [
+  "to_status, changed_at, changer:users!changed_by(full_name)",
+  "to_status, changed_at"
+];
+
+function invoiceItemRecord(row: Row): InvoiceItemApiRecord {
+  const modifier = text(row, "modifier");
+  return {
+    id: text(row, "id"),
+    itemType: text(row, "item_type") === "part" ? "part" : "work",
+    taskId: optionalText(row, "task_id") ?? null,
+    taskNumber: optionalText(related(row, "task"), "number") ?? null,
+    description: text(row, "description"),
+    quantity: numberValue(row.quantity) ?? 0,
+    unitPrice: numberValue(row.unit_price) ?? 0,
+    lineTotal: numberValue(row.line_total) ?? 0,
+    modifier: modifier === "G" || modifier === "N" ? modifier : null,
+    excludedFromTotal: row.excluded_from_total === true
+  };
+}
+
+/**
+ * Строка выгрузки: столбцы придумывает база, здесь только приводим значения к тому,
+ * что умеет файл. Пустые значения становятся пустой клеткой, а не словом «null».
+ */
+function invoiceExportRow(row: Row): Record<string, string | number> {
+  const result: Record<string, string | number> = {};
+  for (const [key, value] of Object.entries(row)) {
+    result[key] = typeof value === "number" && Number.isFinite(value) ? value : value == null ? "" : String(value);
+  }
+  return result;
+}
 
 export class M2ApiClient {
   public constructor(private readonly client?: AppSupabaseClient) {}
@@ -3939,6 +4011,117 @@ export class M2ApiClient {
     const { data, error } = await this.db().from("invoices").update({ status: "cancelled" }).eq("id", id).in("status", ["draft", "issued"]).select("id");
     throwIfError(error, "Не получилось отменить счёт");
     if (!Array.isArray(data) || data.length === 0) throw new M2ApiError(409, "Счёт не отменён: его уже отменили или передали в 1С. Обновите страницу.");
+  }
+
+  /**
+   * Карточка счёта: шапка, позиции, итоги и история статусов. Видно с правом `finance.read` —
+   * это решает политика строк в базе. Суммы берём такими, какими их посчитала база:
+   * `subtotal` и `total_amount` она пересчитывает триггером, из интерфейса их не правят.
+   */
+  public async invoiceCard(id: string): Promise<InvoiceCardResponse> {
+    const [invoiceResult, itemsResult] = await Promise.all([
+      this.db().from("invoices").select(INVOICE_CARD_SELECT).eq("id", id).maybeSingle(),
+      this.db().from("invoice_items").select(INVOICE_ITEM_SELECT).eq("invoice_id", id).order("created_at", { ascending: true })
+    ]);
+    throwIfError(invoiceResult.error, "Не получилось открыть счёт");
+    throwIfError(itemsResult.error, "Не получилось загрузить позиции счёта");
+    const row = asRow(invoiceResult.data);
+    if (!text(row, "id")) throw new M2ApiError(404, "Счёт не найден");
+    const payer = related(row, "payer");
+    const tasks = Array.isArray(row.invoice_tasks) ? row.invoice_tasks : [];
+    const issuedAt = optionalText(row, "issued_at");
+    const transferredAt = optionalText(row, "transferred_at");
+    return {
+      invoice: {
+        id: text(row, "id"),
+        number: text(row, "number"),
+        status: text(row, "status") as InvoiceApiRecord["status"],
+        taskIds: tasks.map((entry) => text(asRow(entry), "task_id")).filter(Boolean),
+        payer: {
+          id: text(payer, "id") || text(row, "payer_id"),
+          name: text(payer, "name"),
+          requisites: asRow(payer.requisites) as Record<string, string>
+        },
+        payerSelection: { source: "equipment" },
+        createdAt: iso(row.created_at),
+        updatedAt: iso(row.updated_at),
+        ...(issuedAt ? { issuedAt } : {}),
+        ...(transferredAt ? { transferredAt } : {})
+      },
+      items: (itemsResult.data ?? []).map((item) => invoiceItemRecord(asRow(item))),
+      subtotal: numberValue(row.subtotal) ?? 0,
+      adjustmentAmount: numberValue(row.adjustment_amount) ?? 0,
+      totalAmount: numberValue(row.total_amount) ?? 0,
+      correctionReason: optionalText(row, "correction_reason") ?? null,
+      statusHistory: await this.invoiceStatusHistory(id)
+    };
+  }
+
+  /**
+   * История статусов счёта: её пишет триггер базы. Автор приходит по связи changed_by → users,
+   * а если PostgREST эту связь не отдаёт — читаем историю без автора: карточка важнее подписи.
+   */
+  private async invoiceStatusHistory(id: string): Promise<readonly { readonly status: string; readonly at: string; readonly actorName: string | null }[]> {
+    for (const select of INVOICE_HISTORY_SELECTS) {
+      const { data, error } = await this.db().from("invoice_status_history").select(select).eq("invoice_id", id).order("changed_at", { ascending: true });
+      if (error) continue;
+      return (data ?? []).map((item) => {
+        const row = asRow(item);
+        return {
+          status: text(row, "to_status"),
+          at: iso(row.changed_at),
+          actorName: optionalText(related(row, "changer"), "full_name") ?? null
+        };
+      });
+    }
+    console.warn("История статусов счёта не прочиталась: показываем карточку без неё");
+    return [];
+  }
+
+  /** Черновик → «Выставлен» (функция базы `issue_invoice`): дату выставления ставит база. */
+  public async issueInvoice(id: string): Promise<void> {
+    const { error } = await this.db().rpc("issue_invoice", { p_invoice_id: id });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Выставление счёта заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось выставить счёт");
+  }
+
+  /** «Выставлен» → «Передан в 1С» (функция базы `transfer_invoice_to_1c`). Дальше счёт не меняют. */
+  public async transferInvoiceTo1c(id: string): Promise<void> {
+    const { error } = await this.db().rpc("transfer_invoice_to_1c", { p_invoice_id: id });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Передача в 1С заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось передать счёт в 1С");
+  }
+
+  /**
+   * Корректировка суммы с обязательной причиной (функция базы `correct_invoice`).
+   * Причину проверяем до запроса: без неё база всё равно откажет.
+   */
+  public async correctInvoice(id: string, adjustment: number, reason: string): Promise<void> {
+    const amount = Number(adjustment);
+    const reasonText = reason.trim();
+    if (!Number.isFinite(amount)) throw new M2ApiError(400, "Укажите сумму корректировки числом");
+    if (!reasonText) throw new M2ApiError(400, "Напишите причину корректировки");
+    const { error } = await this.db().rpc("correct_invoice", { p_invoice_id: id, p_adjustment: amount, p_reason: reasonText });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Корректировка счёта заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось скорректировать счёт");
+  }
+
+  /** Пересобрать позиции по текущему прайсу (функция базы `rebuild_invoice_items`), только черновик. */
+  public async rebuildInvoiceItems(id: string): Promise<void> {
+    const { error } = await this.db().rpc("rebuild_invoice_items", { p_invoice_id: id });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Пересборка позиций заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось пересобрать позиции счёта");
+  }
+
+  /**
+   * Строки счёта для файла: плоская таблица из функции базы `invoice_export_rows`.
+   * Названия столбцов задаёт база, интерфейс только складывает их в файл.
+   */
+  public async invoiceExportRows(id: string): Promise<readonly Record<string, string | number>[]> {
+    const { data, error } = await this.db().rpc("invoice_export_rows", { p_invoice_id: id });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Выгрузка счёта заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось собрать выгрузку счёта");
+    return (Array.isArray(data) ? data : []).map((item) => invoiceExportRow(asRow(item)));
   }
 
   /**
