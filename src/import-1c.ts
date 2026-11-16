@@ -40,6 +40,7 @@
  * площадки во времени (equipment_site_history) импорт не делает: её пишут только
  * триггеры при смене места установки.
  */
+import { formatRussianCount } from "./equipment-changes.js";
 import { companyDayStart, companyToday } from "./task-dates.js";
 import { excelSerialToDateText, readXlsxWorkbook, type XlsxCellValue, type XlsxReadSheet } from "./xlsx-read.js";
 
@@ -64,6 +65,8 @@ export type ImportIssueCode =
   | "model_hidden"
   | "manufacturer_hidden"
   | "site_ambiguous"
+  | "too_many_rows"
+  | "serial_lookalike"
   | "site_not_found"
   | "payer_not_found"
   | "number_invalid";
@@ -76,6 +79,7 @@ export type ImportIssueSeverity = "error" | "warning";
 
 const WARNING_CODES: readonly ImportIssueCode[] = [
   "sheet_skipped", "duplicate_in_file", "equipment_duplicate_in_file", "number_invalid",
+  "serial_lookalike",
   "site_not_found", "site_ambiguous", "payer_not_found"
 ];
 
@@ -341,6 +345,10 @@ export function readImportNumber(value: XlsxCellValue): number | undefined {
   const number = Number(compact);
   return Number.isFinite(number) ? number : undefined;
 }
+
+/** Сколько приборов и событий база принимает за один вызов (миграция 0054). */
+export const MAX_IMPORT_EQUIPMENT = 2000;
+export const MAX_IMPORT_EVENTS = 10_000;
 
 const SOURCE_KEY_VERSION = "medtech-import-1c:v1";
 
@@ -655,6 +663,24 @@ function readEquipmentSheet(
           fix: "Оставьте одну модель на прибор: в базу попадёт та, что встретилась первой"
         });
       }
+      // Данные прибора берутся из его первой строки: если дальше по файлу они
+      // другие, молча терять их нельзя.
+      const changed = ([
+        ["площадка", siteColumn, known.siteName],
+        ["плательщик", columns.payer, known.payerName],
+        ["примечание", columns.notes, known.notes],
+        ["показание счётчика", columns.meter, known.meterReading === undefined ? undefined : String(known.meterReading)]
+      ] as const).filter(([, column, before]) => {
+        const now = text(cell(row.cells, column));
+        return now !== "" && catalogKey(now) !== catalogKey(before ?? "");
+      });
+      if (changed.length > 0) {
+        state.issues.push({
+          row: row.number, code: "equipment_duplicate_in_file",
+          problem: `У прибора ${serialNumber} здесь другие данные (${changed.map(([label]) => label).join(", ")}), чем в строке ${known.row}`,
+          fix: "Данные прибора импорт берёт из его первой строки: поправьте их там или уберите лишнее"
+        });
+      }
     } else {
       const meterSource = cell(row.cells, columns.meter);
       const meterReading = readImportNumber(meterSource);
@@ -681,13 +707,15 @@ function readEquipmentSheet(
     }
     if (!withEvents || !device) continue;
     const dateSource = cell(row.cells, columns.date);
-    // Строка только с прибором, без даты: события в ней нет, и это не ошибка.
-    if (isBlank(dateSource)) continue;
+    const workType = text(cell(row.cells, columns.workType));
+    const description = text(cell(row.cells, columns.description));
+    // Строка только с прибором, без даты и без работ: события в ней нет, и это не ошибка.
+    // А вот работа без даты — это потерянная запись истории, и про неё надо сказать.
+    if (isBlank(dateSource) && !workType && !description) continue;
     readEventRow({
       state, rowNumber: row.number, dateColumn: columns.date, dateSource,
       date: readImportDate(dateSource, date1904), today,
-      workType: text(cell(row.cells, columns.workType)),
-      description: text(cell(row.cells, columns.description)),
+      workType, description,
       client: text(cell(row.cells, clientColumn)),
       device, seen
     });
@@ -844,7 +872,7 @@ export interface ImportPlanSummary {
   readonly sheetRows: number;
   readonly serviceRows: number;
   readonly dataRows: number;
-  /** Строк файла без ошибок: они перенесутся (возможно, с оговоркой). */
+  /** Строк файла, из которых что-то перенесётся (или уже перенесено раньше). */
   readonly readyRows: number;
   readonly errorRows: number;
   readonly warningRows: number;
@@ -884,6 +912,11 @@ function sameName(left: string, right: string): boolean {
   return catalogKey(left) === catalogKey(right);
 }
 
+/** S/N без любых пробелов Unicode: по нему видно близнеца с неразрывным пробелом. */
+function looseSerialKey(value: string): string {
+  return value.replace(/\s+/gu, "").toUpperCase();
+}
+
 /**
  * Сверяет разобранный файл с базой и говорит, что появится, что уже есть
  * и что мешает. Ничего не пишет: это и есть пробный импорт.
@@ -895,6 +928,7 @@ export function buildImportPlan(
 ): ImportPlan {
   const issues: ImportRowIssue[] = [...reading.issues];
   const existing = new Map(snapshot.equipment.map((item) => [importSerialKey(item.serialNumber), item]));
+  const lookalike = new Map(snapshot.equipment.map((item) => [looseSerialKey(item.serialNumber), item]));
   const knownKeys = new Set(snapshot.historyKeys);
   const eventsBySerial = new Map<string, ImportHistoryRow[]>();
   for (const event of reading.events) {
@@ -954,6 +988,17 @@ export function buildImportPlan(
       });
       addEvents(record, newEvents);
       continue;
+    }
+
+    // В базе есть прибор, который отличается только неразрывным пробелом:
+    // база их различает, поэтому в реестре появится близнец.
+    const twin = lookalike.get(looseSerialKey(record.serialNumber));
+    if (twin) {
+      issues.push({
+        row: record.row, code: "serial_lookalike",
+        problem: `В реестре уже есть прибор ${twin.serialNumber}: от «${record.serialNumber}» он отличается только пробелами`,
+        fix: "Приведите серийный номер в файле к тому же виду, иначе в реестре появится второй такой прибор"
+      });
     }
 
     // Новый прибор: под каким производителем его заводить.
@@ -1087,10 +1132,30 @@ export function buildImportPlan(
     addEvents(record, newEvents);
   }
 
+  if (writeEquipment.length > MAX_IMPORT_EQUIPMENT || writeEvents.length > MAX_IMPORT_EVENTS) {
+    issues.push({
+      row: 0, code: "too_many_rows",
+      problem: `В файле ${formatRussianCount(writeEquipment.length, ["прибор", "прибора", "приборов"])}`
+        + ` и ${formatRussianCount(writeEvents.length, ["событие", "события", "событий"])}:`
+        + ` это больше, чем база записывает за один раз`,
+      fix: `За один раз переносим не больше ${MAX_IMPORT_EQUIPMENT} приборов и ${MAX_IMPORT_EVENTS} событий:`
+        + " разделите выгрузку на части и загрузите их по очереди"
+    });
+  }
+
   const dataRows = reading.sheetRows - reading.serviceRows;
+  // Замечание ко всему листу (row = 0) считаем за одну строку: иначе на книге
+  // из нескольких листов карточка показывала бы «оговорок нет».
   const rowsWith = (severity: ImportIssueSeverity): number => new Set(
-    issues.filter((issue) => issue.row > 0 && issueSeverity(issue.code) === severity).map((issue) => issue.row)
+    issues.filter((issue) => issueSeverity(issue.code) === severity).map((issue) => issue.row)
   ).size;
+  // Строки, которые действительно перенесутся: строка прибора плюс строки его
+  // событий. В плоской таблице работ это одна и та же строка, поэтому считаем их
+  // множеством, а не суммой.
+  const blockedSerials = new Set(equipment.filter((item) => item.action === "blocked").map((item) => item.serialKey));
+  const readyRowNumbers = new Set<number>();
+  for (const item of reading.equipment) if (!blockedSerials.has(item.serialKey)) readyRowNumbers.add(item.row);
+  for (const event of reading.events) if (!blockedSerials.has(event.serialKey)) readyRowNumbers.add(event.row);
   const eventsCreate = equipment.reduce((total, item) => total + item.eventsCreate, 0);
   const eventsExisting = equipment.reduce((total, item) => total + item.eventsExisting, 0);
   const eventsBlocked = equipment.reduce((total, item) => total + item.eventsBlocked, 0);
@@ -1104,7 +1169,7 @@ export function buildImportPlan(
       sheetRows: reading.sheetRows,
       serviceRows: reading.serviceRows,
       dataRows,
-      readyRows: Math.max(dataRows - rowsWith("error"), 0),
+      readyRows: readyRowNumbers.size,
       errorRows: rowsWith("error"),
       warningRows: rowsWith("warning"),
       equipmentCreate: writeEquipment.length,

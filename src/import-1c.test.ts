@@ -6,6 +6,7 @@ import {
   columnLetter,
   historySourceKey,
   issueSeverity,
+  MAX_IMPORT_EQUIPMENT,
   readImportDate,
   readImportFile,
   readImportNumber,
@@ -480,4 +481,51 @@ test("непонятная строка обрывает блок: событи�
   ]);
   // Второе событие не досталось прибору BE49081.
   assert.deepEqual(reading.events.map((event) => `${event.row}:${event.serialNumber}`), ["4:BE49081"]);
+});
+
+test("таблица работ: запись без даты не пропадает молча", async () => {
+  const source = buildXlsx([{
+    name: "Работы",
+    rows: [
+      ["Серийный номер", "Модель", "Дата", "Вид работ", "Описание работ"],
+      ["BE49081", "DxH-800", "15.03.2023", "Ремонт", "замена иглы"],
+      ["BE49081", "DxH-800", null, "Выезд ТО", "без даты"],
+      ["BE49082", "DxH-800", null, null, null],
+      ["BE49082", "DxH-800", "17.03.2023", "Ремонт", "замена насоса"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  // Строка 3: работа есть, даты нет — это ошибка, а не тихий пропуск.
+  // Строка 4: только прибор, без работы — это не ошибка.
+  assert.deepEqual(reading.issues.map((issue) => [issue.row, issue.code]), [[3, "date_missing"]]);
+  assert.deepEqual(reading.events.map((event) => event.row), [2, 5]);
+});
+
+test("предел одного переноса виден до нажатия, а не отказом после", async () => {
+  const rows: (readonly (string | null)[])[] = [["Серийный номер", "Производитель", "Модель"]];
+  for (let index = 0; index < MAX_IMPORT_EQUIPMENT + 1; index += 1) {
+    rows.push([`BE${index}`, "Beckman Coulter", "DxH-800"]);
+  }
+  const reading = await readImportFile(buildXlsx([{ name: "Приборы", rows: rows as never }]), { today: "2026-11-16" });
+  const plan = buildImportPlan(reading, CATALOG);
+  assert.deepEqual(plan.issues.map((issue) => [issue.row, issue.code]), [[0, "too_many_rows"]]);
+  assert.match(String(plan.issues[0]?.fix), /разделите выгрузку на части/u);
+});
+
+test("серийный номер с неразрывным пробелом: предупреждаем о близнеце", async () => {
+  const source = buildXlsx([{
+    name: "Приборы",
+    rows: [
+      ["Серийный номер", "Производитель", "Модель"],
+      ["BE 49081", "Beckman Coulter", "DxH-800"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  const plan = buildImportPlan(reading, {
+    ...CATALOG,
+    equipment: [{ id: "eq-1", serialNumber: "BE49081", modelName: "DxH-800", manufacturerName: "Beckman Coulter" }]
+  });
+  assert.deepEqual(plan.issues.map((issue) => issue.code), ["serial_lookalike"]);
+  assert.equal(plan.summary.warningRows, 1);
+  assert.equal(plan.summary.equipmentCreate, 1);
 });

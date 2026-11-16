@@ -2088,6 +2088,21 @@ export class M2ApiClient {
     };
   }
 
+  /** Все строки таблицы страницами: PostgREST отдаёт не больше max_rows за запрос. */
+  private async readAllRows(
+    table: string, columns: string, order: string, activeOnly = false
+  ): Promise<readonly Row[]> {
+    const PAGE = 500;
+    const rows: Row[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const query = this.db().from(table).select(columns).order(order).range(from, from + PAGE - 1);
+      const { data, error } = await (activeOnly ? query.eq("is_active", true) : query);
+      throwIfError(error);
+      for (const item of data ?? []) rows.push(asRow(item));
+      if ((data ?? []).length < PAGE) return rows;
+    }
+  }
+
   /**
    * Снимок базы для пробного импорта (экран «Импорт»): справочник моделей,
    * названия площадок и плательщиков, приборы по серийным номерам из файла и
@@ -2095,21 +2110,19 @@ export class M2ApiClient {
    */
   public async importSnapshot(serialNumbers: readonly string[]): Promise<ImportSnapshot> {
     const keys = [...new Set(serialNumbers.map(importSerialKey).filter(Boolean))];
+    // Справочники читаем страницами: PostgREST отдаёт не больше max_rows (1000),
+    // а обрезанный справочник показал бы «модели нет» там, где она есть.
     const [manufacturers, models, sites, payers] = await Promise.all([
       // Скрытые записи справочника тоже нужны: название в них уже занято.
-      this.db().from("manufacturers").select("id, name, is_active"),
-      this.db().from("equipment_models").select("id, name, manufacturer_id, is_active"),
-      this.db().from("sites").select("name").eq("is_active", true),
-      this.db().from("payers").select("name").eq("is_active", true)
+      this.readAllRows("manufacturers", "id, name, is_active", "name"),
+      this.readAllRows("equipment_models", "id, name, manufacturer_id, is_active", "name"),
+      this.readAllRows("sites", "name", "name", true),
+      this.readAllRows("payers", "name", "name", true)
     ]);
-    throwIfError(manufacturers.error);
-    throwIfError(models.error);
-    throwIfError(sites.error);
-    throwIfError(payers.error);
-    const manufacturerById = new Map((manufacturers.data ?? [])
-      .map((item) => [text(asRow(item), "id"), {
-        name: text(asRow(item), "name"),
-        isActive: asRow(item).is_active !== false
+    const manufacturerById = new Map(manufacturers
+      .map((item) => [text(item, "id"), {
+        name: text(item, "name"),
+        isActive: item.is_active !== false
       }]));
 
     const equipment: ImportExistingEquipment[] = [];
@@ -2154,8 +2167,7 @@ export class M2ApiClient {
 
     return {
       manufacturers: [...manufacturerById.values()],
-      models: (models.data ?? []).map((item) => {
-        const row = asRow(item);
+      models: models.map((row) => {
         const manufacturerId = text(row, "manufacturer_id");
         const maker = manufacturerById.get(manufacturerId);
         return {
@@ -2167,8 +2179,8 @@ export class M2ApiClient {
           isActive: row.is_active !== false && maker?.isActive !== false
         };
       }),
-      sites: (sites.data ?? []).map((item) => text(asRow(item), "name")),
-      payers: (payers.data ?? []).map((item) => text(asRow(item), "name")),
+      sites: sites.map((row) => text(row, "name")),
+      payers: payers.map((row) => text(row, "name")),
       equipment,
       historyKeys
     };

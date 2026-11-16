@@ -163,7 +163,10 @@ export function ImportPage() {
     (issue) => issue.code === "model_not_in_catalog" || issue.code === "model_ambiguous"
   ) === true;
   const sheetIssues = plan?.issues.filter((issue) => issue.row === 0) ?? [];
-  const blockingSheetIssue = sheetIssues.find((issue) => issueSeverity(issue.code) === "error");
+  const blockingSheetIssue = sheetIssues.find(
+    (issue) => issue.code === "layout_unknown" || issue.code === "sheet_empty"
+  );
+  const overLimit = sheetIssues.some((issue) => issue.code === "too_many_rows");
   const shownIssues = plan?.issues.slice(0, MAX_SHOWN_ISSUES) ?? [];
   const writeCount = (plan?.write.equipment.length ?? 0) + (plan?.write.events.length ?? 0);
   // Новая модель или производитель — это запись в справочник, и база спросит своё право.
@@ -274,7 +277,7 @@ export function ImportPage() {
           </label> : null}
           <div className="import-plan__actions">
             <Button
-              disabled={writeCount === 0 || busy || referencesRefusal}
+              disabled={writeCount === 0 || busy || referencesRefusal || overLimit}
               icon="check"
               onClick={() => setConfirming(true)}
             >
@@ -282,6 +285,9 @@ export function ImportPage() {
                 ? "Записывать нечего"
                 : `Записать ${formatRussianCount(plan.write.equipment.length, DEVICES)} и ${formatRussianCount(plan.write.events.length, EVENTS)}`}
             </Button>
+            {overLimit ? <span className="import-plan__done">
+              Файл слишком большой для одной записи: разделите выгрузку на части
+            </span> : null}
             {referencesRefusal ? <span className="import-plan__done">
               Импорт заведёт новую модель в справочнике, а на это у вас нет прав: попросите добавить модель того, кто ведёт справочники
             </span> : null}
