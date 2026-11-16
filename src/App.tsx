@@ -37,6 +37,7 @@ import {
   M2ApiError,
   m2Api,
   type ApiSessionUser,
+  type AssignmentSuggestionRecord,
   type EquipmentApiRecord,
   type EquipmentCardResponse,
   type EquipmentPassportReferences,
@@ -75,6 +76,8 @@ import { PricePage } from "./PricePage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { preselectedEngineerId } from "./engineer-competencies.js";
+import { rankAssignmentCandidates } from "./engineer-calendar.js";
+import { EngineerPicker } from "./EngineerPicker.js";
 import { PartsMultiPicker, type SelectedTaskPart } from "./PartsMultiPicker.js";
 import { AccessAdminPage } from "./AccessAdminPage.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
@@ -656,12 +659,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   readonly onOpenRelated: (id: string) => Promise<void>;
   readonly initialTab?: "overview" | "result" | "materials" | "parts" | "history";
 }) {
-  const [suggestions, setSuggestions] = useState<readonly {
-    readonly engineerId: string;
-    readonly fullName: string;
-    readonly isAvailable: boolean;
-    readonly previouslyWorkedWithEquipment: boolean;
-  }[]>([]);
+  const [suggestions, setSuggestions] = useState<readonly AssignmentSuggestionRecord[]>([]);
   const [engineerId, setEngineerId] = useState("");
   const [assignDialogOpen, setAssignDialogOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -739,21 +737,18 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
 
   useEffect(() => {
     if ((!canAssign && !canReassign) || !card.equipment) return;
-    void m2Api.taskAssignmentSuggestions(task.id, card.equipment.manufacturer, card.equipment.model)
+    // Подсказка смотрит и на компетенции, и на занятость инженера в дни самой задачи.
+    void m2Api.taskAssignmentSuggestions(task.id, card.equipment.manufacturer, card.equipment.model, {
+      periodFrom: task.periodFrom, periodTo: task.periodTo, visitDate: task.visitDate
+    })
       .then((items) => {
-        const ranked = [...items].sort((left, right) => {
-          if (left.previouslyWorkedWithEquipment !== right.previouslyWorkedWithEquipment) {
-            return left.previouslyWorkedWithEquipment ? -1 : 1;
-          }
-          if (left.isAvailable !== right.isAvailable) return left.isAvailable ? -1 : 1;
-          return left.fullName.localeCompare(right.fullName, "ru");
-        });
+        const ranked = rankAssignmentCandidates(items);
         setSuggestions(ranked);
         // Смена инженера: сразу выбран другой; инженер из плана ТО у новой задачи — выбран он.
         setEngineerId(preselectedEngineerId(ranked, card.engineer?.id, canReassign));
       })
       .catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить список инженеров"));
-  }, [task.id, canAssign, canReassign, card.equipment?.id]);
+  }, [task.id, canAssign, canReassign, card.equipment?.id, task.periodFrom, task.periodTo, task.visitDate]);
 
   useEffect(() => {
     // Справочники для формы результата грузим, когда её открывают.
@@ -1347,7 +1342,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}
-      description="Выберите инженера для назначения на задачу."
+      description="Подсказка показывает компетенции по прибору и занятость в дни задачи. Ничего не запрещает: выбор за вами."
       footer={<>
         <Button disabled={busy} onClick={() => setAssignDialogOpen(false)} variant="secondary">Отмена</Button>
         <Button busy={busy} disabled={!engineerId} onClick={() => void perform("assign")}>Назначить</Button>
@@ -1356,32 +1351,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       open={assignDialogOpen}
       title={canReassign ? "Смена инженера" : "Выбор инженера"}
     >
-      {suggestions.length === 0 ? (
-        <p className="form-hint">Инженеров пока нет. Добавьте их в разделе «Инженеры».</p>
-      ) : (
-        <div className="engineer-picker" role="listbox" aria-label="Инженеры">
-          {suggestions.map((item) => {
-            const selected = item.engineerId === engineerId;
-            const hints = [
-              item.previouslyWorkedWithEquipment ? "есть компетенция по прибору" : null,
-              item.isAvailable ? "свободен" : "занят"
-            ].filter(Boolean).join(" · ");
-            return (
-              <button
-                aria-selected={selected}
-                className={`engineer-picker__option${selected ? " is-selected" : ""}`}
-                key={item.engineerId}
-                onClick={() => setEngineerId(item.engineerId)}
-                role="option"
-                type="button"
-              >
-                <strong>{item.fullName}</strong>
-                <span>{hints}</span>
-              </button>
-            );
-          })}
-        </div>
-      )}
+      {/* Один список и здесь, и в окне календаря: занятость считается на период задачи. */}
+      <EngineerPicker items={suggestions} onChange={setEngineerId} value={engineerId} />
     </Dialog>
   </>;
 }

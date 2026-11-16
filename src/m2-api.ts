@@ -5,6 +5,13 @@ import { companyDay, companyDayEnd, companyDayStart, companyToday, taskCalendarD
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistoryPart } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
+import {
+  assignmentLoadRange,
+  periodLoadFromCounts,
+  type CalendarEngineer,
+  type CalendarTask,
+  type EngineerPeriodLoad
+} from "./engineer-calendar.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
@@ -234,6 +241,17 @@ export interface AssignmentSuggestionRecord {
   readonly fullName: string;
   readonly isAvailable: boolean;
   readonly previouslyWorkedWithEquipment: boolean;
+  /**
+   * Занятость инженера на период назначаемой задачи (функция engineer_period_load, 0051).
+   * Пусто, если в базе функции ещё нет: тогда подсказка остаётся прежней, по компетенциям.
+   */
+  readonly load?: EngineerPeriodLoad;
+}
+
+/** Задачи и инженеры календаря загрузки за период: готовы для buildEngineerCalendar. */
+export interface EngineerCalendarData {
+  readonly engineers: readonly CalendarEngineer[];
+  readonly tasks: readonly CalendarTask[];
 }
 
 export interface InvoiceApiRecord {
@@ -1428,6 +1446,8 @@ export class M2ApiClient {
   /** Представления и функция из миграции 0025. Пока их нет в базе, склад и поиск приборов работают как раньше. */
   private inventoryRegistryAvailable = true;
   private inventorySummaryAvailable = true;
+  /** Занятость инженеров для подсказки: пока миграции 0051 нет, за ней не ходим каждый раз. */
+  private engineerPeriodLoadAvailable = true;
   private equipmentSearchAvailable = true;
 
   /** Отметка установки и история шагов из миграции 0028: пока их нет, резервы читаются без них. */
@@ -4345,17 +4365,124 @@ export class M2ApiClient {
   }
 
   /**
-   * Кого назначить: по компетенциям (производитель и линейка модели прибора) и занятости.
-   * Отключённых инженеров не предлагаем: база всё равно не даст назначить их.
+   * Календарь загрузки за период: инженеры и их задачи из функции базы engineer_calendar
+   * (миграция 0051). По дням задачи раскладывает buildEngineerCalendar: база отдаёт только
+   * задачи, которые занимают дни периода, поэтому страница не читает весь реестр.
+   * Кого видно, решает база: с tasks.read_all всех инженеров, инженеру — только себя.
    */
-  public async taskAssignmentSuggestions(_id: string, manufacturer: string, model?: string): Promise<readonly AssignmentSuggestionRecord[]> {
-    const engineers = (await this.engineers()).filter((engineer) => engineer.isActive);
-    return engineers.map((engineer) => ({
-      engineerId: engineer.id,
-      fullName: engineer.fullName,
-      isAvailable: engineer.inProgressTaskCount === 0,
-      previouslyWorkedWithEquipment: engineer.competencies.some((competency) => competencyMatchesEquipment(competency, manufacturer, model))
-    }));
+  public async engineerCalendar(from: string, to: string): Promise<EngineerCalendarData> {
+    const { data, error } = await this.db().rpc("engineer_calendar", {
+      p_from: taskCalendarDate(from),
+      p_to: taskCalendarDate(to)
+    }, { get: true });
+    if (isMissingSchemaObject(error, "engineer_calendar")) {
+      throw new M2ApiError(501, "Календарь загрузки заработает после обновления базы на сервере");
+    }
+    throwIfError(error, "Не получилось загрузить календарь загрузки");
+    const engineers = new Map<string, CalendarEngineer>();
+    const tasks: CalendarTask[] = [];
+    for (const item of Array.isArray(data) ? data : []) {
+      const row = asRow(item);
+      // Пустой engineer_id — нераспределённая задача: её видно только тем, кто видит всех.
+      const engineerId = optionalText(row, "engineer_id");
+      if (engineerId && !engineers.has(engineerId)) {
+        engineers.set(engineerId, {
+          id: engineerId,
+          fullName: text(row, "engineer_name"),
+          isActive: row.engineer_is_active !== false
+        });
+      }
+      // У инженера без задач в периоде приходит одна строка с пустой задачей.
+      const taskId = optionalText(row, "task_id");
+      if (!taskId) continue;
+      const priority = optionalText(row, "priority_code");
+      tasks.push({
+        id: taskId,
+        number: text(row, "task_number"),
+        title: text(row, "task_title"),
+        status: text(row, "task_status"),
+        ...(engineerId ? { engineerId } : {}),
+        ...(priority === "urgent" || priority === "planned" ? { priority } : {}),
+        ...(optionalText(row, "period_from") ? { periodFrom: text(row, "period_from").slice(0, 10) } : {}),
+        ...(optionalText(row, "period_to") ? { periodTo: text(row, "period_to").slice(0, 10) } : {}),
+        ...(optionalText(row, "visit_date") ? { visitDate: text(row, "visit_date").slice(0, 10) } : {}),
+        ...(optionalText(row, "site_name") ? { siteName: text(row, "site_name") } : {}),
+        ...(optionalText(row, "equipment_label") ? { equipmentLabel: text(row, "equipment_label") } : {}),
+        isOverdue: row.is_overdue === true
+      });
+    }
+    return { engineers: [...engineers.values()], tasks };
+  }
+
+  /**
+   * Занятость инженеров на период (функция engineer_period_load, миграция 0051): одна строка
+   * на человека, сколько бы задач в периоде ни было. Пусто, если функции в базе ещё нет
+   * или она отказала: подсказка тогда остаётся прежней — компетенции и «свободен / занят»
+   * по числу задач в работе, как было до календаря.
+   */
+  private async engineerPeriodLoad(
+    from: string,
+    to: string,
+    ignoreTaskId?: string
+  ): Promise<readonly EngineerPeriodLoad[] | undefined> {
+    if (!this.engineerPeriodLoadAvailable) return undefined;
+    const { data, error } = await this.db().rpc("engineer_period_load", {
+      p_from: from,
+      p_to: to,
+      // Пустой параметр не отправляем вовсе: в GET-запросе null уехал бы строкой «null».
+      ...(ignoreTaskId ? { p_ignore_task_id: ignoreTaskId } : {})
+    }, { get: true });
+    if (isMissingSchemaObject(error, "engineer_period_load")) {
+      this.engineerPeriodLoadAvailable = false;
+      return undefined;
+    }
+    if (error) {
+      // Занятость не должна мешать назначению: без неё подсказка просто беднее.
+      console.warn("Занятость инженеров не посчиталась", error.message);
+      return undefined;
+    }
+    return (Array.isArray(data) ? data : []).map((item) => {
+      const row = asRow(item);
+      return periodLoadFromCounts({
+        engineerId: text(row, "engineer_id"),
+        taskCount: numberValue(row.task_count) ?? 0,
+        busiestDayCount: numberValue(row.busiest_day_count) ?? 0,
+        ...(optionalText(row, "busiest_day") ? { busiestDay: text(row, "busiest_day").slice(0, 10) } : {}),
+        freeWorkdayCount: numberValue(row.free_workday_count) ?? 0,
+        workdayCount: numberValue(row.workday_count) ?? 0,
+        overdueTaskCount: numberValue(row.overdue_task_count) ?? 0
+      });
+    });
+  }
+
+  /**
+   * Кого назначить: по компетенциям (производитель и линейка модели прибора) и занятости
+   * на период самой задачи — кто в эти дни свободен, у кого уже три выезда, кто не работает.
+   * Отключённых инженеров не предлагаем: база всё равно не даст назначить их.
+   * Подсказка ничего не запрещает: порядок и пояснения, выбор за человеком.
+   */
+  public async taskAssignmentSuggestions(
+    id: string,
+    manufacturer: string,
+    model?: string,
+    period?: { readonly periodFrom?: string; readonly periodTo?: string; readonly visitDate?: string }
+  ): Promise<readonly AssignmentSuggestionRecord[]> {
+    const range = assignmentLoadRange(period ?? {}, companyToday());
+    const [engineers, load] = await Promise.all([
+      this.engineers(),
+      this.engineerPeriodLoad(range.from, range.to, id).catch(() => undefined)
+    ]);
+    const byEngineer = new Map((load ?? []).map((item) => [item.engineerId, item]));
+    return engineers.filter((engineer) => engineer.isActive).map((engineer) => {
+      const engineerLoad = byEngineer.get(engineer.id);
+      return {
+        engineerId: engineer.id,
+        fullName: engineer.fullName,
+        isAvailable: engineerLoad ? engineerLoad.isFree : engineer.inProgressTaskCount === 0,
+        previouslyWorkedWithEquipment: engineer.competencies.some((competency) => competencyMatchesEquipment(competency, manufacturer, model)),
+        ...(engineerLoad ? { load: engineerLoad } : {})
+      };
+    });
   }
 
   public async listInvoices(): Promise<readonly InvoiceApiRecord[]> {

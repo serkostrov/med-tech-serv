@@ -5,6 +5,7 @@ import { InventoryPartCard } from "./InventoryPartCard.js";
 import { StockReceiptImport } from "./StockReceiptImport.js";
 import { conditionTotalsText, conditionTotalsTitle } from "./stock-movements.js";
 import { EngineerCompetencyEditor, type CompetencyDraft, type CompetencyReferences } from "./EngineerCompetencyEditor.js";
+import { EngineerCalendar } from "./EngineerCalendar.js";
 import { competenciesToSave, competencyKey, competencyLabel, withManufacturerIds, type EngineerCompetency } from "./engineer-competencies.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, ViewSwitch, toast } from "./ui.js";
 import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate } from "./date-format.js";
@@ -28,6 +29,11 @@ const EMPTY_DRAFT: CompetencyDraft = { manufacturerId: "", modelLine: "" };
 
 export function EngineersPage() {
   const [engineers, setEngineers] = useState<readonly EngineerOverview[]>([]);
+  // Список или календарь загрузки. Календарь показываем тому, кто и так видит все задачи
+  // (координатор, руководитель): у остальных ролей база его не отдаст, и предлагать
+  // кнопку, которая приведёт к отказу, незачем.
+  const [view, setView] = useState<"list" | "calendar">("list");
+  const [canSeeCalendar, setCanSeeCalendar] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -44,6 +50,9 @@ export function EngineersPage() {
     finally { setLoading(false); }
   };
   useEffect(() => { void reload(); }, []);
+  useEffect(() => {
+    void m2Api.hasPermission("tasks.read_all").then(setCanSeeCalendar).catch(() => setCanSeeCalendar(false));
+  }, []);
   const loadReferences = async () => {
     setReferencesState("loading");
     try {
@@ -93,13 +102,21 @@ export function EngineersPage() {
   const overdue = active.reduce((sum, item) => sum + item.overdueTaskCount, 0);
   const maxLoad = Math.max(1, ...engineers.map((item) => item.assignedTaskCount));
   return <>
-    <PageIntro description="Кто сейчас занят, у кого просрочки и кому можно дать новую заявку." title="Инженеры" />
+    <PageIntro
+      description={view === "calendar"
+        ? "Кто в какой день занят, кто перегружен и у кого окно. Дни считаются по Москве."
+        : "Кто сейчас занят, у кого просрочки и кому можно дать новую заявку."}
+      title="Инженеры"
+      titleAside={canSeeCalendar ? <ViewSwitch items={[{ value: "list", label: "Список" }, { value: "calendar", label: "Календарь" }]} label="Как показать инженеров" onValueChange={setView} value={view} /> : undefined}
+    />
+    {view === "calendar" && canSeeCalendar ? <EngineerCalendar /> : <>
     <div className="metric-grid metric-grid--three">
       <MetricCard icon="engineers" label="Активные инженеры" value={String(active.length)} />
       <MetricCard icon="tasks" label="Открытые задачи" tone="yellow" value={String(assigned)} />
       <MetricCard icon="clock" label="Просроченные" tone="orange" value={String(overdue)} />
     </div>
     <DataTableShell meta={formatRussianCount(engineers.length, ["человек", "человека", "человек"])} title="Загрузка">{loading && engineers.length === 0 ? <ResourceState description="Подождите, список инженеров сейчас появится." status="loading" title="Загружаем инженеров" /> : engineers.length === 0 ? <ResourceState description="Когда появятся сотрудники с ролью инженера, они отобразятся здесь." status="empty" title="Инженеров пока нет" /> : <div className="table-scroll engineer-load-scroll"><table className="data-table engineer-load-table"><thead><tr><th>Инженер</th><th>Компетенции</th><th>Загрузка</th><th className="numeric">Открытые</th><th className="numeric">В работе</th><th className="numeric">Просрочено</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{engineers.map((engineer) => <tr className={engineer.isActive ? "" : "reference-admin-table__inactive"} key={engineer.id}><td className="engineer-load-table__wide" data-label="Инженер"><strong>{engineer.fullName}</strong></td><td className="engineer-load-table__wide" data-label="Компетенции"><CompetencyTags engineer={engineer} /></td><td className="engineer-load-table__wide" data-label="Загрузка"><div aria-label={`Загрузка: ${formatRussianCount(engineer.assignedTaskCount, ["задача", "задачи", "задач"])}`} className="load-cell"><span><i style={{ width: `${Math.max(4, engineer.assignedTaskCount / maxLoad * 100)}%` }} /></span></div></td><td className="numeric" data-label="Открытые">{engineer.assignedTaskCount}</td><td className="numeric" data-label="В работе">{engineer.inProgressTaskCount}</td><td className="numeric" data-label="Просрочено"><strong className={engineer.overdueTaskCount ? "danger-text" : ""}>{engineer.overdueTaskCount}</strong></td><td data-label="Состояние"><StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Неактивен" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить карточку" onClick={() => openEditor(engineer)} /></div></td></tr>)}</tbody></table></div>}</DataTableShell>
+    </>}
     <DialogForm busy={saving} description="По компетенциям CRM подсказывает, кого назначить на прибор." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} submitLabel="Сохранить карточку" title="Изменить карточку инженера">
       <label className="field-wide">ФИО<input autoFocus defaultValue={editing?.fullName} name="fullName" required /></label>
       <div className="field-wide competency-field">
