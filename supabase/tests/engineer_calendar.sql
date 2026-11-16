@@ -288,5 +288,7 @@ SELECT pg_temp.check(has_function_privilege('authenticated', 'public.engineer_ca
 SELECT pg_temp.check(has_function_privilege('authenticated', 'public.engineer_period_load(date, date, uuid)', 'execute'), 'вошедший пользователь вызывает занятость');
 -- Индексы выборки на месте: без них на стенде с тысячами задач календарь будет перебирать всё.
 SELECT pg_temp.check(EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'tasks_calendar_days_idx'), 'индекс дней задач создан');
+-- Индекс из ранней версии миграции не должен оставаться на стенде мёртвым грузом.
+SELECT pg_temp.check(NOT EXISTS (SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = 'tasks_calendar_undated_idx'), 'лишний индекс задач без срока убран');
 
 ROLLBACK;
