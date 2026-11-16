@@ -2312,6 +2312,9 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   // Паспорт, который сейчас открывается из списка: показываем его каркас.
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [siteChangeId, setSiteChangeId] = useState<string | null>(null);
+  // Состояние выгрузки стоит здесь, рядом с остальными: ниже по коду есть ранние return
+  // (открытый паспорт и его каркас), а хуки должны вызываться в одном порядке всегда.
+  const [exporting, setExporting] = useState(false);
   const editingRecord = records.find((record) => record.id === editingId);
   const selectedRecord = records.find((record) => record.id === selectedId);
   const siteChangeRecord = records.find((record) => record.id === siteChangeId);
@@ -2544,7 +2547,6 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
 
   const filteredEmpty = Boolean(filters.search || filters.manufacturer || filters.status || filters.site || filters.payer);
   const initialLoading = loading && records.length === 0;
-  const [exporting, setExporting] = useState(false);
   // Выгрузка всех найденных приборов, а не открытой страницы: столбцы те же, что в реестре.
   const exportExcel = async () => {
     setExporting(true);
