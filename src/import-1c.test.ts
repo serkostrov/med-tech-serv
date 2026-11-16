@@ -460,3 +460,24 @@ test("площадка с одинаковым названием у двух о
   assert.equal(plan.write.equipment[0]?.site, undefined);
   assert.equal(plan.summary.equipmentCreate, 1);
 });
+
+test("непонятная строка обрывает блок: события не садятся на прежний прибор", async () => {
+  const source = buildXlsx([{
+    name: "Лист1",
+    rows: [
+      ["наименование прибора", "(s/n прибора)", "вид работ", "описание работ"],
+      ["дата", "Наименование клиента", null, null],
+      ["DxH-800", "BE49081", null, null],
+      ["15.03.2023", "Клиника", "Ремонт", "замена иглы"],
+      ["ГП № 87", "ООО «Ромашка»", null, null],
+      ["16.03.2023", "Клиника", "Ремонт", "замена насоса"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  assert.deepEqual(reading.issues.map((issue) => [issue.row, issue.code]), [
+    [5, "row_unclear"],
+    [6, "serial_unknown"]
+  ]);
+  // Второе событие не досталось прибору BE49081.
+  assert.deepEqual(reading.events.map((event) => `${event.row}:${event.serialNumber}`), ["4:BE49081"]);
+});

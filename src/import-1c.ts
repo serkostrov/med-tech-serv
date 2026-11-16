@@ -516,12 +516,25 @@ function readHistorySheet(
       const serialNumber = text(second);
       const modelName = text(first);
       const serialKey = importSerialKey(serialNumber);
-      if (isBlank(first) || looksLikeDateText(first)) {
+      if (isBlank(first)) {
+        // Пустая первая клетка — просто мусорная строка: блок прибора она не
+        // открывает и события, идущие дальше, по-прежнему относятся к нему.
         state.issues.push({
           row: row.number, code: "row_unclear",
           problem: "В строке нет ни даты события, ни названия прибора",
           fix: "Строку прибора начинайте его названием и S/N, строку события — датой"
         });
+        continue;
+      }
+      if (looksLikeDateText(first)) {
+        state.issues.push({
+          row: row.number, code: "row_unclear",
+          problem: `«${text(first)}» не похоже на название прибора`,
+          fix: "Уберите подзаголовки разделов (месяц, период, «Итого»): события после них непонятно к чему относить"
+        });
+        // Подзаголовок раздела обрывает блок: дальше может идти уже другой прибор,
+        // и сажать его события на прежний — значит испортить историю.
+        block = undefined;
         continue;
       }
       if (!serialKey) {
@@ -530,6 +543,7 @@ function readHistorySheet(
           problem: `У прибора «${modelName}» нет серийного номера`,
           fix: "Впишите S/N прибора или удалите строку"
         });
+        block = undefined;
         continue;
       }
       // Во втором столбце клиент, а не S/N: так выглядит подзаголовок раздела.
@@ -540,6 +554,7 @@ function readHistorySheet(
           problem: `«${serialNumber}» не похоже на серийный номер прибора`,
           fix: "Строку прибора начинайте его названием и S/N; подзаголовки разделов из файла уберите"
         });
+        block = undefined;
         continue;
       }
       const known = byKey.get(serialKey);
