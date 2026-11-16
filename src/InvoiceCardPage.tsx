@@ -291,7 +291,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
             : <>
               <InvoiceItemsTable items={groups.billable} />
               {withoutPrice.length > 0
-                ? <p className="form-hint">Без цены {formatRussianCount(withoutPrice.length, ["строка", "строки", "строк"])}: её не нашлось в прайсе на дату работ. Задайте цену в прайсе и пересоберите черновик.</p>
+                ? <p className="form-hint">Без цены {formatRussianCount(withoutPrice.length, ["строка", "строки", "строк"])}: цены на дату работ не нашлось в прайсе. Задайте её в прайсе и пересоберите черновик.</p>
                 : null}
             </>}
         </section>
