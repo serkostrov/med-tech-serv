@@ -6,6 +6,9 @@ import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistory
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
+import { canReadWholeNotificationJournal } from "./notification-journal.js";
+import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
+import { assertRequisites } from "./requisites.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
   AccessRoleResponse,
@@ -311,6 +314,11 @@ export interface ReferenceCatalogValue {
   readonly code?: string;
   readonly name: string;
   readonly isActive: boolean;
+  /**
+   * Встроенное значение: на нём держится работа базы, отключать и удалять его нельзя (миграция 0033).
+   * У справочников без такого признака поля нет вовсе, поэтому необязательное.
+   */
+  readonly isBuiltin?: boolean;
   readonly attributes: Readonly<Record<string, string | number | boolean | null>>;
 }
 
@@ -1634,11 +1642,27 @@ export class M2ApiClient {
   }
 
   public async updateAccessUser(id: string, input: Readonly<Record<string, unknown>>): Promise<AccessUserRecord> {
+    // Себе вход не отключают и роль себе не меняют (миграция 0035): говорим это до запроса,
+    // а не сырой ошибкой базы.
+    const session = await this.cachedSession();
+    if (input.isActive === false && id === session.id) {
+      throw new M2ApiError(400, "Себе вход отключать нельзя: вы сразу потеряете доступ к системе. Попросите другого администратора");
+    }
     const patch: Row = {};
     if (input.fullName !== undefined) patch.full_name = input.fullName;
     if (input.role !== undefined) patch.role = input.role;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
     if (input.accessRoleKey !== undefined) patch.access_role_key = input.accessRoleKey;
+    if (id === session.id) {
+      const roleChanged = (patch.access_role_key !== undefined && patch.access_role_key !== session.accessRoleKey)
+        || (patch.role !== undefined && patch.role !== session.role);
+      if (roleChanged) {
+        throw new M2ApiError(400, "Себе роль менять нельзя: так можно остаться без нужных прав. Попросите другого администратора");
+      }
+      // Неизменившуюся роль не отправляем вовсе: база сторожит сам факт правки этих полей.
+      delete patch.access_role_key;
+      delete patch.role;
+    }
     if (input.telegramChatId !== undefined) patch.telegram_chat_id = normalizeTelegramChatId(input.telegramChatId);
     const { data, error } = await this.db().from("users").update(patch).eq("id", id).select("id, full_name, role, email, is_active, access_role_key, telegram_chat_id").single();
     throwIfError(error);
@@ -1666,7 +1690,12 @@ export class M2ApiClient {
   } = {}): Promise<NotificationJournalResponse> {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
+    // Инженеру, кладовщику и инициатору положены только свои уведомления (миграция 0034).
+    // Правило держит база, запрос его повторяет: иначе счётчик «N из N» считал бы чужие строки.
+    const session = await this.cachedSession();
+    const ownOnly = !canReadWholeNotificationJournal(session.permissions);
     let request = this.db().from("notifications").select("id, event_code, recipient_user_id, channel, recipient_address, subject, body, status, scheduled_at, sent_at, delivered_at, attempts, last_error, task_id, created_at", { count: "exact" }).order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+    if (ownOnly) request = request.eq("recipient_user_id", session.id);
     if (query.channel) request = request.eq("channel", query.channel);
     if (query.status) request = request.eq("status", query.status);
     if (query.eventCode) request = request.eq("event_code", query.eventCode);
@@ -1698,7 +1727,8 @@ export class M2ApiClient {
       }),
       total: count ?? 0,
       limit,
-      offset
+      offset,
+      ownOnly
     };
   }
 
@@ -2314,6 +2344,8 @@ export class M2ApiClient {
     const requisitesSource = asRow(input.requisites ?? input);
     const inn = optionalText(requisitesSource, "inn") ?? optionalText(input, "inn");
     const kpp = optionalText(requisitesSource, "kpp") ?? optionalText(input, "kpp");
+    // Реквизиты проверяет база (миграция 0036), здесь — чтобы отказ пришёл до запроса.
+    assertRequisites({ ...(inn ? { inn } : {}), ...(kpp ? { kpp } : {}) });
     const { data, error } = await this.db().from("payers").insert({
       name: input.name,
       requisites: {
@@ -2336,6 +2368,9 @@ export class M2ApiClient {
     if (input.requisites !== undefined || input.inn !== undefined || input.kpp !== undefined) {
       const inn = optionalText(requisitesSource, "inn") ?? optionalText(input, "inn");
       const kpp = optionalText(requisitesSource, "kpp") ?? optionalText(input, "kpp");
+      // Здесь не проверяем: база (миграция 0036) пропускает старую запись с мусором,
+      // пока реквизиты не трогают, а отсюда прежних значений не видно. Проверяет экран,
+      // где известно, что человек изменил, — иначе правка ФИО упиралась бы в чужую опечатку.
       patch.requisites = {
         ...(inn ? { inn } : {}),
         ...(kpp ? { kpp } : {})
@@ -4237,6 +4272,8 @@ export class M2ApiClient {
         code: catalog.code ? optionalText(row, catalog.code) : undefined,
         name: text(row, "name"),
         isActive: row.is_active !== false,
+        // Признака нет у справочников, от которых база не зависит: там встроенных значений не бывает.
+        isBuiltin: row.is_builtin === true,
         attributes: {
           ...(row.requires_hours !== undefined ? { requiresHours: row.requires_hours === true } : {}),
           ...(row.sort_order !== undefined ? { sortOrder: numberValue(row.sort_order) ?? 0 } : {}),
@@ -4311,6 +4348,9 @@ export class M2ApiClient {
   }
 
   public async removeCatalogValue(key: string, id: string): Promise<{ readonly mode: "deactivated" | "deleted"; readonly after?: ReferenceCatalogValue }> {
+    // Встроенное значение не отключаем: база откажет (0033), но лучше сказать это сразу и по-человечески.
+    const existing = (await this.listCatalogValues(key)).find((item) => item.id === id);
+    if (existing) assertReferenceValueCanBeHidden(existing);
     const after = await this.updateCatalogValue(key, id, { isActive: false });
     return { mode: "deactivated", after };
   }

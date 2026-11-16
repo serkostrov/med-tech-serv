@@ -11,7 +11,8 @@ import {
   type NavigationItem
 } from "./navigation.js";
 import { hasEquipmentSerialConflict } from "./equipment-passport.js";
-import { referenceEditPayload } from "./reference-edit.js";
+import { formatMeterReading, meterReadingRefusal } from "./meter-reading.js";
+import { canHideReferenceValue, duplicateModelRefusal, referenceEditPayload } from "./reference-edit.js";
 import {
   formatEquipmentAssignmentChange,
   formatEquipmentAssignmentDate,
@@ -52,7 +53,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
-import { companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, taskCalendarDate } from "./task-dates.js";
+import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate } from "./task-dates.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
@@ -500,6 +501,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
     }
     if (!periodFrom || !periodTo) return fail("Укажите период выполнения: даты «с» и «по»");
     if (periodFrom > periodTo) return fail("Начало периода не может быть позже конца");
+    if (callDate && isFutureCompanyDate(callDate)) return fail("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
     const comment = String(data.get("comment") ?? "").trim();
     setBusy(true);
     try {
@@ -622,7 +624,8 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
       <label className="field-wide">Причина вызова (со слов клиента)<AutoTextarea defaultValue={initialComment} maxLength={2000} name="comment" placeholder="Что случилось с прибором. Инженер увидит это в акте и сможет уточнить" rows={3} /></label>
       <h3 className="task-form-step field-wide"><span>4</span>Сроки и исполнитель</h3>
       <div className="dialog-form-row-3">
-        <label>Дата вызова<DatePicker onChange={setCallDate} value={callDate} /></label>
+        {/* Заявка не могла поступить завтра: дальше сегодняшнего дня календарь не пускает (миграция 0037). */}
+        <label>Дата вызова<DatePicker max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" onChange={setCallDate} value={callDate} /></label>
         <label>Выполнить с *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodFrom(value); }} required value={periodFrom} /></label>
         <label>Выполнить до *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodTo(value); }} required value={periodTo} /></label>
       </div>
@@ -842,6 +845,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       const callDate = taskCalendarDate(String(data.get("callDate") ?? ""));
       const visitValue = String(data.get("visitDate") ?? "").trim();
       const visitDate = visitValue ? taskCalendarDate(visitValue) : undefined;
+      if (isFutureCompanyDate(callDate)) throw new Error("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
       if (visitDate && visitDate < callDate) throw new Error("Дата выезда не может быть раньше даты вызова");
       // Время работ из акта относится к дню выезда: при смене даты переносим его на новый день.
       const hasActTimes = Boolean(task.workStartedAt || task.workFinishedAt);
@@ -906,6 +910,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       if (startTime && finishTime && finishTime < startTime) throw new Error("Время окончания работ раньше времени начала");
       const visitDate = visitRaw ? taskCalendarDate(visitRaw) : null;
       if (visitDate && task.callDate && visitDate < task.callDate) throw new Error(`Дата выезда раньше даты вызова (${formatTaskDate(task.callDate)})`);
+      // Счётчик прибора только растёт: уменьшение не принимает и база (миграция 0038).
+      const meterRefusal = meterReadingRefusal(numberField("meterReading") ?? undefined, card.equipment?.lastMeterReading);
+      if (meterRefusal) throw new Error(meterRefusal);
       // Отправляем только изменённое: координатор, поправив опечатку в старой задаче, не запишет в неё чужую дату.
       const visitChanged = visitDate !== (task.visitDate ?? null);
       const startChanged = startTime !== companyTime(task.workStartedAt);
@@ -1254,7 +1261,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         <label>Начало работ<input autoComplete="off" defaultValue={companyTime(task.workStartedAt)} inputMode="decimal" name="workStartTime" placeholder="чч:мм, например 9:30" /></label>
         <label>Окончание работ<input autoComplete="off" defaultValue={companyTime(task.workFinishedAt)} inputMode="decimal" name="workFinishTime" placeholder="чч:мм, например 13:15" /></label>
       </div>
-      {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder="Если есть на приборе" step="any" type="number" /></label> : null}
+      {/* Нижнюю границу браузеру не отдаём: он напишет отказ на своём языке, а наш — по-русски. */}
+      {task.equipmentId ? <label>Показание счётчика<input defaultValue={task.meterReading ?? ""} inputMode="decimal" min="0" name="meterReading" placeholder={card.equipment?.lastMeterReading === undefined ? "Если есть на приборе" : `Не меньше ${formatMeterReading(card.equipment.lastMeterReading)}`} step="any" title={card.equipment?.lastMeterReading === undefined ? undefined : `Последнее показание прибора ${formatMeterReading(card.equipment.lastMeterReading)}: счётчик только растёт`} type="number" /></label> : null}
       {hoursRequired ? <label>Часы работы<input defaultValue={task.hours ?? ""} inputMode="decimal" min="0.25" name="hours" required step="0.25" type="number" /></label> : null}
       <ResultReservationChecks hasEquipment={Boolean(task.equipmentId)} reservations={reservations} />
       <fieldset className="field-wide result-checks"><legend>Отметки акта</legend>
@@ -1267,7 +1275,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео). Можно выбрать сразу несколько.`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
     {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
-    <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
+    <DialogForm busy={busy} description="Изменятся название, вид работ, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}
@@ -1971,11 +1979,13 @@ function EquipmentAssignmentForm({
     }
     setBusy(true);
     try {
+      const occurredAt = localDateTimeToIso(String(data.get("occurredAt") ?? ""));
+      assertNotFutureCompanyMoment(occurredAt, "Дата перемещения");
       await onApply({
         kind,
         targetId: target.id,
         targetName: target.name,
-        occurredAt: localDateTimeToIso(String(data.get("occurredAt") ?? "")),
+        occurredAt,
         comment: String(data.get("comment") ?? "")
       });
     } catch (changeError) {
@@ -1996,7 +2006,7 @@ function EquipmentAssignmentForm({
       title={kind === "site_change" ? "Смена места установки" : "Смена плательщика"}
     >
       <label>{kind === "site_change" ? "Новая площадка" : "Новый плательщик"} *<Select defaultValue={available[0]?.id} name="targetId" required>{available.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</Select></label>
-      <label>Когда произошло *<DateTimePicker defaultValue={localDateTimeInputValue()} name="occurredAt" required /></label>
+      <label>Когда произошло *<DateTimePicker defaultValue={localDateTimeInputValue()} max={companyToday()} maxMessage="Событие не могло произойти позже сегодняшнего дня" name="occurredAt" required /></label>
       <label className="field-wide">Комментарий *<AutoTextarea maxLength={2000} name="comment" placeholder="Причина перемещения или смены плательщика" required rows={3} /></label>
     </DialogForm>
   );
@@ -2020,8 +2030,10 @@ function ManualEquipmentHistoryForm({
     const data = new FormData(event.currentTarget);
     setBusy(true);
     try {
+      const occurredAt = localDateTimeToIso(String(data.get("occurredAt") ?? ""));
+      assertNotFutureCompanyMoment(occurredAt, "Дата события");
       await onAdd({
-        occurredAt: localDateTimeToIso(String(data.get("occurredAt") ?? "")),
+        occurredAt,
         summary: String(data.get("summary") ?? ""),
         client: String(data.get("client") ?? ""),
         description: String(data.get("description") ?? "")
@@ -2044,7 +2056,7 @@ function ManualEquipmentHistoryForm({
       submitLabel="Добавить в историю"
       title="Прошлое событие прибора"
     >
-      <label>Дата и время события *<DateTimePicker name="occurredAt" required /></label>
+      <label>Дата и время события *<DateTimePicker max={companyToday()} maxMessage="Событие не могло произойти позже сегодняшнего дня" name="occurredAt" required /></label>
       <label>Вид / название события *<input maxLength={200} name="summary" placeholder="Например, диагностика" required /></label>
       <label className="field-wide">Клиент на дату события *<input defaultValue={record.place} maxLength={500} name="client" required /></label>
       <label className="field-wide">Исходное описание<AutoTextarea maxLength={50000} name="description" placeholder="Можно оставить пустым, если описания в источнике не было" rows={7} /></label>
@@ -2606,6 +2618,9 @@ function NotificationsPage() {
   const [filters, setFilters] = useState({ channel: "", status: "", eventCode: "", recipient: "" });
   const [openId, setOpenId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Инженеру и кладовщику журнал отдают только по их адресам: об этом надо сказать прямо,
+  // иначе «3 из 3» читается как «система отправила всего три письма».
+  const [ownOnly, setOwnOnly] = useState(false);
   const reload = async (current = filters, targetPageIndex = pageIndex) => {
     setLoading(true);
     try {
@@ -2616,6 +2631,7 @@ function NotificationsPage() {
       });
       setItems(page.items);
       setTotal(page.total);
+      setOwnOnly(page.ownOnly === true);
     } catch (loadError) {
       toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить уведомления");
     } finally {
@@ -2650,7 +2666,9 @@ function NotificationsPage() {
       <label className="filter-field--search">Адресат<input onChange={(event) => changeFilter("recipient", event.target.value)} placeholder="E-mail или номер чата" type="search" value={filters.recipient} /></label>
     </FilterBar>
     <section className="card card--table" aria-label="Журнал уведомлений">
-      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Журнал отправки" />
+      {/* Инженеру и кладовщику журнал отдают только по их адресам: иначе «3 из 3» читается
+          как «система отправила всего три письма». */}
+      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}${ownOnly ? " · только адресованные вам" : ""}` })} title="Журнал отправки" />
       {loading && items.length === 0 ? <ResourceState description="Подождите, письма сейчас появятся." status="loading" title="Загружаем уведомления" />
         : items.length === 0 ? <ResourceState description={filtered ? "Измените условия или сбросьте фильтры." : "Письма появятся здесь, когда система отправит сообщения по заявкам."} status={filtered ? "filtered-empty" : "empty"} title={filtered ? "Уведомлений по этим условиям нет" : "Уведомлений пока нет"} />
           : <div className="table-scroll"><table className="data-table notification-table"><thead><tr><th scope="col">Когда</th><th scope="col">Кому</th><th scope="col">О чём</th><th scope="col">Канал</th><th scope="col">Статус</th></tr></thead><tbody>
@@ -2767,6 +2785,16 @@ function AdminReferencesPage() {
     setSaving(true); setFormError(null);
     try {
       const attributes = Object.fromEntries(selected.fields.filter((field) => !field.readOnly).map((field) => [field.key, editingAttributes[field.key] ?? null]));
+      // Дубль модели у одного производителя база не примет (миграция 0039): говорим это сразу.
+      if (selected.key === "equipment-models") {
+        const manufacturerId = attributes.manufacturerId ?? null;
+        const duplicate = duplicateModelRefusal(
+          { ...(editingId && editingId !== "new" ? { id: editingId } : {}), name, manufacturerId },
+          records,
+          (relatedValues.manufacturers ?? []).find((value) => value.id === manufacturerId)?.name
+        );
+        if (duplicate) throw new Error(duplicate);
+      }
       if (editingId === "new") await m2Api.createCatalogValue(selected.key, { ...(code ? { code } : {}), name, attributes });
       else if (editingId) await m2Api.updateCatalogValue(selected.key, editingId, referenceEditPayload(name, attributes));
       await loadCatalog(selected.key);
@@ -2833,14 +2861,15 @@ function AdminReferencesPage() {
         <CardHeader action={<Button icon="plus" onClick={beginCreate}>Добавить запись</Button>} headingId="reference-admin-title" meta={`${formatRussianCount(records.filter((record) => record.isActive).length, ["активная запись", "активные записи", "активных записей"])} · ${formatRussianCount(records.filter((record) => !record.isActive).length, ["неактивная", "неактивные", "неактивных"])}`} title={selected.label} />
         <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th><th scope="col">Параметры</th><th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
           return <tr className={!record.isActive ? "reference-admin-table__inactive" : ""} key={record.id}>
-            <td><strong>{record.name}</strong></td>
+            <td><strong>{record.name}</strong>{record.isBuiltin ? <small>встроенное значение</small> : null}</td>
             <td className="muted">{referenceAttributesSummary(selected.fields, record.attributes, relatedValues)}</td>
             <td><StatusBadge tone={record.isActive ? "success" : "neutral"}>{record.isActive ? "Активно" : "Неактивно"}</StatusBadge></td>
             <td><div className="reference-admin-actions">
               <IconButton disabled={index === 0} icon="moveUp" label="Выше" onClick={() => void moveRecord(record, "up")} />
               <IconButton disabled={index === records.length - 1} icon="moveDown" label="Ниже" onClick={() => void moveRecord(record, "down")} />
               <IconButton icon="edit" label="Изменить" onClick={() => beginEdit(record)} />
-              {record.isActive ? <IconButton icon="hide" label="Скрыть" onClick={() => setDeactivating(record)} /> : <IconButton icon="show" label="Показать" onClick={() => void reactivateRecord(record)} />}
+              {/* У встроенного значения кнопки «Скрыть» нет: без него база не работает (миграция 0033). */}
+              {!canHideReferenceValue(record) ? null : record.isActive ? <IconButton icon="hide" label="Скрыть" onClick={() => setDeactivating(record)} /> : <IconButton icon="show" label="Показать" onClick={() => void reactivateRecord(record)} />}
             </div></td>
           </tr>;
         })}{records.length === 0 ? <tr><td colSpan={4}><ResourceState description="Нажмите «Добавить запись», чтобы значение появилось в заявках." status="empty" title={`В списке «${selected.label}» пока нет записей`} /></td></tr> : null}</tbody></table></div>

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { AccessRoleResponse } from "./types.js";
 import type { Permission, WorkingRole } from "./domain/access.js";
+import { activeAdminCount, canChangeEmployeeRole, employeeDisableBlock, initialEmployeeRoleKey } from "./access-admin.js";
 import { m2Api, type AccessUserRecord } from "./m2-api.js";
 import { toTechnicalCode } from "./slug.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DialogForm, IconButton, PageIntro, PageTabs, ResourceState, StatusBadge, Select, toast } from "./ui.js";
@@ -53,6 +54,8 @@ export function AccessAdminPage() {
   const [roles, setRoles] = useState<readonly AccessRoleResponse[]>([]);
   const [permissions, setPermissions] = useState<readonly Permission[]>([]);
   const [users, setUsers] = useState<readonly AccessUserRecord[]>([]);
+  // Кто смотрит список: себе вход не отключают, и кнопки «Отключить» у своей строки нет.
+  const [viewerId, setViewerId] = useState("");
   const [roleEditor, setRoleEditor] = useState<RoleEditor | null>(null);
   const [userEditor, setUserEditor] = useState<UserEditor | null>(null);
   const [pendingState, setPendingState] = useState<PendingState | null>(null);
@@ -64,6 +67,7 @@ export function AccessAdminPage() {
   const editedRole = roleEditor?.mode === "edit" ? roles.find((role) => role.key === roleEditor.key) : undefined;
   const editedUser = userEditor?.mode === "edit" ? users.find((user) => user.id === userEditor.id) : undefined;
   const selectedUserRole = roles.find((role) => role.key === userRoleKey);
+  const adminCount = activeAdminCount(users.map((user) => ({ id: user.id, isActive: user.isActive, role: user.role })));
   const permissionGroups = useMemo(() => {
     const groups = new Map<string, Permission[]>();
     for (const permission of permissions) {
@@ -76,8 +80,8 @@ export function AccessAdminPage() {
   const load = async () => {
     setLoading(true);
     try {
-      const [roleResponse, userResponse] = await Promise.all([m2Api.accessRoles(), m2Api.accessUsers()]);
-      setRoles(roleResponse.items); setPermissions(roleResponse.permissions); setUsers(userResponse);
+      const [roleResponse, userResponse, session] = await Promise.all([m2Api.accessRoles(), m2Api.accessUsers(), m2Api.session()]);
+      setRoles(roleResponse.items); setPermissions(roleResponse.permissions); setUsers(userResponse); setViewerId(session.id);
     } catch (loadError) {
       toast.error(errorMessage(loadError), { title: "Список не загрузился" });
     } finally { setLoading(false); }
@@ -91,7 +95,8 @@ export function AccessAdminPage() {
   };
   const openUser = (user?: AccessUserRecord) => {
     setFormError(null);
-    setUserRoleKey(user?.accessRoleKey ?? user?.role ?? roles.find((role) => role.isActive)?.key ?? "");
+    // Роль нового сотрудника не подставляем: раньше здесь оказывался «Главный администратор».
+    setUserRoleKey(initialEmployeeRoleKey(user));
     setUserEditor(user ? { mode: "edit", id: user.id } : { mode: "create" });
   };
   const togglePermission = (permission: Permission) => setRolePermissions((current) => current.includes(permission)
@@ -167,14 +172,18 @@ export function AccessAdminPage() {
     <PageTabs label="Сотрудники и роли" items={[{ value: "roles", label: "Роли", badge: roles.filter((role) => role.isActive).length }, { value: "users", label: "Сотрудники", badge: users.filter((user) => user.isActive).length }]} onValueChange={setTab} value={tab} />
     {loading && roles.length === 0 ? <ResourceState description="Подождите, сотрудники и роли сейчас появятся." status="loading" title="Загружаем доступ" /> : null}
     {!loading && tab === "roles" ? <section className="card card--table"><CardHeader meta={`Активных: ${roles.filter((role) => role.isActive).length} из ${roles.length}`} title="Роли" />{roles.length === 0 ? <ResourceState description="Добавьте роль, чтобы назначать её сотрудникам." status="empty" title="Ролей пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Роль</th><th>Тип</th><th>Права</th><th>Статус</th><th aria-label="Действия" /></tr></thead><tbody>{roles.map((role) => <tr key={role.key}><td><strong>{role.name}</strong>{role.builtIn ? <small>системная</small> : null}</td><td>{baseRoleLabels[role.baseRole]}</td><td>{role.permissions.length}</td><td><StatusBadge tone={role.isActive ? "success" : "neutral"}>{role.isActive ? "Активна" : "Неактивна"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить роль" onClick={() => openRole(role)} />{role.key !== "admin" ? <IconButton icon={role.isActive ? "disable" : "enable"} label={role.isActive ? "Отключить" : "Включить"} onClick={() => setPendingState({ kind: "role", id: role.key, label: role.name, isActive: role.isActive })} /> : null}</div></td></tr>)}</tbody></table></div>}</section> : null}
-    {!loading && tab === "users" ? <section className="card card--table"><CardHeader meta={`Активных: ${users.filter((user) => user.isActive).length} из ${users.length}`} title="Сотрудники" />{users.length === 0 ? <ResourceState description="Добавьте человека, чтобы он мог войти в систему." status="empty" title="Сотрудников пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Сотрудник</th><th>E-mail</th><th>Роль</th><th>Статус</th><th aria-label="Действия" /></tr></thead><tbody>{users.map((user) => <tr key={user.id}><td><strong>{user.fullName}</strong></td><td>{user.email}</td><td>{roles.find((role) => role.key === (user.accessRoleKey ?? user.role))?.name ?? baseRoleLabels[user.role as WorkingRole] ?? "—"}</td><td><StatusBadge tone={user.isActive ? "success" : "neutral"}>{user.isActive ? "Активен" : "Неактивен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить" onClick={() => openUser(user)} /><IconButton icon={user.isActive ? "disable" : "enable"} label={user.isActive ? "Отключить" : "Включить"} onClick={() => setPendingState({ kind: "user", id: user.id, label: user.fullName, isActive: user.isActive })} /></div></td></tr>)}</tbody></table></div>}</section> : null}
+    {!loading && tab === "users" ? <section className="card card--table"><CardHeader meta={`Активных: ${users.filter((user) => user.isActive).length} из ${users.length}`} title="Сотрудники" />{users.length === 0 ? <ResourceState description="Добавьте человека, чтобы он мог войти в систему." status="empty" title="Сотрудников пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Сотрудник</th><th>E-mail</th><th>Роль</th><th>Статус</th><th aria-label="Действия" /></tr></thead><tbody>{users.map((user) => {
+      // Запрет держит база (миграция 0035); здесь о нём говорят до подтверждения, а не после.
+      const disableBlock = employeeDisableBlock(user, { id: viewerId, activeAdminCount: adminCount });
+      return <tr key={user.id}><td><strong>{user.fullName}</strong>{disableBlock ? <small title={disableBlock.reason}>{disableBlock.note}</small> : null}</td><td>{user.email}</td><td>{roles.find((role) => role.key === (user.accessRoleKey ?? user.role))?.name ?? baseRoleLabels[user.role as WorkingRole] ?? "—"}</td><td><StatusBadge tone={user.isActive ? "success" : "neutral"}>{user.isActive ? "Активен" : "Неактивен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить" onClick={() => openUser(user)} />{disableBlock ? null : <IconButton icon={user.isActive ? "disable" : "enable"} label={user.isActive ? "Отключить" : "Включить"} onClick={() => setPendingState({ kind: "user", id: user.id, label: user.fullName, isActive: user.isActive })} />}</div></td></tr>;
+    })}</tbody></table></div>}</section> : null}
 
     <DialogForm busy={saving} description={editedRole ? "Название и права применятся сразу." : "Новая роль появится в списке и её можно будет назначить сотруднику."} error={formError} key={roleEditor?.mode === "edit" ? roleEditor.key : "new-role"} onOpenChange={(open) => { if (!open) { setRoleEditor(null); setFormError(null); } }} onSubmit={saveRole} open={roleEditor !== null} size="lg" submitLabel={editedRole ? "Сохранить роль" : "Создать роль"} title={editedRole ? "Изменить роль" : "Новая роль"}>
       <div className="dialog-form-grid"><label className="dialog-form-grid__wide">Название<input defaultValue={editedRole?.name} name="name" required /></label><label>Тип роли<Select defaultValue={editedRole?.baseRole ?? "coordinator"} disabled={editedRole?.builtIn} name="baseRole">{Object.entries(baseRoleLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select></label></div>
       <fieldset className="permission-matrix"><legend>Что можно делать</legend>{permissionGroups.map(([group, items]) => <section key={group}><h3>{permissionGroupLabels[group] ?? group}</h3>{items.map((permission) => <label key={permission}><input checked={rolePermissions.includes(permission)} onChange={() => togglePermission(permission)} type="checkbox" /><span>{permissionLabels[permission]}</span></label>)}</section>)}</fieldset>
     </DialogForm>
     <DialogForm busy={saving} description={editedUser ? "Имя, почта и роль обновятся сразу." : "Сотрудник сможет войти с временным паролем и назначенной ролью."} error={formError} key={userEditor?.mode === "edit" ? userEditor.id : "new-user"} onOpenChange={(open) => { if (!open) { setUserEditor(null); setFormError(null); } }} onSubmit={saveUser} open={userEditor !== null} submitLabel={editedUser ? "Сохранить изменения" : "Добавить сотрудника"} title={editedUser ? "Изменить сотрудника" : "Новый сотрудник"}>
-      <div className="dialog-form-grid"><label className="dialog-form-grid__wide">ФИО<input defaultValue={editedUser?.fullName} name="fullName" required /></label><label>E-mail<input autoComplete="username" defaultValue={editedUser?.email} name="email" readOnly={Boolean(editedUser)} required title={editedUser ? "Почту для входа сейчас меняют через администратора Supabase" : undefined} type="email" /></label>{!editedUser ? <label>Временный пароль<input autoComplete="new-password" minLength={8} name="password" required type="password" /></label> : null}<label className="dialog-form-grid__wide">Роль<Select onChange={(event) => setUserRoleKey(event.target.value)} required value={userRoleKey}><option value="">Не выбрана</option>{roles.filter((role) => role.isActive || role.key === userRoleKey).map((role) => <option key={role.key} value={role.key}>{role.name}</option>)}</Select></label><label className="dialog-form-grid__wide">Telegram, номер чата<input defaultValue={editedUser?.telegramChatId ?? ""} inputMode="numeric" name="telegramChatId" pattern="-?[0-9]{1,20}" placeholder="Сотрудник пишет боту /start и получает номер" title="Только цифры" /></label>{selectedUserRole?.baseRole === "customer" ? <label className="dialog-form-grid__wide">Организации, каждая с новой строки<AutoTextarea name="organizationIds" required rows={3} /></label> : null}</div>
+      <div className="dialog-form-grid"><label className="dialog-form-grid__wide">ФИО<input defaultValue={editedUser?.fullName} name="fullName" required /></label><label>E-mail<input autoComplete="username" defaultValue={editedUser?.email} name="email" readOnly={Boolean(editedUser)} required title={editedUser ? "Почту для входа сейчас меняют через администратора Supabase" : undefined} type="email" /></label>{!editedUser ? <label>Временный пароль<input autoComplete="new-password" minLength={8} name="password" required type="password" /></label> : null}<label className="dialog-form-grid__wide">Роль<Select disabled={editedUser ? !canChangeEmployeeRole(editedUser.id, viewerId) : false} onChange={(event) => setUserRoleKey(event.target.value)} required title={editedUser && !canChangeEmployeeRole(editedUser.id, viewerId) ? "Себе роль менять нельзя: так можно остаться без нужных прав. Попросите другого администратора" : undefined} value={userRoleKey}><option value="">Не выбрана</option>{roles.filter((role) => role.isActive || role.key === userRoleKey).map((role) => <option key={role.key} value={role.key}>{role.name}</option>)}</Select>{editedUser && !canChangeEmployeeRole(editedUser.id, viewerId) ? <small>Себе роль менять нельзя: попросите другого администратора</small> : null}</label><label className="dialog-form-grid__wide">Telegram, номер чата<input defaultValue={editedUser?.telegramChatId ?? ""} inputMode="numeric" name="telegramChatId" pattern="-?[0-9]{1,20}" placeholder="Сотрудник пишет боту /start и получает номер" title="Только цифры" /></label>{selectedUserRole?.baseRole === "customer" ? <label className="dialog-form-grid__wide">Организации, каждая с новой строки<AutoTextarea name="organizationIds" required rows={3} /></label> : null}</div>
     </DialogForm>
     <ConfirmationDialog confirmLabel={pendingState?.isActive ? "Отключить" : "Включить"} description={pendingState ? `${pendingState.label}: сразу повлияет на вход и доступ к разделам.` : ""} onConfirm={changeState} onOpenChange={(open) => { if (!open) setPendingState(null); }} open={pendingState !== null} title={pendingState?.isActive ? "Отключить доступ?" : "Включить доступ?"} tone={pendingState?.isActive ? "danger" : "primary"} />
   </>;

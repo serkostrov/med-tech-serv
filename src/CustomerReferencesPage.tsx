@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import { m2Api } from "./m2-api.js";
 import { formatRussianCount } from "./equipment-changes.js";
+import { assertRequisites } from "./requisites.js";
 import {
   formatSitePersonDetails,
   orphanPayers as collectOrphanPayers,
@@ -115,6 +116,11 @@ export function CustomerReferencesPage() {
         const email = String(data.get("email") ?? "").trim();
         const inn = String(data.get("inn") ?? "").trim();
         const kpp = String(data.get("kpp") ?? "").trim();
+        // Проверяем только то, что человек сейчас вписал: база так же пропускает старую
+        // запись с мусором в ИНН, пока реквизиты не меняют (миграция 0036).
+        if (inn !== (editor.person?.inn ?? "") || kpp !== (editor.person?.kpp ?? "")) {
+          assertRequisites({ ...(inn ? { inn } : {}), ...(kpp ? { kpp } : {}) });
+        }
         if (editor.person) {
           await m2Api.updateSitePerson(editor.siteId, {
             contactId: editor.person.contactId,
@@ -366,8 +372,10 @@ export function CustomerReferencesPage() {
         <label className="dialog-form-grid__wide">ФИО или наименование<input defaultValue={editedPerson?.fullName} name="fullName" required /></label>
         <label>Телефон<input defaultValue={editedPerson?.phone ?? ""} name="phone" /></label>
         <label>E-mail<input defaultValue={editedPerson?.email ?? ""} name="email" type="email" /></label>
-        <label>ИНН<input defaultValue={editedPerson?.inn ?? ""} inputMode="numeric" name="inn" /></label>
-        <label>КПП<input defaultValue={editedPerson?.kpp ?? ""} inputMode="numeric" name="kpp" /></label>
+        {/* Проверку держит база (миграция 0036); здесь подсказка и формат, чтобы не вводить мусор. */}
+        {/* Без pattern: отказ браузера пишется на его языке, а наш — всегда по-русски и целой фразой. */}
+        <label>ИНН<input defaultValue={editedPerson?.inn ?? ""} inputMode="numeric" maxLength={12} name="inn" placeholder="10 цифр, у предпринимателя 12" title="ИНН: 10 цифр у организации или 12 цифр у предпринимателя" /></label>
+        <label>КПП<input defaultValue={editedPerson?.kpp ?? ""} maxLength={9} name="kpp" placeholder="9 знаков, например 773601001" title="КПП: 9 знаков, например 773601001" /></label>
       </div>
     </DialogForm>
 

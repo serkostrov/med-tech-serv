@@ -88,6 +88,29 @@ export function companyDateTimeText(value: string | undefined): string {
   return parts ? `${parts.day}.${parts.month}.${parts.year} ${parts.hour}:${parts.minute}` : "";
 }
 
+/**
+ * Дата вызова и даты событий прибора не бывают из будущего: заявка не могла поступить,
+ * а событие произойти позже сегодняшнего дня. Правило держит база (миграция 0037),
+ * здесь то же самое, чтобы отказ пришёл в форме. Сегодняшний день разрешён целиком.
+ */
+export function isFutureCompanyDate(date: string, now = new Date()): boolean {
+  const day = calendarDateOrUndefined(date);
+  return day !== undefined && day > companyToday(now);
+}
+
+/** То же для момента «дата и время»: сравниваем день по часам компании. */
+export function isFutureCompanyMoment(value: string, now = new Date()): boolean {
+  const day = companyDay(value);
+  return day !== undefined && day > companyToday(now);
+}
+
+/** Отказ словами: подставляем название поля, чтобы человек понял, какое исправлять. */
+export function assertNotFutureCompanyMoment(value: string, label: string, now = new Date()): void {
+  if (isFutureCompanyMoment(value, now)) {
+    throw new Error(`${label} не может быть из будущего: событие не могло произойти позже сегодняшнего дня`);
+  }
+}
+
 /** Периоды задачи являются календарными датами и не должны зависеть от UTC-зоны браузера. */
 export function taskCalendarDate(value: string): string {
   const normalized = value.trim();
