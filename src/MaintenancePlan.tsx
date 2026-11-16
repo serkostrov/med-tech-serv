@@ -6,6 +6,7 @@ import { Button, CardHeader, ConfirmationDialog, DatePicker, DialogForm, IconBut
 import { formatIsoCalendarDate } from "./date-format.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { equipmentOptionMeta, equipmentOptionTitle } from "./equipment-options.js";
+import { formatRussianCount } from "./equipment-changes.js";
 
 export const MAINTENANCE_MONTHS = [
   "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"
@@ -56,13 +57,6 @@ export function generationSummary(result: { readonly created: readonly unknown[]
 }
 
 const NO_EQUIPMENT: readonly EquipmentApiRecord[] = [];
-
-function plural(count: number, one: string, few: string, many: string): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  const word = mod10 === 1 && mod100 !== 11 ? one : mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14) ? few : many;
-  return `${count} ${word}`;
-}
 
 /** Где на годовой шкале сегодняшний день, в процентах; вне выбранного года — нет отметки. */
 function todayPercent(year: number): number | undefined {
@@ -298,8 +292,8 @@ export function MaintenancePlanPage() {
       </>}
     />
     <ConfirmationDialog
-      confirmLabel={`Создать ${plural(eligibleCount, "задачу", "задачи", "задач")}`}
-      description={`Строки не выбраны, поэтому задачи будут созданы по всем запланированным периодам ${year} года: ${plural(eligibleCount, "период", "периода", "периодов")}. Они появятся на доске в колонке «Запланировано» и станут новыми к началу периода ТО.`}
+      confirmLabel={`Создать ${formatRussianCount(eligibleCount, ["задачу", "задачи", "задач"])}`}
+      description={`Строки не выбраны, поэтому задачи будут созданы по всем запланированным периодам ${year} года: ${formatRussianCount(eligibleCount, ["период", "периода", "периодов"])}. Они появятся на доске в колонке «Запланировано» и станут новыми к началу периода ТО.`}
       onConfirm={generate}
       onOpenChange={setConfirmAll}
       open={confirmAll}
@@ -402,7 +396,7 @@ export function MaintenancePlanPage() {
     <section className="card card--table maintenance-schedule">
       <CardHeader
         headingId="maintenance-schedule-title"
-        meta={`${plural(items.length, "период", "периода", "периодов")} · задач создано: ${generatedCount} · ${plural(organizations, "организация", "организации", "организаций")}`}
+        meta={`${formatRussianCount(items.length, ["период", "периода", "периодов"])} · задач создано: ${generatedCount} · ${formatRussianCount(organizations, ["организация", "организации", "организаций"])}`}
         title={`График на ${year} год`}
       />
       {/* Шкала месяцев лежит в той же колонке сетки, что и дорожка строки, поэтому подписи совпадают с полосками. */}
@@ -413,7 +407,7 @@ export function MaintenancePlanPage() {
         const label = view === "equipment" && first ? `${first.equipment.manufacturer} ${first.equipment.model} · S/N ${first.equipment.serialNumber}` : group.label;
         const sub = view === "equipment" && first ? first.organization ?? first.site : undefined;
         return <article className="maintenance-group" key={group.key}>
-        <header><h3>{label}{sub ? <small>{sub}</small> : null}</h3><span>{plural(group.items.length, "период", "периода", "периодов")}</span></header>
+        <header><h3>{label}{sub ? <small>{sub}</small> : null}</h3><span>{formatRussianCount(group.items.length, ["период", "периода", "периодов"])}</span></header>
         {group.items.map((item, index) => <div className="maintenance-row" key={item.id}>
           <label className="maintenance-row__select"><input checked={selected.includes(item.id)} disabled={!canGenerateTask(item)} onChange={() => toggle(item.id)} type="checkbox" /><span className="sr-only">Выбрать период {formatMaintenancePeriod(item.periodFrom, item.periodTo)}</span></label>
           <div className="maintenance-row__identity"><strong>{view === "equipment" ? `ТО № ${index + 1}` : `${item.equipment.model} · S/N ${item.equipment.serialNumber}`}</strong><span>{formatMaintenancePeriod(item.periodFrom, item.periodTo)} · {item.assignedEngineerName ?? "инженер не назначен"}</span></div>

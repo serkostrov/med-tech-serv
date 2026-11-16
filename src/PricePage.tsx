@@ -14,7 +14,7 @@ import {
   toast
 } from "./ui.js";
 import { formatIsoCalendarDate } from "./date-format.js";
-import { formatRussianCount } from "./equipment-changes.js";
+import { formatRussianCount, russianCountForm } from "./equipment-changes.js";
 import { companyToday } from "./task-dates.js";
 import {
   ALL_CATEGORIES_LABEL,
@@ -473,7 +473,7 @@ export function PricePage() {
         {bulkNumber === null ? null : <p className="form-hint">
           {items.length === 0
             ? "Ни одна строка не изменится."
-            : `Изменится ${formatRussianCount(items.length, ["строка", "строки", "строк"])} из ${selectedLines.length}.`}
+            : `${russianCountForm(items.length, ["Изменится", "Изменятся", "Изменятся"])} ${formatRussianCount(items.length, ["строка", "строки", "строк"])} из ${selectedLines.length}.`}
         </p>}
       </div>
     </DialogForm>

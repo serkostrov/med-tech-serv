@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import { m2Api } from "./m2-api.js";
+import { formatRussianCount } from "./equipment-changes.js";
 import {
   formatSitePersonDetails,
   orphanPayers as collectOrphanPayers,
@@ -42,11 +43,7 @@ function siteTypeLabel(type: SiteOption["type"]): string {
 }
 
 function peopleCountLabel(count: number): string {
-  const mod10 = count % 10;
-  const mod100 = count % 100;
-  if (mod10 === 1 && mod100 !== 11) return `${count} человек`;
-  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return `${count} человека`;
-  return `${count} человек`;
+  return formatRussianCount(count, ["человек", "человека", "человек"]);
 }
 
 export function CustomerReferencesPage() {
@@ -304,7 +301,7 @@ export function CustomerReferencesPage() {
             <h2>Без площадки</h2>
             <p>Старые записи. Привяжите к площадке — станут обычными людьми в блоке.</p>
           </div>
-          <span className="muted">{orphanPayers.filter((item) => item.isActive).length} активных</span>
+          <span className="muted">{formatRussianCount(orphanPayers.filter((item) => item.isActive).length, ["активная запись", "активные записи", "активных записей"])}</span>
         </div>
         <ul className="customer-people-list customer-people-list--orphan">
           {orphanPayers.map((payer) => <li className={`customer-person${payer.isActive ? "" : " is-inactive"}`} key={payer.id}>
