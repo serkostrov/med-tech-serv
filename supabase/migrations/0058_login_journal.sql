@@ -143,6 +143,7 @@ DECLARE
   -- Общий предел на журнал: даёт потолок росту, если адреса и логины перебирают.
   total_limit constant integer := 500;
   recent integer;
+  pair_exceeded boolean;
   marked boolean;
 BEGIN
   -- Запись о входе всегда в тот момент, когда она случилась.
@@ -194,7 +195,8 @@ BEGIN
    WHERE earlier.occurred_at > now() - interval '1 minute'
      AND earlier.ip_address IS NOT DISTINCT FROM caller_ip
      AND earlier.attempted_login IS NOT DISTINCT FROM login;
-  IF recent < pair_limit THEN
+  pair_exceeded := recent >= pair_limit;
+  IF NOT pair_exceeded THEN
     -- Общий потолок журнала: перебор адресов и логинов мимо парного предела
     -- не должен раздувать таблицу без конца.
     SELECT count(*) INTO recent
@@ -205,12 +207,15 @@ BEGIN
     END IF;
   END IF;
 
+  -- Отметка об обрыве счёта: при парном пределе — одна на пару, при общем потолке —
+  -- одна на весь журнал, иначе перебор пар снова раздул бы таблицу отметками.
   SELECT EXISTS (
     SELECT 1 FROM public.login_events AS earlier
      WHERE earlier.occurred_at > now() - interval '1 minute'
-       AND earlier.ip_address IS NOT DISTINCT FROM caller_ip
-       AND earlier.attempted_login IS NOT DISTINCT FROM login
-       AND earlier.failure_reason = 'too_many_attempts')
+       AND earlier.failure_reason = 'too_many_attempts'
+       AND (NOT pair_exceeded
+            OR (earlier.ip_address IS NOT DISTINCT FROM caller_ip
+                AND earlier.attempted_login IS NOT DISTINCT FROM login)))
     INTO marked;
   IF marked THEN
     RETURN NULL;
