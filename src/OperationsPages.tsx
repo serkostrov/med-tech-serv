@@ -167,7 +167,10 @@ export function WarehousePage() {
   const [openedId, setOpenedId] = useState<string | null>(null);
   const lastOpened = useRef<InventoryPartRecord | undefined>(undefined);
   const [importing, setImporting] = useState(false);
-  const [canWrite, setCanWrite] = useState(false);
+  // Три состояния, а не два: пока право не проверено — null. Иначе подпись к разделу
+  // на мгновение показывает текст для роли без прав и тут же меняется на другой,
+  // и это видно глазами при каждом открытии склада.
+  const [canWrite, setCanWrite] = useState<boolean | null>(null);
   const [exporting, setExporting] = useState(false);
   // Ответ на прежний запрос не должен затереть свежий: доска и страница списка просят
   // разные объёмы, и при быстром переключении ответы могут прийти не по порядку.
@@ -285,11 +288,13 @@ export function WarehousePage() {
   return <>
     <PageIntro
       actions={<>
-        {canWrite ? <Button onClick={() => setImporting(true)} variant="secondary">Приход файлом</Button> : null}
+        {canWrite === true ? <Button onClick={() => setImporting(true)} variant="secondary">Приход файлом</Button> : null}
         <Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || total === 0} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>
         <Button icon="plus" onClick={() => { setFormError(null); setEditing("new"); }}>Добавить запчасть</Button>
       </>}
-      description="Накладную целиком загрузите кнопкой «Приход файлом». Остаток по одной позиции пополняйте в строке таблицы, а списание, корректировку и историю смотрите в её карточке. Кнопка «Скачать в Excel» выгружает весь текущий отбор, а не открытую страницу."
+      description={canWrite === false
+        ? "Остатки и историю движений по позиции смотрите в её карточке. Кнопка «Скачать в Excel» выгружает весь текущий отбор, а не открытую страницу. Менять остатки может только склад."
+        : "Накладную целиком загрузите кнопкой «Приход файлом». Остаток по одной позиции пополняйте в строке таблицы, а списание, корректировку и историю смотрите в её карточке. Кнопка «Скачать в Excel» выгружает весь текущий отбор, а не открытую страницу."}
       title="Склад"
       titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать склад" onValueChange={changeView} value={view} />}
     />
@@ -322,7 +327,7 @@ export function WarehousePage() {
     </DialogForm>
     <ConfirmationDialog confirmLabel="Отключить" description={deactivating ? <>Запчасть {deactivating.articleNumber} останется в истории и её нельзя будет брать в новые заявки.</> : null} onConfirm={async () => { if (!deactivating) return; await m2Api.updateInventoryPart(deactivating.id, { isActive: false }); await reload(); }} onOpenChange={(open) => { if (!open) setDeactivating(null); }} open={Boolean(deactivating)} title="Отключить запчасть?" />
     <InventoryPartCard
-      canWrite={canWrite}
+      canWrite={canWrite === true}
       onChanged={() => reload()}
       onOpenChange={(open) => { if (!open) { setOpenedId(null); lastOpened.current = undefined; } }}
       open={Boolean(opened)}
