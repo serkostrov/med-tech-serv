@@ -256,9 +256,12 @@ export function DatePicker({
             : <span className="date-picker-popover__empty" key={`empty-${index}`} />)}
         </div>
         <div className="date-picker-popover__footer">
-          {/* У сотрудника восточнее Москвы местный день может опережать день компании:
-              кнопка гаснет, и подсказка объясняет почему, а не оставляет её мёртвой. */}
-          <button disabled={Boolean(max) && today > (max ?? "")} onMouseDown={(event) => event.preventDefault()} onClick={() => { commit(today); setCursor(monthCursorFromIso(today)); setOpen(false); }} title={Boolean(max) && today > (max ?? "") ? maxMessage : undefined} type="button">Сегодня</button>
+          {/* У сотрудника восточнее Москвы местный день может опережать день компании.
+              Тогда вместо мёртвой кнопки показываем, почему её нет: подсказка на
+              выключенной кнопке в большинстве браузеров не всплывает. */}
+          {Boolean(max) && today > (max ?? "")
+            ? <span>{maxMessage}</span>
+            : <button onMouseDown={(event) => event.preventDefault()} onClick={() => { commit(today); setCursor(monthCursorFromIso(today)); setOpen(false); }} type="button">Сегодня</button>}
           {canClear ? <button onMouseDown={(event) => event.preventDefault()} onClick={() => { commit(""); setOpen(false); }} type="button">Очистить</button> : null}
         </div>
       </div>,
