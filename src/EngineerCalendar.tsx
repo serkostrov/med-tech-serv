@@ -15,7 +15,8 @@ import {
   type CalendarPlacement,
   type CalendarRange,
   type CalendarRow,
-  type CalendarTask
+  type CalendarTask,
+  type EngineerCalendar as CalendarLayout
 } from "./engineer-calendar.js";
 import { companyToday } from "./task-dates.js";
 import { Button, CardHeader, DatePicker, Dialog, MetricCard, ResourceState, StatusBadge, ViewSwitch, toast } from "./ui.js";
@@ -50,13 +51,17 @@ function taskHint(task: CalendarTask, placement?: CalendarPlacement): string {
   ].filter(Boolean).join(" · ");
 }
 
-/** Состояние строки инженера словами: это же подписано в значке. */
-function rowStateLabel(row: CalendarRow): { readonly tone: "neutral" | "danger" | "warning" | "success" | "info"; readonly text: string } {
-  if (!row.engineer.isActive) return { tone: "neutral", text: "Неактивен" };
-  if (row.summary.overdueTaskCount > 0) return { tone: "danger", text: "Есть просрочки" };
-  if (row.summary.overloadedDayCount > 0) return { tone: "warning", text: "Перегружен" };
-  if (row.summary.taskCount === 0) return { tone: "success", text: "Свободен" };
-  return { tone: "info", text: "Занят" };
+/**
+ * Значки строки инженера. Просрочка и перегруз — разные беды, поэтому показываем оба,
+ * а не прячем один за другим: у инженера может быть и то, и другое.
+ */
+function rowStateBadges(row: CalendarRow): readonly { readonly tone: "neutral" | "danger" | "warning" | "success" | "info"; readonly text: string }[] {
+  if (!row.engineer.isActive) return [{ tone: "neutral", text: "Неактивен" }];
+  const badges: { readonly tone: "danger" | "warning" | "success" | "info"; readonly text: string }[] = [];
+  if (row.summary.overdueTaskCount > 0) badges.push({ tone: "danger", text: "Есть просрочки" });
+  if (row.summary.overloadedDayCount > 0) badges.push({ tone: "warning", text: "Перегружен" });
+  if (badges.length) return badges;
+  return [row.summary.taskCount === 0 ? { tone: "success", text: "Свободен" } : { tone: "info", text: "Занят" }];
 }
 
 function TaskChip({ placement, onOpen }: {
@@ -81,9 +86,11 @@ function TaskChip({ placement, onOpen }: {
       title={taskHint(task, placement)}
       type="button"
     >
+      {/* Продолжение многодневной задачи — полоска без подписи: номер и название стоят
+          в первом её дне, остальное видно в подсказке. */}
       <span className="calendar-task__number">
         {placement.continuesBefore && placement.isFirstVisibleDay ? "←" : ""}
-        {placement.isFirstVisibleDay ? task.number : "·"}
+        {placement.isFirstVisibleDay ? task.number : ""}
         {placement.continuesAfter && placement.isLastVisibleDay ? "→" : ""}
       </span>
       {placement.isFirstVisibleDay ? <span className="calendar-task__title">{task.title}</span> : null}
@@ -92,13 +99,95 @@ function TaskChip({ placement, onOpen }: {
 }
 
 /**
+ * Сама сетка: дни в шапке, строка на инженера, клетка на день. Вынесена отдельно, чтобы
+ * раскладку можно было отрисовать и проверить без запросов к базе.
+ */
+export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
+  readonly calendar: CalendarLayout;
+  readonly title: string;
+  readonly onOpenTask: (taskId: string) => void;
+}) {
+  // В длинном периоде подписи в клетках не читаются: остаются полоски и подсказка.
+  const dense = calendar.days.length >= DENSE_FROM_DAYS;
+  return <div className="engineer-calendar__scroll">
+    <div
+      aria-label={`Загрузка инженеров: ${title}`}
+      className={`engineer-calendar__grid${dense ? " engineer-calendar__grid--dense" : ""}`}
+      role="table"
+      style={{ ["--calendar-days" as string]: String(calendar.days.length) }}
+    >
+      <div className="engineer-calendar__head" role="row">
+        <div className="engineer-calendar__corner" role="columnheader">Инженер</div>
+        {calendar.days.map((day) => <div
+          className={`engineer-calendar__day${day.isWeekend ? " is-weekend" : ""}${day.isToday ? " is-today" : ""}${day.isPast ? " is-past" : ""}`}
+          key={day.date}
+          role="columnheader"
+          title={calendarDayTitle(day.date)}
+        >
+          <span>{day.weekdayLabel}</span>
+          <strong>{day.dayLabel}</strong>
+          {day.startsMonth ? <small>{day.monthLabel}</small> : null}
+        </div>)}
+        <div className="engineer-calendar__undated-head" role="columnheader">Без срока</div>
+      </div>
+      {calendar.rows.map((row) => {
+        const badges = rowStateBadges(row);
+        return <div className="engineer-calendar__row" key={row.engineer.id} role="row">
+          <div className={`engineer-calendar__name${row.engineer.isActive ? "" : " is-inactive"}`} role="rowheader">
+            <strong>{row.engineer.fullName}</strong>
+            <span>
+              {badges.map((badge) => <StatusBadge key={badge.text} tone={badge.tone}>{badge.text}</StatusBadge>)}
+              <small>{formatRussianCount(row.summary.taskCount, ["задача", "задачи", "задач"])} · пик {row.summary.busiestDayCount} · окон {row.summary.freeWorkdayCount}</small>
+            </span>
+          </div>
+          {row.cells.map((cell) => <div
+            className={`engineer-calendar__cell engineer-calendar__cell--${cell.level}${cell.isWeekend ? " is-weekend" : ""}${cell.isToday ? " is-today" : ""}`}
+            key={cell.date}
+            role="cell"
+            title={`${row.engineer.fullName} · ${calendarDayTitle(cell.date)}: ${cell.placements.length ? formatRussianCount(cell.placements.length, ["задача", "задачи", "задач"]) : "свободен"}`}
+          >
+            {cell.placements.map((placement) => <TaskChip key={placement.task.id} onOpen={onOpenTask} placement={placement} />)}
+          </div>)}
+          <div className="engineer-calendar__undated" role="cell">
+            {row.undatedTasks.length === 0 ? <span className="is-empty">—</span> : row.undatedTasks.map((task) => <button
+              className="calendar-task calendar-task--undated"
+              key={task.id}
+              onClick={() => onOpenTask(task.id)}
+              title={taskHint(task)}
+              type="button"
+            >
+              <span className="calendar-task__number">{task.number}</span>
+            </button>)}
+          </div>
+        </div>;
+      })}
+    </div>
+  </div>;
+}
+
+/** Можно ли отсюда назначить или сменить инженера: решают этап задачи и права, как в «Задачах». */
+function taskAssignable(card: TaskCardResponse): boolean {
+  return card.availableActions.some((action) => action.code === "assign") || card.canReassign === true;
+}
+
+/** Почему инженера сейчас не выбрать: объясняем словами, а не прячем список молча. */
+function assignRefusal(card: TaskCardResponse): string {
+  if (card.task.status === "planned") {
+    return "Задача пока запланирована по ТО. Чтобы назначить инженера, сначала отметьте её новой в разделе «Задачи».";
+  }
+  if (["under_review", "closed", "cancelled"].includes(card.task.status)) {
+    return "Инженера этой задачи уже не меняют: она сдана, закрыта или отменена.";
+  }
+  return "Назначать инженеров может координатор или руководитель.";
+}
+
+/**
  * Карточка задачи из календаря: посмотреть и назначить инженера, не уходя на другой экран.
  * Полный разбор задачи остаётся в разделе «Задачи», здесь только то, что нужно для раздачи
  * выездов: срок, площадка, прибор и выбор инженера с подсказкой по занятости.
  */
-function CalendarTaskDialog({ taskId, canAssign, onClose, onAssigned }: {
+function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
   readonly taskId: string;
-  readonly canAssign: boolean;
   readonly onClose: () => void;
   readonly onAssigned: () => void;
 }) {
@@ -118,7 +207,8 @@ function CalendarTaskDialog({ taskId, canAssign, onClose, onAssigned }: {
         if (cancelled) return;
         setCard(loaded);
         setEngineerId("");
-        if (!canAssign) return;
+        // Можно ли назначать, решает сама задача: её этап и права, как в разделе «Задачи».
+        if (!taskAssignable(loaded)) return;
         const hints = await m2Api.taskAssignmentSuggestions(
           taskId,
           loaded.equipment?.manufacturer ?? "",
@@ -132,7 +222,7 @@ function CalendarTaskDialog({ taskId, canAssign, onClose, onAssigned }: {
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [taskId, canAssign]);
+  }, [taskId]);
 
   const assign = async () => {
     if (!card || !engineerId) return;
@@ -155,8 +245,7 @@ function CalendarTaskDialog({ taskId, canAssign, onClose, onAssigned }: {
   };
 
   const task = card?.task;
-  // Сменить инженера даёт база (canReassign); у задачи без инженера хватает права назначения.
-  const canChange = canAssign && Boolean(task) && (card?.engineer?.id ? card.canReassign !== false : true);
+  const canChange = card ? taskAssignable(card) : false;
   return (
     <Dialog
       busy={busy}
@@ -207,7 +296,7 @@ function CalendarTaskDialog({ taskId, canAssign, onClose, onAssigned }: {
             </div>
           )}
           <p className="form-hint">Подсказка считает занятость на срок этой задачи и ничего не запрещает: решение за вами.</p>
-        </div> : canAssign ? <p className="form-hint">Инженера этой задачи уже не меняют: она сдана, закрыта или отменена.</p> : null}
+        </div> : <p className="form-hint">{assignRefusal(card)}</p>}
       </div> : null}
     </Dialog>
   );
@@ -230,7 +319,8 @@ export function EngineerCalendar() {
   const [data, setData] = useState<EngineerCalendarData>(EMPTY_CALENDAR);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [canAssign, setCanAssign] = useState(false);
+  // Отказ по своему периоду показываем прямо у полей: иначе человек меняет дату, а сетка молчит.
+  const [periodError, setPeriodError] = useState<string | null>(null);
   const [openTaskId, setOpenTaskId] = useState<string | null>(null);
   // Ответ на прежний период не должен затереть свежий: периоды переключают быстро.
   const loadTurn = useRef(0);
@@ -255,12 +345,10 @@ export function EngineerCalendar() {
   };
 
   useEffect(() => { void load(range); }, [range.from, range.to]);
-  useEffect(() => {
-    void m2Api.hasPermission("tasks.assign").then(setCanAssign).catch(() => setCanAssign(false));
-  }, []);
 
   const changeMode = (next: CalendarMode) => {
     setMode(next);
+    setPeriodError(null);
     if (next === "custom") {
       setCustomDraft(range);
       return;
@@ -271,18 +359,20 @@ export function EngineerCalendar() {
 
   const applyCustom = (draft: CalendarRange) => {
     setCustomDraft(draft);
-    if (!draft.from || !draft.to) return;
+    if (!draft.from || !draft.to) {
+      setPeriodError(draft.from || draft.to ? "Укажите начало и конец периода" : null);
+      return;
+    }
     try {
       setRange(calendarRange("custom", draft.from, draft));
-      setLoadError(null);
+      setPeriodError(null);
     } catch (error) {
       // Период с ошибкой не грузим: показываем отказ по-русски и ждём исправления.
-      setLoadError(error instanceof Error ? error.message : "Укажите период короче");
+      setPeriodError(error instanceof Error ? error.message : "Укажите период короче");
     }
   };
 
   const calendar = buildEngineerCalendar({ engineers: data.engineers, tasks: data.tasks, range, today });
-  const dense = calendar.days.length >= DENSE_FROM_DAYS;
   const showToday = today >= range.from && today <= range.to;
   return <>
     <div className="engineer-calendar-toolbar">
@@ -302,6 +392,7 @@ export function EngineerCalendar() {
         <label>С<DatePicker onChange={(from) => applyCustom({ ...customDraft, from })} value={customDraft.from} /></label>
         <label>По<DatePicker onChange={(to) => applyCustom({ ...customDraft, to })} value={customDraft.to} /></label>
         <small>Не больше {MAX_CALENDAR_DAYS} дней</small>
+        {periodError ? <p className="form-error" role="alert">{periodError}</p> : null}
       </div> : null}
     </div>
 
@@ -324,60 +415,7 @@ export function EngineerCalendar() {
           ? <ResourceState description="Подождите, сетка сейчас появится." status="loading" title="Загружаем календарь" />
           : calendar.rows.length === 0
             ? <ResourceState description="Когда появятся сотрудники с ролью инженера, их загрузка отобразится здесь." status="empty" title="Инженеров пока нет" />
-            : <div className="engineer-calendar__scroll">
-              <div
-                className={`engineer-calendar__grid${dense ? " engineer-calendar__grid--dense" : ""}`}
-                role="table"
-                aria-label={`Загрузка инженеров: ${calendarRangeTitle(range, mode)}`}
-                style={{ ["--calendar-days" as string]: String(calendar.days.length) }}
-              >
-                <div className="engineer-calendar__head" role="row">
-                  <div className="engineer-calendar__corner" role="columnheader">Инженер</div>
-                  {calendar.days.map((day) => <div
-                    className={`engineer-calendar__day${day.isWeekend ? " is-weekend" : ""}${day.isToday ? " is-today" : ""}${day.isPast ? " is-past" : ""}`}
-                    key={day.date}
-                    role="columnheader"
-                    title={calendarDayTitle(day.date)}
-                  >
-                    <span>{day.weekdayLabel}</span>
-                    <strong>{day.dayLabel}</strong>
-                    {day.startsMonth ? <small>{day.monthLabel}</small> : null}
-                  </div>)}
-                  <div className="engineer-calendar__undated-head" role="columnheader">Без срока</div>
-                </div>
-                {calendar.rows.map((row) => {
-                  const state = rowStateLabel(row);
-                  return <div className="engineer-calendar__row" key={row.engineer.id} role="row">
-                    <div className={`engineer-calendar__name${row.engineer.isActive ? "" : " is-inactive"}`} role="rowheader">
-                      <strong>{row.engineer.fullName}</strong>
-                      <span>
-                        <StatusBadge tone={state.tone}>{state.text}</StatusBadge>
-                        <small>{formatRussianCount(row.summary.taskCount, ["задача", "задачи", "задач"])} · пик {row.summary.busiestDayCount} · окон {row.summary.freeWorkdayCount}</small>
-                      </span>
-                    </div>
-                    {row.cells.map((cell) => <div
-                      className={`engineer-calendar__cell engineer-calendar__cell--${cell.level}${cell.isWeekend ? " is-weekend" : ""}${cell.isToday ? " is-today" : ""}`}
-                      key={cell.date}
-                      role="cell"
-                      title={`${row.engineer.fullName} · ${calendarDayTitle(cell.date)}: ${cell.placements.length ? formatRussianCount(cell.placements.length, ["задача", "задачи", "задач"]) : "свободен"}`}
-                    >
-                      {cell.placements.map((placement) => <TaskChip key={placement.task.id} onOpen={setOpenTaskId} placement={placement} />)}
-                    </div>)}
-                    <div className="engineer-calendar__undated" role="cell">
-                      {row.undatedTasks.length === 0 ? <span className="is-empty">—</span> : row.undatedTasks.map((task) => <button
-                        className="calendar-task calendar-task--undated"
-                        key={task.id}
-                        onClick={() => setOpenTaskId(task.id)}
-                        title={taskHint(task)}
-                        type="button"
-                      >
-                        <span className="calendar-task__number">{task.number}</span>
-                      </button>)}
-                    </div>
-                  </div>;
-                })}
-              </div>
-            </div>}
+            : <EngineerCalendarGrid calendar={calendar} onOpenTask={setOpenTaskId} title={calendarRangeTitle(range, mode)} />}
       {calendar.unassignedTasks.length > 0 ? <div className="engineer-calendar__unassigned">
         <h3>Ещё не назначены · {calendar.unassignedTasks.length}</h3>
         <p>Задачи периода без инженера. Откройте задачу и выберите, кому её отдать.</p>
@@ -402,7 +440,6 @@ export function EngineerCalendar() {
     </section>
 
     {openTaskId ? <CalendarTaskDialog
-      canAssign={canAssign}
       key={openTaskId}
       onAssigned={() => void load(range)}
       onClose={() => setOpenTaskId(null)}
