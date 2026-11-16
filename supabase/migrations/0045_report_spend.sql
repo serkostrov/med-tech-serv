@@ -25,9 +25,22 @@
 -- ---------------------------------------------------------------------------
 
 -- Оба разреза отбирают счета по дню счёта: день выставления, а у черновика день
--- создания. Индекс по этому выражению нужен обоим, иначе каждый отчёт читает все счета.
-CREATE INDEX IF NOT EXISTS invoices_billing_day_idx
-  ON public.invoices ((coalesce(issued_at, created_at)));
+-- создания. Храним его отдельным вычисляемым столбцом, а не считаем выражением
+-- в запросе: под правилами строк условие с coalesce в индексный скан не поднимается
+-- (PostgreSQL не считает CoalesceExpr «непротекающим», и предикат остаётся фильтром),
+-- поэтому индекс по выражению в бою не работал бы — проверять такое надо под ролью
+-- authenticated, под владельцем таблицы план обманчив.
+ALTER TABLE public.invoices
+  ADD COLUMN IF NOT EXISTS billing_at timestamptz
+    GENERATED ALWAYS AS (coalesce(issued_at, created_at)) STORED;
+
+COMMENT ON COLUMN public.invoices.billing_at IS
+  'День счёта как момент (0045): выставлен, а у черновика создан. По нему отчёты отбирают период: отдельный столбец вместо выражения, чтобы работал индекс под правилами строк.';
+
+CREATE INDEX IF NOT EXISTS invoices_billing_at_idx ON public.invoices (billing_at);
+
+-- Прежний индекс по выражению (первая редакция этой миграции) больше не нужен.
+DROP INDEX IF EXISTS public.invoices_billing_day_idx;
 
 -- ---------------------------------------------------------------------------
 -- 2. Затраты по приборам
@@ -77,10 +90,10 @@ AS $$
    WHERE public.app_has_permission('finance.read')
      AND task.equipment_id IS NOT NULL
      AND invoice.status <> 'cancelled'
-     -- Отбор по границам-моментам, а не по выражению над столбцом: так он ложится
-     -- на индекс invoices_billing_day_idx, как отбор задач в 0044 на свой.
-     AND (p_from IS NULL OR coalesce(invoice.issued_at, invoice.created_at) >= public.company_day_start(p_from))
-     AND (p_to IS NULL OR coalesce(invoice.issued_at, invoice.created_at) < public.company_day_start(p_to + 1))
+     -- Отбор по границам-моментам и по самому столбцу: так он ложится на индекс
+     -- invoices_billing_at_idx, как отбор задач в 0044 на свой.
+     AND (p_from IS NULL OR invoice.billing_at >= public.company_day_start(p_from))
+     AND (p_to IS NULL OR invoice.billing_at < public.company_day_start(p_to + 1))
    GROUP BY task.equipment_id
    ORDER BY coalesce(sum(item.line_total), 0) DESC, coalesce(max(equipment.serial_number), '')
 $$;
@@ -99,6 +112,8 @@ GRANT EXECUTE ON FUNCTION public.report_equipment_spend(date, date) TO authentic
 -- (adjustment_amount) — это тоже его деньги, и в разрезе «кому выставляем» она должна
 -- быть видна. Поэтому позиции и итоги считаются отдельно и сводятся по плательщику:
 -- иначе соединение позиций с счётом размножило бы итог на число позиций.
+-- Отсюда и расхождение с затратами по приборам: туда не попадают ни корректировка,
+-- ни работы по задачам без прибора (перенесённые из 1С строки бывают без него).
 CREATE OR REPLACE FUNCTION public.report_payer_spend(p_from date, p_to date)
 RETURNS TABLE (
   payer_id uuid,
@@ -120,8 +135,8 @@ AS $$
       FROM public.invoices AS invoice
      WHERE public.app_has_permission('finance.read')
        AND invoice.status <> 'cancelled'
-       AND (p_from IS NULL OR coalesce(invoice.issued_at, invoice.created_at) >= public.company_day_start(p_from))
-       AND (p_to IS NULL OR coalesce(invoice.issued_at, invoice.created_at) < public.company_day_start(p_to + 1))
+       AND (p_from IS NULL OR invoice.billing_at >= public.company_day_start(p_from))
+       AND (p_to IS NULL OR invoice.billing_at < public.company_day_start(p_to + 1))
   ), lines AS (
     SELECT
       allowed.payer_id,

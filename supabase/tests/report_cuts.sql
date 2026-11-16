@@ -438,6 +438,17 @@ SELECT pg_temp.check(
   AND (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0,
   'кладовщик затрат не видит');
 
+-- Итог руководителя запоминаем, чтобы сверить с ним роль без прав на приборы:
+-- литерал в проверке пропустил бы регресс, сдвинувший обе цифры разом. Запоминаем
+-- под руководителем: выше уже побывали инженер с кладовщиком, которым затрат не видно.
+CREATE TEMP TABLE sums (k text PRIMARY KEY, v numeric);
+GRANT SELECT, INSERT ON sums TO authenticated;
+SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
+INSERT INTO sums
+SELECT 'supervisor_eq1', total_amount
+  FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))
+ WHERE equipment_id = pg_temp.uid('eq1');
+
 -- Роль «деньги без приборов»: затраты по приборам считаются, просто без названия
 -- прибора. Молча терять деньги из-за прав на справочник нельзя.
 SELECT pg_temp.act_as(pg_temp.uid('money'));
@@ -445,9 +456,10 @@ SELECT pg_temp.check(
   (SELECT count(*) FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))) = 2,
   'затраты по приборам считаются и без права на приборы');
 SELECT pg_temp.check(
-  (SELECT trim_scale(total_amount) FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))
-    WHERE equipment_id = pg_temp.uid('eq1')) = 2000,
-  'суммы те же, хотя названия прибора не видно');
+  (SELECT total_amount FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))
+    WHERE equipment_id = pg_temp.uid('eq1'))
+  = (SELECT v FROM sums WHERE k = 'supervisor_eq1'),
+  'итог по прибору тот же, что у руководителя');
 SELECT pg_temp.check(
   (SELECT serial_number FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))
     WHERE equipment_id = pg_temp.uid('eq1')) = '',

@@ -238,7 +238,7 @@ AS $$
     UNION ALL
     SELECT 'reason', coalesce(task.reason_code, 'unset'),
            CASE WHEN task.reason_code IS NULL THEN 'Причина не указана'
-                ELSE coalesce(reason.name, task.reason_code) END,
+                ELSE coalesce(reason.name, 'Причина') END,
            task.is_closed, task.is_overdue
       FROM period AS task
       LEFT JOIN public.task_reasons AS reason ON reason.code = task.reason_code
@@ -391,8 +391,9 @@ AS $$
        -- Отменённая задача инженера не занимает.
        AND task.status_code <> 'cancelled'
        -- Два условия по самим столбцам: они следуют из условий ниже (там, где срок
-       -- задан, coalesce равен сроку), но планировщик видит их как диапазон и берёт
-       -- индекс tasks_engineer_load_idx вместо чтения всей таблицы задач.
+       -- задан, coalesce равен сроку), но по ним планировщик берёт
+       -- tasks_engineer_load_idx — в плане это BitmapOr из двух индексных сканов
+       -- («срока нет» и «срок не раньше начала периода») — вместо чтения всех задач.
        AND (task.deadline_to IS NULL OR task.deadline_to >= bounds.period_from)
        AND (task.deadline_from IS NULL OR task.deadline_from <= bounds.period_to)
        AND coalesce(task.deadline_from, (task.created_at AT TIME ZONE 'Europe/Moscow')::date) <= bounds.period_to
