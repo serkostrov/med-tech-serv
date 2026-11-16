@@ -644,7 +644,10 @@ AS $$
     coalesce(invoice.payer_requisites ->> 'kpp', ''),
     coalesce(task.number, ''),
     CASE item.item_type WHEN 'work' THEN 'Работа' ELSE 'Запчасть' END,
-    coalesce(work_type.name, part.article_number, ''),
+    -- Вид работы или артикул. Справочник запчастей открыт по warehouse.read, и у роли,
+    -- которой дали только finance.read, артикул не прочитается — тогда берём описание
+    -- строки: артикул записан в нём при сборке. Пустой клетки в файле быть не должно.
+    coalesce(work_type.name, part.article_number, item.description),
     item.description,
     trim_scale(item.quantity),
     item.unit_price,
