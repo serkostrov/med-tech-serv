@@ -59,7 +59,7 @@ export function ReservationBoard({ items, canWrite, busyId, loading, onAction }:
   return <div className="task-board reservation-board" aria-label="Доска резервов">{RESERVATION_BOARD_STATUSES.map((status) => {
     const cards = items.filter((item) => item.status === status);
     // Колонка не примет перетаскиваемую карточку: показываем её бледной, как на доске задач.
-    const blocked = Boolean(dragged) && dragged?.status !== status && reservationDropDecision(dragged!, status).kind === "no";
+    const blocked = dragged !== undefined && dragged.status !== status && reservationDropDecision(dragged, status).kind === "no";
     return <section
       className={`task-board__column task-board__column--reservation-${status}${dropTarget === status && !blocked && dragged ? " task-board__column--drop" : ""}${blocked ? " task-board__column--blocked" : ""}`}
       key={status}
