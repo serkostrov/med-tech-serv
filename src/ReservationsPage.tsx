@@ -206,7 +206,7 @@ export function ReservationsPage() {
     {/* На доске все состояния стоят колонками, вкладки ей не нужны. */}
     {view === "list" ? <PageTabs items={[{ value: "active", label: "Действующие" }, { value: "engineers", label: "У инженеров" }, { value: "closed", label: "Закрытые" }]} label="Резервы" onValueChange={changeTab} value={tab} /> : null}
     <FilterBar loading={loading} onReset={() => applyFilters(EMPTY_RESERVATION_FILTERS)} onSubmit={() => applyFilters()}>
-      <label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Резерв, артикул, запчасть, задача" type="search" value={filters.search} /></label>
+      <label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Резерв, любой артикул, запчасть, задача" type="search" value={filters.search} /></label>
       {/* На вкладке «У инженеров» все резервы выданы: выбирать состояние там не из чего. */}
       {view === "list" && tab === "engineers" ? null : <label>Состояние<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{options.statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>}
       <label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineer: event.target.value }))} value={filters.engineer}><option value="">Все</option>{options.engineers.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
