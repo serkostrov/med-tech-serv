@@ -75,6 +75,10 @@ SELECT pg_temp.check((SELECT is_builtin AND is_active AND base_role::text = 'adm
   'роль системного администратора заведена как встроенная и включённая');
 SELECT pg_temp.check((SELECT name FROM access_roles WHERE key = 'sysadmin') = 'Системный администратор',
   'роль называется «Системный администратор»');
+-- Рядом с ней «Главный администратор» читался наоборот: кажется, что он старший,
+-- а права у него как раз урезанные.
+SELECT pg_temp.check((SELECT name FROM access_roles WHERE key = 'admin') = 'Администратор',
+  'встроенная роль администратора называется просто «Администратор»');
 SELECT pg_temp.check(
   NOT EXISTS (SELECT 1 FROM permissions AS available
                WHERE NOT EXISTS (SELECT 1 FROM access_role_permissions AS granted
