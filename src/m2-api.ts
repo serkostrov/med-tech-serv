@@ -390,6 +390,20 @@ export interface PartAliasRecord {
   readonly createdAt: string;
 }
 
+/**
+ * Строка накладной, как её принимает база (0050): клетки файла как есть, число может
+ * прийти и строкой («2,5») — разбирает их сама база, одинаково для предпросмотра и прихода.
+ */
+export interface StockReceiptInputRow {
+  /** Номер строки в файле: по нему человек находит строку с ошибкой. */
+  readonly row?: number;
+  readonly article: string;
+  readonly quantity: string | number;
+  readonly condition?: string;
+  readonly unit_price?: string | number;
+  readonly comment?: string;
+}
+
 /** Строка накладной, как её разобрала база (preview_stock_receipt, миграция 0050). */
 export interface StockReceiptPreviewRow {
   readonly rowNo: number;
@@ -3803,14 +3817,14 @@ export class M2ApiClient {
    * Что база распознала в накладной (функция 0050). Ничего не меняет: приход идёт
    * только после подтверждения человеком, отдельным вызовом receiveStockBatch.
    */
-  public async previewStockReceipt(items: readonly Readonly<Record<string, unknown>>[]): Promise<readonly StockReceiptPreviewRow[]> {
+  public async previewStockReceipt(items: readonly StockReceiptInputRow[]): Promise<readonly StockReceiptPreviewRow[]> {
     const { data, error } = await this.db().rpc("preview_stock_receipt", { p_items: items }, { get: true });
     throwIfError(error, "Не получилось разобрать файл накладной");
     return (Array.isArray(data) ? data : []).map((item) => stockReceiptPreviewRow(asRow(item)));
   }
 
   /** Оприходовать накладную целиком (функция 0050): ошибка хотя бы в одной строке — не проходит ни одна. */
-  public async receiveStockBatch(items: readonly Readonly<Record<string, unknown>>[]): Promise<readonly StockReceiptAppliedRow[]> {
+  public async receiveStockBatch(items: readonly StockReceiptInputRow[]): Promise<readonly StockReceiptAppliedRow[]> {
     const { data, error } = await this.db().rpc("receive_stock_batch", { p_items: items });
     throwIfError(error, "Не получилось оприходовать накладную");
     return (Array.isArray(data) ? data : []).map((item) => {

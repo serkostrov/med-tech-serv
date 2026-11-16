@@ -49,7 +49,9 @@ function normalizeHeader(value: string): string {
 function matchesHeader(cell: string, words: readonly string[]): boolean {
   const text = normalizeHeader(cell);
   if (!text) return false;
-  return words.some((word) => text === word || text.startsWith(`${word} `) || text.startsWith(word));
+  // Сокращения в заголовках обычные («Наимен.», «Артик.»), поэтому слово узнаётся и по началу
+  // в обе стороны. От четырёх букв — иначе «ц» или «на» цеплялись бы за что попало.
+  return words.some((word) => text === word || text.startsWith(word) || (text.length >= 4 && word.startsWith(text)));
 }
 
 /**
@@ -126,22 +128,15 @@ export function receiptFileProblem(rows: readonly (readonly string[])[], columns
   return undefined;
 }
 
-/** Строка из базы о том, что она распознала: оба поля приходят из preview_stock_receipt. */
-export interface ReceiptPreviewRow {
-  readonly rowNo: number;
-  readonly article: string;
-  readonly partId?: string;
-  readonly partArticle?: string;
-  readonly partName?: string;
+/**
+ * Сколько строк готово к приходу и сколько с ошибками. На входе то, что отдала база
+ * (preview_stock_receipt): пересчитывать строки здесь нечего, только сложить.
+ */
+export function receiptPreviewSummary(rows: readonly {
   readonly matchedBy?: "article" | "alias";
-  readonly condition?: "G" | "N" | "B";
   readonly quantity?: number;
-  readonly unitPrice?: number;
   readonly error?: string;
-}
-
-/** Сколько строк готово к приходу и сколько с ошибками. */
-export function receiptPreviewSummary(rows: readonly ReceiptPreviewRow[]): {
+}[]): {
   readonly ready: number;
   readonly broken: number;
   readonly quantity: number;
