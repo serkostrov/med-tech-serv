@@ -379,7 +379,8 @@ BEGIN
           AND EXISTS (
                 SELECT 1 FROM own
                  WHERE own.thread = coalesce(letter.thread_id, letter.external_message_id)
-                   AND own.address IS NOT DISTINCT FROM public.app_mail_address(letter.sender)
+                   AND own.address IS NOT NULL
+                   AND own.address = public.app_mail_address(letter.sender)
               ))
   UNION ALL
   SELECT reply.id, 'outgoing'::text, coalesce(author.full_name, 'Сотрудник МедТехСервиса'),
