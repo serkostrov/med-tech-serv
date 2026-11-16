@@ -369,8 +369,9 @@ export function CustomerReferencesPage() {
         <label className="dialog-form-grid__wide">ФИО или наименование<input defaultValue={editedPerson?.fullName} name="fullName" required /></label>
         <label>Телефон<input defaultValue={editedPerson?.phone ?? ""} name="phone" /></label>
         <label>E-mail<input defaultValue={editedPerson?.email ?? ""} name="email" type="email" /></label>
-        <label>ИНН<input defaultValue={editedPerson?.inn ?? ""} inputMode="numeric" name="inn" /></label>
-        <label>КПП<input defaultValue={editedPerson?.kpp ?? ""} inputMode="numeric" name="kpp" /></label>
+        {/* Проверку держит база (миграция 0036); здесь подсказка и формат, чтобы не вводить мусор. */}
+        <label>ИНН<input defaultValue={editedPerson?.inn ?? ""} inputMode="numeric" maxLength={12} name="inn" pattern="[0-9]{10}|[0-9]{12}" placeholder="10 цифр, у предпринимателя 12" title="ИНН: 10 цифр у организации или 12 цифр у предпринимателя" /></label>
+        <label>КПП<input defaultValue={editedPerson?.kpp ?? ""} maxLength={9} name="kpp" pattern="[0-9]{4}[0-9A-Z]{2}[0-9]{3}" placeholder="9 знаков, например 773601001" title="КПП: 9 знаков, например 773601001" /></label>
       </div>
     </DialogForm>
 

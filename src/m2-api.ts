@@ -8,6 +8,7 @@ import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type E
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
+import { assertRequisites } from "./requisites.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
   AccessRoleResponse,
@@ -2259,6 +2260,8 @@ export class M2ApiClient {
     const requisitesSource = asRow(input.requisites ?? input);
     const inn = optionalText(requisitesSource, "inn") ?? optionalText(input, "inn");
     const kpp = optionalText(requisitesSource, "kpp") ?? optionalText(input, "kpp");
+    // Реквизиты проверяет база (миграция 0036), здесь — чтобы отказ пришёл до запроса.
+    assertRequisites({ ...(inn ? { inn } : {}), ...(kpp ? { kpp } : {}) });
     const { data, error } = await this.db().from("payers").insert({
       name: input.name,
       requisites: {
@@ -2281,6 +2284,7 @@ export class M2ApiClient {
     if (input.requisites !== undefined || input.inn !== undefined || input.kpp !== undefined) {
       const inn = optionalText(requisitesSource, "inn") ?? optionalText(input, "inn");
       const kpp = optionalText(requisitesSource, "kpp") ?? optionalText(input, "kpp");
+      assertRequisites({ ...(inn ? { inn } : {}), ...(kpp ? { kpp } : {}) });
       patch.requisites = {
         ...(inn ? { inn } : {}),
         ...(kpp ? { kpp } : {})
