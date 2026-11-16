@@ -8971,6 +8971,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 @media (max-width: 620px) {
   .part-card__totals div { justify-content: flex-start; }
   .inventory-table__conditions { white-space: normal; }
+}
+
 /* ---------------------------------------------------------------------------
    Календарь загрузки инженеров: инженеры по строкам, дни периода по столбцам.
    Сетка — CSS grid с числом дней в переменной --calendar-days: подписи дней
