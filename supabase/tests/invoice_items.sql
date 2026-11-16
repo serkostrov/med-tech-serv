@@ -425,6 +425,16 @@ SELECT pg_temp.check((SELECT status = 'transferred_to_1c' AND transferred_at IS 
 SELECT pg_temp.expect_message(format('SELECT public.correct_invoice(%L, -500, %L)', pg_temp.uid('inv_cat'), 'Поздняя скидка'),
   'Счёт передан в 1С : сумму менять поздно. Договаривайтесь с бухгалтерией и выставляйте новый счёт.',
   'переданный в 1С счёт не корректируется');
+-- И то же самое прямым запросом мимо функции: правило держит страж, а не функция.
+SELECT pg_temp.expect_message(format('UPDATE invoices SET adjustment_amount = -999, correction_reason = %L WHERE id = %L',
+  'мимо функции', pg_temp.uid('inv_cat')),
+  'Счёт передан в 1С : сумму менять поздно. Договаривайтесь с бухгалтерией и выставляйте новый счёт.',
+  'сумму переданного в 1С счёта не переписать прямым запросом');
+SELECT pg_temp.expect_message(format('UPDATE invoices SET correction_reason = %L WHERE id = %L',
+  'другая причина', pg_temp.uid('inv_cat')),
+  'Счёт передан в 1С : сумму менять поздно. Договаривайтесь с бухгалтерией и выставляйте новый счёт.',
+  'причину корректировки у переданного счёта не переписать');
+SELECT pg_temp.check(pg_temp.sums(pg_temp.uid('inv_cat')) = '1700-200=1500', 'сумма переданного в 1С счёта осталась прежней');
 SELECT pg_temp.expect_message(format('UPDATE invoices SET status = %L WHERE id = %L', 'cancelled', pg_temp.uid('inv_cat')),
   'Счёт в состоянии «передан в 1С» нельзя перевести в «отменён». Отсюда счёт уже не меняется: если нужно исправить, выставьте новый.',
   'переданный в 1С счёт не отменить');

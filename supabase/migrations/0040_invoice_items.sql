@@ -356,6 +356,41 @@ $$;
 
 REVOKE EXECUTE ON FUNCTION public.enforce_invoice_status_transition() FROM PUBLIC, anon, authenticated;
 
+-- «Корректировка только пока счёт не передан в 1С» (контракт) держалась одной проверкой
+-- внутри correct_invoice — а правила строк на invoices пускают к UPDATE любого с
+-- finance.write, и сумму переданного в бухгалтерию счёта можно было переписать одним
+-- запросом мимо функции. Теперь правило живёт триггером, как страж позиций: обойти
+-- его запросом нельзя. Причину тоже защищаем: переписать её у переданного счёта —
+-- то же самое, что переписать корректировку, только тише.
+CREATE OR REPLACE FUNCTION public.guard_invoice_amount_after_transfer()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF (NEW.adjustment_amount IS DISTINCT FROM OLD.adjustment_amount
+       OR NEW.correction_reason IS DISTINCT FROM OLD.correction_reason)
+     AND OLD.status IN ('transferred_to_1c', 'cancelled') THEN
+    RAISE EXCEPTION 'Счёт % : сумму менять поздно. Договаривайтесь с бухгалтерией и выставляйте новый счёт.',
+      public.invoice_status_label(OLD.status)
+      USING ERRCODE = '42501';
+  END IF;
+  RETURN NEW;
+END
+$$;
+
+REVOKE EXECUTE ON FUNCTION public.guard_invoice_amount_after_transfer() FROM PUBLIC, anon, authenticated;
+
+COMMENT ON FUNCTION public.guard_invoice_amount_after_transfer() IS
+  'Страж суммы счёта (0040): у счёта, переданного в 1С или отменённого, корректировку и её причину не изменить ни функцией, ни прямым запросом.';
+
+-- Имя с aa_: страж должен сказать своё раньше, чем проверка причины из 0001.
+DROP TRIGGER IF EXISTS invoices_aa_amount_frozen ON public.invoices;
+CREATE TRIGGER invoices_aa_amount_frozen
+  BEFORE UPDATE OF adjustment_amount, correction_reason ON public.invoices
+  FOR EACH ROW EXECUTE FUNCTION public.guard_invoice_amount_after_transfer();
+
 -- Выставить счёт: из черновика. Дата выставления ставится здесь, руками её не задают.
 CREATE OR REPLACE FUNCTION public.issue_invoice(p_invoice_id uuid)
 RETURNS void
@@ -448,12 +483,9 @@ BEGIN
   IF invoice_row.id IS NULL THEN
     RAISE EXCEPTION 'Счёт не найден' USING ERRCODE = '23514';
   END IF;
-  IF invoice_row.status IN ('transferred_to_1c', 'cancelled') THEN
-    RAISE EXCEPTION 'Счёт % : сумму менять поздно. Договаривайтесь с бухгалтерией и выставляйте новый счёт.',
-      public.invoice_status_label(invoice_row.status)
-      USING ERRCODE = '23514';
-  END IF;
-  IF invoice_row.adjustment_amount = amount THEN
+  -- Переданный в 1С и отменённый счёт не корректируются: правило держит триггер
+  -- invoices_aa_amount_frozen, чтобы его нельзя было обойти прямым запросом.
+  IF invoice_row.adjustment_amount IS NOT DISTINCT FROM amount THEN
     RAISE EXCEPTION 'Корректировка уже равна % : менять нечего', trim_scale(amount)
       USING ERRCODE = '23514';
   END IF;
