@@ -5,6 +5,8 @@ import {
   MAX_TASK_MAIL_REPLY,
   taskMailAttachmentFile,
   taskMailAuthor,
+  taskMailReplyAddress,
+  taskMailReplyLost,
   taskMailReplyPending,
   taskMailReplyRefusal,
   taskMailReplyStatus
@@ -42,6 +44,8 @@ describe("переписка с клиентом в карточке задач�
     assert.equal(taskMailReplyRefusal("Инженер приедет в среду"), null);
     assert.equal(taskMailReplyRefusal("я".repeat(MAX_TASK_MAIL_REPLY)), null);
     assert.match(String(taskMailReplyRefusal("я".repeat(MAX_TASK_MAIL_REPLY + 1))), /сократите текст/u);
+    // Символы считаем как база (char_length): эмодзи не съедает лимит вдвое быстрее.
+    assert.equal(taskMailReplyRefusal("🙂".repeat(MAX_TASK_MAIL_REPLY)), null);
   });
 
   it("разбирает отправителя письма на имя и адрес", () => {
@@ -70,6 +74,27 @@ describe("переписка с клиентом в карточке задач�
     assert.equal(taskMailReplyPending(letter), false);
   });
 
+  it("называет адрес, на который уйдёт ответ", () => {
+    assert.equal(taskMailReplyAddress([letter, reply("sent")]), "a.smirnova@gkb1.example");
+    // Отвечаем на последнее письмо клиента, как и база.
+    const second: TaskMailMessage = { ...letter, id: "m2", author: "lab@gkb1.example", occurredAt: "2026-11-12T05:00:00.000Z" };
+    assert.equal(taskMailReplyAddress([letter, reply("sent"), second]), "lab@gkb1.example");
+    assert.equal(taskMailReplyAddress([reply("sent")]), undefined);
+    assert.equal(taskMailReplyAddress([]), undefined);
+  });
+
+  it("отличает ответ, который служба ещё повторит, от потерянного", () => {
+    assert.equal(taskMailReplyLost(reply("failed", "smtp_recipient_rejected")), true);
+    assert.equal(taskMailReplyLost(reply("queued", "smtp_connection_failed")), false);
+    assert.equal(taskMailReplyLost(letter), false);
+    // Ответ вернулся в очередь после сбоя: координатор видит, что писать заново не нужно.
+    assert.equal(
+      taskMailReplyStatus(reply("queued", "smtp_connection_failed"), () => "почтовый сервер недоступен"),
+      "В очереди на отправку, прошлая попытка не удалась: почтовый сервер недоступен"
+    );
+    assert.equal(taskMailReplyStatus(reply("queued")), "В очереди на отправку");
+  });
+
   it("показывает вложение письма обычным файлом задачи", () => {
     const file = taskMailAttachmentFile(letter, letter.attachments[0]!);
     assert.equal(file.id, "f1");
@@ -85,18 +110,18 @@ describe("переписка с клиентом в карточке задач�
   });
 });
 
-describe("карточка задачи показывает письмо клиента", () => {
-  it("держит вкладку переписки, форму ответа и права из базы", async () => {
+describe("карточка задачи берёт переписку и права из базы", () => {
+  // Отрисовку переписки проверяет task-mail.test.tsx; здесь — проводка карточки,
+  // которую иначе видно только в браузере.
+  it("грузит переписку задачи и спрашивает право на ответ у базы", async () => {
     const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
-    // Вкладка появляется только у задач с письмом.
-    assert.match(app, /label: "Письмо клиента", badge: mailThread\.length/u);
     assert.match(app, /m2Api\.taskMailThread\(task\.id\)/u);
-    // Право на ответ спрашиваем у базы, а не вычисляем по роли на экране.
+    // Право на ответ не вычисляется по роли на экране.
     assert.match(app, /m2Api\.canReplyTaskMail\(task\.id\)/u);
-    assert.match(app, /m2Api\.sendTaskMailReply\(task\.id, body\)/u);
-    // Вложения письма рисует обычная галерея файлов задачи.
-    assert.match(app, /<FileGallery files=\{files\} showKind=\{false\} \/>/u);
-    // Из раздела «Письма» задача открывается сразу на переписке.
+    assert.doesNotMatch(app, /canReplyMail = .*permissions/u);
+    // Вкладка появляется только у задач с письмом, и из раздела «Письма» карточка
+    // открывается сразу на ней.
+    assert.match(app, /label: "Письмо клиента", badge: mailThread\.length/u);
     assert.match(app, /initialTab=\{openOnMailTab \? "mail" : "overview"\}/u);
   });
 });

@@ -115,17 +115,23 @@ DECLARE
   coord uuid := gen_random_uuid();
   eng uuid := gen_random_uuid();
   eng2 uuid := gen_random_uuid();
+  buyer uuid := gen_random_uuid();
+  store uuid := gen_random_uuid();
   org uuid; site uuid; payer uuid; manuf uuid; model uuid; eq uuid; wt text;
-  contact uuid; task uuid; letter uuid;
+  contact uuid; task uuid; letter uuid; other_task uuid; part uuid;
 BEGIN
   INSERT INTO auth.users (id, email, aud, role) VALUES
     (coord, 'coord@mail.test', 'authenticated', 'authenticated'),
     (eng, 'eng@mail.test', 'authenticated', 'authenticated'),
-    (eng2, 'eng2@mail.test', 'authenticated', 'authenticated');
+    (eng2, 'eng2@mail.test', 'authenticated', 'authenticated'),
+    (buyer, 'buyer@mail.test', 'authenticated', 'authenticated'),
+    (store, 'store@mail.test', 'authenticated', 'authenticated');
   INSERT INTO public.users (id, full_name, role, email, is_active, access_role_key) VALUES
     (coord, 'Тест координатор', 'coordinator', 'coord@mail.test', true, 'coordinator'),
     (eng, 'Тест инженер', 'engineer', 'eng@mail.test', true, 'engineer'),
-    (eng2, 'Чужой инженер', 'engineer', 'eng2@mail.test', true, 'engineer');
+    (eng2, 'Чужой инженер', 'engineer', 'eng2@mail.test', true, 'engineer'),
+    (buyer, 'Тест заказчик', 'customer', 'buyer@mail.test', true, 'customer'),
+    (store, 'Тест кладовщик', 'warehouse', 'store@mail.test', true, 'warehouse');
 
   INSERT INTO organizations (name) VALUES ('Тестовая больница писем') RETURNING id INTO org;
   INSERT INTO sites (name, organization_id) VALUES ('КДЛ письма', org) RETURNING id INTO site;
@@ -168,8 +174,22 @@ BEGIN
            'byteSize', 284311))
    WHERE id = letter;
 
-  INSERT INTO ids VALUES ('coord', coord), ('eng', eng), ('eng2', eng2), ('task', task),
-    ('letter', letter), ('site', site), ('contact', contact);
+  -- Заказчику видна задача своей организации, кладовщику — пока по ней есть резерв.
+  INSERT INTO customer_organization_access (customer_user_id, organization_id) VALUES (buyer, org);
+  INSERT INTO parts (article_number, name) VALUES ('MAIL-1', 'Клапан письма') RETURNING id INTO part;
+  INSERT INTO stock_reservations (part_id, part_condition, quantity, task_id, requested_by)
+  VALUES (part, 'N', 1, task, coord);
+
+  -- Вторая задача из той же переписки: клиент дописал до того, как задачи создали.
+  INSERT INTO tasks (title, work_type_code, equipment_id, site_id, payer_id, engineer_id,
+                     created_by, call_date, deadline_from, deadline_to, status_code)
+  VALUES ('Заодно посмотреть принтер', wt, eq, site, payer, eng2, coord,
+          '2026-11-10', '2026-11-11', '2026-11-14', 'assigned')
+  RETURNING id INTO other_task;
+
+  INSERT INTO ids VALUES ('coord', coord), ('eng', eng), ('eng2', eng2), ('buyer', buyer),
+    ('store', store), ('task', task), ('letter', letter), ('site', site), ('contact', contact),
+    ('other_task', other_task);
 END $$;
 
 -- ---------------------------------------------------------------- Вложения письма — файлы задачи
@@ -181,8 +201,28 @@ SELECT pg_temp.act_as_nobody();
 SELECT pg_temp.act_as(pg_temp.uid('coord'));
 SELECT pg_temp.check(public.attach_mail_files_to_task(pg_temp.uid('letter'), pg_temp.uid('task')) = 2,
   'координатор переносит письмо и вложение в файлы задачи');
-SELECT pg_temp.check(public.attach_mail_files_to_task(pg_temp.uid('letter'), pg_temp.uid('task')) = 0,
-  'повторный перенос дублей не создаёт');
+SELECT pg_temp.check(public.attach_mail_files_to_task(pg_temp.uid('letter'), pg_temp.uid('task')) = 2,
+  'повторный перенос дублей не создаёт и показывает те же два файла');
+-- Токен без пользователя (sub) не считается службой: перенос всё равно по правам.
+DO $$
+BEGIN
+  PERFORM set_config('request.jwt.claims', json_build_object('role', 'authenticated')::text, true);
+  PERFORM set_config('request.jwt.claim.sub', '', true);
+  BEGIN
+    EXECUTE format('SELECT public.attach_mail_files_to_task(%L, %L)',
+                   (SELECT id FROM ids WHERE k = 'letter'), (SELECT id FROM ids WHERE k = 'task'));
+  EXCEPTION WHEN insufficient_privilege THEN
+    RAISE NOTICE 'ok: токен без пользователя вложения письма не переносит';
+    RETURN;
+  END;
+  RAISE EXCEPTION 'ПРОВАЛ: токен без пользователя перенёс вложения письма';
+END $$;
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+
+-- Чужое письмо в свою задачу не перетащить, даже зная его номер.
+SELECT pg_temp.expect_invalid(
+  format('SELECT public.attach_mail_files_to_task(%L, %L)', pg_temp.uid('letter'), pg_temp.uid('other_task')),
+  'письмо другой задачи к своей не приложить');
 SELECT pg_temp.act_as_nobody();
 
 SELECT pg_temp.check(
@@ -316,14 +356,14 @@ SELECT pg_temp.act_as(pg_temp.uid('coord'));
 SELECT public.send_task_mail_reply(pg_temp.uid('task'), 'Второй ответ клиенту');
 SELECT pg_temp.act_as_nobody();
 SELECT public.fail_task_mail_reply(
-  (SELECT id FROM public.claim_task_mail_replies(10)), 'smtp_connect_failed');
+  (SELECT id FROM public.claim_task_mail_replies(10)), 'smtp_connection_failed');
 SELECT pg_temp.check(
-  (SELECT count(*) FROM public.mail_replies WHERE task_id = pg_temp.uid('task') AND status = 'failed' AND last_error = 'smtp_connect_failed') = 1,
+  (SELECT count(*) FROM public.mail_replies WHERE task_id = pg_temp.uid('task') AND status = 'failed' AND last_error = 'smtp_connection_failed') = 1,
   'неудачная отправка остаётся с ошибкой');
 SELECT pg_temp.act_as(pg_temp.uid('coord'));
 SELECT pg_temp.check(
   (SELECT count(*) FROM public.task_mail_thread(pg_temp.uid('task')) AS thread
-    WHERE thread.direction = 'outgoing' AND thread.error = 'smtp_connect_failed') = 1,
+    WHERE thread.direction = 'outgoing' AND thread.error = 'smtp_connection_failed') = 1,
   'ошибка отправки видна в карточке задачи');
 SELECT pg_temp.act_as_nobody();
 
@@ -406,6 +446,147 @@ SELECT pg_temp.check(
       AND plan.recipient_address = 'kdl@client.test') = 1,
   'один адрес — одно письмо, даже если он и отправитель, и инициатор заявки');
 
+-- ---------------------------------------------------------------- Переписка не для всех
+-- Заказчику видна задача своей организации, кладовщику — пока есть резерв. Письмо
+-- клиента и формулировки координатора им не нужны: переписку ведут по задачам.
+SELECT pg_temp.act_as(pg_temp.uid('buyer'));
+SELECT pg_temp.check(public.app_can_read_task(pg_temp.uid('task')), 'заказчику задача своей организации видна');
+SELECT pg_temp.check(NOT public.app_can_read_task_mail(pg_temp.uid('task')), 'переписка заказчику не положена');
+SELECT pg_temp.check(pg_temp.thread_count(pg_temp.uid('task')) = 0, 'заказчик переписки в карточке не видит');
+SELECT pg_temp.check((SELECT count(*) FROM public.mail_replies) = 0, 'ответы координатора заказчику не видны');
+SELECT pg_temp.check(NOT public.app_can_reply_task_mail(pg_temp.uid('task')), 'заказчик клиенту не отвечает');
+SELECT pg_temp.act_as_nobody();
+
+SELECT pg_temp.act_as(pg_temp.uid('store'));
+SELECT pg_temp.check(public.app_can_read_task(pg_temp.uid('task')), 'кладовщику задача с резервом видна');
+SELECT pg_temp.check(pg_temp.thread_count(pg_temp.uid('task')) = 0, 'кладовщик переписки не видит');
+SELECT pg_temp.check((SELECT count(*) FROM public.mail_replies) = 0, 'ответы координатора кладовщику не видны');
+SELECT pg_temp.act_as_nobody();
+
+-- ---------------------------------------------------------------- Чужой адрес в цепочке
+-- Message-ID письма уходит клиенту в заголовках. Кто его узнал, не должен попасть
+-- в чужую задачу: его письмо остаётся обычной новой заявкой.
+SELECT pg_temp.check(
+  (SELECT NOT ingested.is_reply AND ingested.needs_parse
+     FROM public.ingest_mail_message(
+       '<evil-1@attacker.test>', '<client-1@mail.test>', ARRAY['<client-1@mail.test>'],
+       'Злодей <evil@attacker.test>', 'Re: Ошибка температуры инкубатора',
+       'Пришлите, пожалуйста, реквизиты для оплаты.', now() + interval '10 minutes') AS ingested),
+  'письмо с чужого адреса в цепочку задачи не попадает');
+SELECT pg_temp.check(
+  (SELECT task_id IS NULL AND status = 'pending'
+     FROM public.mail_messages WHERE external_message_id = '<evil-1@attacker.test>'),
+  'такое письмо ждёт координатора как новая заявка');
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.check(pg_temp.thread_text(pg_temp.uid('task')) NOT LIKE '%реквизиты%',
+  'чужое письмо в карточке задачи не показывается');
+SELECT pg_temp.check(
+  (SELECT reply.to_address = 'kdl@client.test'
+     FROM public.send_task_mail_reply(pg_temp.uid('task'), 'Проверка адреса ответа') AS reply),
+  'ответ всё равно уходит клиенту, а не тому, кто подставил заголовок');
+SELECT pg_temp.act_as_nobody();
+SELECT pg_temp.check(pg_temp.email_to('task', 'task_engineer_assigned') NOT LIKE '%attacker%',
+  'уведомления по задаче чужому адресу не уходят');
+
+-- ---------------------------------------------------------------- Две задачи из одной переписки
+-- Клиент дописал до создания задач, координатор сделал из переписки две задачи.
+-- Карточки не должны показывать письма друг друга.
+SELECT public.ingest_mail_message(
+  '<client-3@mail.test>', '<client-1@mail.test>', ARRAY['<client-1@mail.test>'],
+  'Воронина С. А. <kdl@client.test>', 'Re: Ошибка температуры инкубатора',
+  'И ещё принтер не печатает протоколы.', now() + interval '20 minutes');
+UPDATE public.mail_messages SET status = 'converted', task_id = pg_temp.uid('other_task')
+ WHERE external_message_id = '<client-3@mail.test>';
+
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.check(pg_temp.thread_text(pg_temp.uid('task')) NOT LIKE '%принтер%',
+  'письмо второй задачи в карточке первой не показывается');
+SELECT pg_temp.check(pg_temp.thread_text(pg_temp.uid('other_task')) LIKE '%принтер%',
+  'своё письмо во второй задаче видно');
+SELECT pg_temp.check(pg_temp.thread_text(pg_temp.uid('other_task')) NOT LIKE '%ошибку температуры%',
+  'письмо первой задачи во вторую не попадает');
+SELECT pg_temp.check(
+  (SELECT reply.to_address = 'kdl@client.test' AND reply.subject = 'Re: Ошибка температуры инкубатора'
+     FROM public.send_task_mail_reply(pg_temp.uid('other_task'), 'По принтеру приедем тем же выездом') AS reply),
+  'ответ по второй задаче привязан к её письму');
+SELECT pg_temp.act_as_nobody();
+SELECT pg_temp.check(
+  (SELECT reply.mail_message_id = (SELECT id FROM public.mail_messages WHERE external_message_id = '<client-3@mail.test>')
+     FROM public.mail_replies AS reply WHERE reply.body = 'По принтеру приедем тем же выездом'),
+  'в ответ подставлено письмо своей задачи');
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.check(
+  (SELECT thread.id = (SELECT id FROM public.mail_messages WHERE external_message_id = '<client-3@mail.test>')
+     FROM public.task_mail_thread(pg_temp.uid('other_task')) AS thread WHERE thread.direction = 'incoming'),
+  'во второй задаче ровно её письмо');
+SELECT pg_temp.act_as_nobody();
+
+-- ---------------------------------------------------------------- Ответ на автоответ
+-- Автоответ «заявка принята» уходит с Message-ID <autoreply-<id письма>@medtechservice>
+-- и в базе не хранится. Ответ клиента на него всё равно должен попасть в задачу.
+SELECT pg_temp.check(
+  (SELECT ingested.is_reply
+     FROM public.ingest_mail_message(
+       '<client-4@mail.test>',
+       format('<autoreply-%s@medtechservice>', pg_temp.uid('letter')),
+       ARRAY[]::text[], 'kdl@client.test', 'Re: Заявка принята',
+       'Спасибо, ждём инженера.', now() + interval '30 minutes') AS ingested),
+  'ответ клиента на автоответ попадает в задачу, а не в новые заявки');
+SELECT pg_temp.check(
+  (SELECT task_id = pg_temp.uid('task') AND status = 'reply'
+     FROM public.mail_messages WHERE external_message_id = '<client-4@mail.test>'),
+  'такое письмо привязано к задаче автоответа');
+
+-- ---------------------------------------------------------------- Очередь ответов не теряется
+-- Временный сбой почты: ответ возвращается в очередь и уйдёт следующим проходом.
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT public.send_task_mail_reply(pg_temp.uid('task'), 'Ответ с временным сбоем');
+SELECT pg_temp.act_as_nobody();
+SELECT public.fail_task_mail_reply(
+  (SELECT id FROM public.claim_task_mail_replies(10) AS due
+    WHERE due.body = 'Ответ с временным сбоем'), 'smtp_connection_failed', true);
+SELECT pg_temp.check(
+  (SELECT status = 'queued' AND attempts = 1 AND last_error = 'smtp_connection_failed'
+     FROM public.mail_replies WHERE body = 'Ответ с временным сбоем'),
+  'временный сбой почты возвращает ответ в очередь');
+SELECT pg_temp.check(
+  (SELECT count(*) FROM public.claim_task_mail_replies(10) AS due WHERE due.body = 'Ответ с временным сбоем') = 1,
+  'следующий проход службы берёт его снова');
+UPDATE public.mail_replies SET attempts = 5 WHERE body = 'Ответ с временным сбоем';
+SELECT public.fail_task_mail_reply(
+  (SELECT id FROM public.mail_replies WHERE body = 'Ответ с временным сбоем'), 'smtp_connection_failed', true);
+SELECT pg_temp.check(
+  (SELECT status = 'failed' FROM public.mail_replies WHERE body = 'Ответ с временным сбоем'),
+  'после пяти попыток ответ больше не повторяется, координатор видит отказ');
+
+-- Служба остановилась между взятием ответа и отметкой: ответ не висит «отправляется» вечно.
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT public.send_task_mail_reply(pg_temp.uid('task'), 'Ответ на зависшей отправке');
+SELECT pg_temp.act_as_nobody();
+SELECT (SELECT count(*) FROM public.claim_task_mail_replies(10) AS due WHERE due.body = 'Ответ на зависшей отправке');
+UPDATE public.mail_replies SET claimed_at = now() - interval '20 minutes' WHERE body = 'Ответ на зависшей отправке';
+SELECT public.expire_stuck_task_mail_replies();
+SELECT pg_temp.check(
+  (SELECT status = 'failed' AND last_error = 'notification_delivery_lease_expired'
+     FROM public.mail_replies WHERE body = 'Ответ на зависшей отправке'),
+  'зависшая отправка помечается прерванной, повторно письмо не уходит');
+
+-- ---------------------------------------------------------------- Задачи из писем до 0041
+-- У них вложения лежат копией в папке задачи: в карточке они не должны двоиться.
+INSERT INTO public.files (kind, task_id, mail_message_id, storage_key, original_name, content_type, byte_size, is_financial)
+VALUES ('mail_attachment', pg_temp.uid('other_task'),
+        (SELECT id FROM public.mail_messages WHERE external_message_id = '<client-3@mail.test>'),
+        format('tasks/%s/kopiya.jpg', pg_temp.uid('other_task')), 'скан-принтера.jpg', 'image/jpeg', 1000, false);
+UPDATE public.mail_messages
+   SET attachments = jsonb_build_array(jsonb_build_object(
+         'storageKey', format('mail/%s/kopiya.jpg', id),
+         'fileName', 'скан-принтера.jpg', 'contentType', 'image/jpeg', 'byteSize', 1000))
+ WHERE external_message_id = '<client-3@mail.test>';
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.check(pg_temp.thread_files(pg_temp.uid('other_task')) = 'скан-принтера.jpg',
+  'у старой задачи вложение письма показано один раз, копией из папки задачи');
+SELECT pg_temp.act_as_nobody();
+
 -- ---------------------------------------------------------------- Права на функции
 SELECT pg_temp.check(has_function_privilege('authenticated', 'public.task_mail_thread(uuid)', 'execute'),
   'переписку читает вошедший сотрудник (права проверяет сама функция)');
@@ -421,5 +602,11 @@ SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.mark_ta
   'отметку об отправке ставит только служба');
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.attach_mail_files_to_task(uuid, uuid)', 'execute'),
   'без входа вложения письма не перенести');
+SELECT pg_temp.check(has_function_privilege('authenticated', 'public.app_can_read_task_mail(uuid)', 'execute'),
+  'право на переписку сотрудник может спросить у базы');
+SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.mail_attachment_list(uuid, uuid, jsonb, boolean)', 'execute'),
+  'список вложений собирает только база');
+SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.expire_stuck_task_mail_replies()', 'execute'),
+  'зависшие отправки разбирает только служба');
 
 ROLLBACK;

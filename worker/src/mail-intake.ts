@@ -109,8 +109,9 @@ export async function processIncomingMail(
   const row = ingested.rows[0];
   const mailId = typeof row?.id === "string" ? row.id : undefined;
   // Письмо в переписке уже созданной задачи: как заявку его не разбираем (задача есть),
-  // но вложения грузим — база сама отдаст их файлам задачи.
-  const threadReply = row?.created === true && row?.is_reply === true;
+  // но вложения грузим — база сама отдаст их файлам задачи. Если в прошлый раз
+  // хранилище было недоступно, файлы догружаем следующим проходом.
+  const threadReply = row?.is_reply === true && row?.has_files !== true;
   // Повтор письма пропускаем, кроме оборванного разбора: его доделываем.
   if (!mailId || (row?.needs_parse !== true && !threadReply)) return "duplicate";
 

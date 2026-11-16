@@ -57,7 +57,7 @@ import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, com
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
-import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAuthor, taskMailReplyPending, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
+import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAuthor, taskMailReplyAddress, taskMailReplyLost, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
 import { tasksAvailableForInvoice } from "./invoice-tasks.js";
 import { InvoiceCardPage } from "./InvoiceCardPage.js";
 import {
@@ -650,7 +650,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
  * и наши ответы по порядку. Вложения показывает обычная галерея файлов задачи, поэтому
  * открываются и скачиваются они так же и по тем же правам (их проверяет база).
  */
-function TaskMailThread({ messages, canReply, loading, error, onReload, onReply }: {
+export function TaskMailThread({ messages, canReply, loading, error, onReload, onReply }: {
   readonly messages: readonly TaskMailMessage[];
   readonly canReply: boolean;
   readonly loading: boolean;
@@ -661,6 +661,8 @@ function TaskMailThread({ messages, canReply, loading, error, onReload, onReply 
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const refusal = taskMailReplyRefusal(draft);
+  // Кому уйдёт ответ, видно до отправки: правило то же, что в базе.
+  const replyTo = taskMailReplyAddress(messages);
   const send = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     // Та же проверка, что в базе: пустой ответ клиенту не уходит.
@@ -702,7 +704,7 @@ function TaskMailThread({ messages, canReply, loading, error, onReload, onReply 
             <h4>Вложения</h4>
             <FileGallery files={files} showKind={false} />
           </div> : null}
-          {taskMailReplyPending(message) && message.status === "failed"
+          {taskMailReplyLost(message)
             ? <p className="task-mail__warning" role="status">Ответ клиенту не ушёл. Напишите его заново или свяжитесь по телефону.</p>
             : null}
         </li>;
@@ -719,10 +721,10 @@ function TaskMailThread({ messages, canReply, loading, error, onReload, onReply 
         value={draft}
       />
       <div className="task-mail__reply-actions">
-        <p className="form-hint">Ответ уйдёт в том же письме: у клиента он встанет ответом на его заявку, а его ответ вернётся сюда.</p>
+        <p className="form-hint">{replyTo ? <>Ответ уйдёт на <strong>{replyTo}</strong> в том же письме: у клиента он встанет ответом на его заявку, а его ответ вернётся сюда.</> : "Ответ уйдёт отправителю письма в той же переписке: у клиента он встанет ответом на его заявку."}</p>
         <Button busy={sending} disabled={sending || Boolean(refusal)} type="submit">Отправить ответ</Button>
       </div>
-    </form> : <p className="form-hint">Отвечать клиенту по задаче может координатор. Переписку видно всем, кому доступна задача.</p>}
+    </form> : <p className="form-hint">Отвечать клиенту по задаче может координатор или руководитель. Переписку читают они и инженер задачи.</p>}
   </div>;
 }
 
@@ -1515,7 +1517,8 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
   };
   useEffect(() => { void reload({ search: "", status: "" }, 0); }, []);
   const apply = async () => { setPageIndex(0); await reload(filters, 0); };
-  const statusTone = (status: MailInboxRecord["status"]): StatusTone => status === "converted" ? "success" : status === "failed" ? "danger" : status === "ignored" ? "neutral" : status === "parsed" ? "info" : "warning";
+  // «Ответ по задаче» — не новая заявка: внимания координатора он не требует, задача уже есть.
+  const statusTone = (status: MailInboxRecord["status"]): StatusTone => status === "converted" ? "success" : status === "failed" ? "danger" : status === "ignored" ? "neutral" : status === "parsed" || status === "reply" ? "info" : "warning";
   // Клик по строке открывает письмо: окно задачи из письма с его текстом, а у обработанного письма саму задачу.
   // Письмо «Не требует работы» не открывается: задачу из него не связать с письмом, сначала «Вернуть в работу».
   const mailOpens = (mail: MailInboxRecord) => Boolean(mail.taskId) || mail.status !== "ignored";

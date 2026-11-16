@@ -9,7 +9,11 @@
 -- Что делаем. В план писем добавлена ветка отправителя письма задачи: назначение
 -- инженера, принятие задачи и завершение работ. Подтверждение приёма ему отправляет
 -- автоответ службы (0017) — в той же цепочке, что его письмо, поэтому второй раз
--- то же самое из шаблона task_application_accepted не отправляем.
+-- то же самое из шаблона task_application_accepted не отправляем. Событие приёма
+-- встаёт в очередь в момент создания задачи, когда письмо с задачей ещё не связано,
+-- так что надёжно его отправителю всё равно не доставить. Цена решения: с
+-- MAIL_AUTOREPLY_ENABLED=false о приёме заявки клиент не узнает — об этом написано
+-- в README службы, а неудачный автоответ виден координатору в разделе «Письма».
 --
 -- Остальные ветки плана повторяют 0029 без изменений. Адрес берём через
 -- app_mail_address (0041): из «Имя <адрес>» остаётся адрес, мусор отбрасывается.
@@ -108,8 +112,16 @@ AS $function$
            context.deadline_to, context.rework_comment, context.engineer_name,
            context.site_name
       FROM task_context context
-      JOIN public.mail_messages letter ON letter.task_id = context.id
-       AND public.app_mail_address(letter.sender) IS NOT NULL
+      -- Письмо, из которого создана задача (самое раннее у задачи), а не каждое
+      -- письмо переписки: уведомления уходят заявителю, а не всем, кто писал.
+      JOIN LATERAL (
+        SELECT m.sender, m.parsed_payload
+          FROM public.mail_messages AS m
+         WHERE m.task_id = context.id
+           AND public.app_mail_address(m.sender) IS NOT NULL
+         ORDER BY m.received_at, m.created_at
+         LIMIT 1
+      ) AS letter ON true
      WHERE context.event_type IN (
        'task_engineer_assigned', 'task_engineer_accepted', 'task_work_completed'
      )

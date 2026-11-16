@@ -10,8 +10,20 @@ export const MAX_TASK_MAIL_REPLY = 20_000;
 export function taskMailReplyRefusal(body: string): string | null {
   const text = body.trim();
   if (!text) return "Напишите текст ответа клиенту";
-  if (text.length > MAX_TASK_MAIL_REPLY) return `Ответ клиенту длиннее ${MAX_TASK_MAIL_REPLY.toLocaleString("ru")} символов: сократите текст`;
+  // Считаем символы, а не единицы UTF-16: база проверяет char_length, и эмодзи
+  // не должны съедать лимит вдвое быстрее, чем написано в подсказке.
+  if ([...text].length > MAX_TASK_MAIL_REPLY) return `Ответ клиенту длиннее ${MAX_TASK_MAIL_REPLY.toLocaleString("ru")} символов: сократите текст`;
   return null;
+}
+
+/**
+ * Кому уйдёт ответ: адрес последнего письма клиента в задаче — то же правило,
+ * что и у send_task_mail_reply в базе. Координатор видит адрес до отправки.
+ */
+export function taskMailReplyAddress(messages: readonly TaskMailMessage[]): string | undefined {
+  const letters = messages.filter((message) => message.direction === "incoming");
+  const last = letters[letters.length - 1];
+  return last ? taskMailAuthor(last.author).address : undefined;
 }
 
 /** Имя и адрес из заголовка письма: «Имя <адрес>», «адрес» или только имя. */
@@ -34,14 +46,21 @@ export function taskMailAuthor(value: string): { readonly name: string; readonly
 export function taskMailReplyStatus(message: TaskMailMessage, errorText: (code: string) => string = (code) => code): string | undefined {
   if (message.direction !== "outgoing") return undefined;
   if (message.status === "sent") return "Отправлено клиенту";
-  if (message.status === "sending") return "Отправляется";
-  if (message.status === "queued") return "В очереди на отправку";
+  // В очереди после неудачи: служба повторит отправку сама, писать заново не нужно.
+  const retry = message.error ? `, прошлая попытка не удалась: ${errorText(message.error)}` : "";
+  if (message.status === "sending") return `Отправляется${retry}`;
+  if (message.status === "queued") return `В очереди на отправку${retry}`;
   return message.error ? `Не отправлено: ${errorText(message.error)}` : "Не отправлено";
 }
 
 /** Ответ ещё не ушёл или не ушёл совсем: карточка подсвечивает такой ответ. */
 export function taskMailReplyPending(message: TaskMailMessage): boolean {
   return message.direction === "outgoing" && message.status !== "sent";
+}
+
+/** Ответ больше не уйдёт сам: координатору нужно написать заново или позвонить. */
+export function taskMailReplyLost(message: TaskMailMessage): boolean {
+  return message.direction === "outgoing" && message.status === "failed";
 }
 
 /**

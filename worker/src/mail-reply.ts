@@ -15,10 +15,22 @@ function messageIds(value: unknown): readonly string[] {
 }
 
 function errorCode(error: unknown): string {
-  const value = error as { code?: unknown; diagnosticCode?: unknown; name?: unknown } | undefined;
+  const value = error as { code?: unknown; diagnosticCode?: unknown } | undefined;
   if (typeof value?.diagnosticCode === "string") return value.diagnosticCode;
   if (typeof value?.code === "string") return value.code;
-  return typeof value?.name === "string" ? value.name : "reply_failed";
+  // Незнакомая ошибка: код из словаря экрана, иначе координатор прочитал бы «Error».
+  return "channel_delivery_failed";
+}
+
+/**
+ * Повтор уместен: почтовый сервер не ответил или ответил временным отказом.
+ * Неоднозначный исход (связь оборвалась после передачи письма) повторять нельзя —
+ * клиент получил бы два одинаковых ответа.
+ */
+function retryAllowed(error: unknown): boolean {
+  const value = error as { retryAllowed?: unknown; diagnosticCode?: unknown } | undefined;
+  if (typeof value?.retryAllowed === "boolean") return value.retryAllowed && typeof value.diagnosticCode === "string";
+  return false;
 }
 
 /**
@@ -58,7 +70,7 @@ export async function sendTaskMailReplies(
     } catch (error) {
       failed += 1;
       // Код без текста: в тексте ошибки SMTP бывает адрес клиента и параметры сервера.
-      await database.executeSql("SELECT public.fail_task_mail_reply($1::uuid, $2)", [id, errorCode(error)]).catch(() => undefined);
+      await database.executeSql("SELECT public.fail_task_mail_reply($1::uuid, $2, $3)", [id, errorCode(error), retryAllowed(error)]).catch(() => undefined);
     }
   }
   return { sent, failed };

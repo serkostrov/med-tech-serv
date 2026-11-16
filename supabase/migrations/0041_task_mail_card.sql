@@ -92,6 +92,8 @@ CREATE TABLE IF NOT EXISTS public.mail_replies (
   attempts integer NOT NULL DEFAULT 0 CHECK (attempts >= 0),
   last_error text,
   created_at timestamptz NOT NULL DEFAULT now(),
+  -- Когда служба взяла ответ в работу: по этой отметке видно зависшую отправку.
+  claimed_at timestamptz,
   sent_at timestamptz
 );
 
@@ -100,12 +102,33 @@ CREATE INDEX IF NOT EXISTS mail_replies_queue_idx ON public.mail_replies (status
 
 ALTER TABLE public.mail_replies ENABLE ROW LEVEL SECURITY;
 
--- Переписку по задаче видит тот, кто видит задачу: инженеру тоже нужно знать,
--- что координатор пообещал клиенту. Писать и удалять через API нельзя:
--- ответ создаёт только send_task_mail_reply, статус меняет только служба.
+-- Переписку по задаче видят те, кто её ведёт: координатор и руководитель (почта
+-- и так их работа) и инженер этой задачи — ему нужно знать, что пообещали клиенту.
+-- Заказчику (своя организация) и кладовщику (пока есть резерв) задача видна, но
+-- переписка с клиентом и формулировки координатора — нет.
+CREATE OR REPLACE FUNCTION public.app_can_read_task_mail(p_task_id uuid)
+RETURNS boolean
+LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
+AS $$
+  SELECT public.app_can_read_task(p_task_id)
+     AND (
+       public.app_has_any_permission(ARRAY['tasks.read_all', 'tasks.assign'])
+       OR EXISTS (
+            SELECT 1 FROM public.tasks AS t
+             WHERE t.id = p_task_id AND t.engineer_id = auth.uid() AND auth.uid() IS NOT NULL
+          )
+     );
+$$;
+
+REVOKE ALL ON FUNCTION public.app_can_read_task_mail(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.app_can_read_task_mail(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.app_can_read_task_mail(uuid) TO medtech_api;
+
+-- Писать и удалять ответы через API нельзя: ответ создаёт только send_task_mail_reply,
+-- статус меняет только служба.
 DROP POLICY IF EXISTS role_read ON public.mail_replies;
 CREATE POLICY role_read ON public.mail_replies FOR SELECT TO authenticated
-  USING (public.app_can_read_task(task_id));
+  USING (public.app_can_read_task_mail(task_id));
 
 REVOKE ALL ON TABLE public.mail_replies FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON TABLE public.mail_replies TO authenticated;
@@ -142,17 +165,24 @@ BEGIN
   IF letter.id IS NULL THEN
     RAISE EXCEPTION 'Письмо не найдено' USING ERRCODE = '23503';
   END IF;
-  IF letter.task_id IS NOT NULL AND letter.task_id <> p_task_id THEN
+  -- Только письмо этой задачи: чужое письмо в свою задачу не перетащить, даже
+  -- зная его номер. Задачу письму ставит разбор почты (ответ клиента) или
+  -- координатор, когда создаёт задачу из письма.
+  IF letter.task_id IS DISTINCT FROM p_task_id THEN
     RAISE EXCEPTION 'Письмо относится к другой задаче' USING ERRCODE = '23514';
   END IF;
   IF NOT EXISTS (SELECT 1 FROM public.tasks WHERE id = p_task_id) THEN
     RAISE EXCEPTION 'Задача не найдена' USING ERRCODE = '23503';
   END IF;
-  -- Служба (без входа) переносит вложения ответов клиента сама; сотрудник — только
-  -- в задачу, которую может менять.
-  IF auth.uid() IS NOT NULL AND NOT public.app_can_write_task(p_task_id) THEN
-    RAISE EXCEPTION 'Недостаточно прав: вложения письма переносит координатор задачи'
-      USING ERRCODE = '42501';
+  -- Служба (своя роль, без входа) переносит вложения ответов клиента сама; всё,
+  -- что пришло через API, проходит проверку прав на задачу. Смотрим не только
+  -- auth.uid(): токен без sub не должен попадать в ветку службы (внутри функции
+  -- с правами владельца current_user — владелец схемы, по нему вызов не отличить).
+  IF auth.uid() IS NOT NULL OR nullif(current_setting('request.jwt.claims', true), '') IS NOT NULL THEN
+    IF NOT public.app_can_write_task(p_task_id) THEN
+      RAISE EXCEPTION 'Недостаточно прав: вложения письма переносит координатор задачи'
+        USING ERRCODE = '42501';
+    END IF;
   END IF;
 
   FOR item IN
@@ -178,15 +208,17 @@ BEGIN
         auth.uid(), false
       )
       ON CONFLICT (storage_key) DO NOTHING;
-      IF FOUND THEN
-        linked := linked + 1;
-      END IF;
     EXCEPTION WHEN insufficient_privilege OR unique_violation THEN
       -- Задача уже закрыта (файлы закрытой задачи не трогают) или файл уже привязан:
       -- остальные вложения всё равно переносим, письмо в карточке от этого не теряется.
       NULL;
     END;
   END LOOP;
+  -- Считаем, сколько файлов письма в задаче сейчас, а не сколько добавил этот вызов:
+  -- повторный вызов (повтор запроса из браузера) не должен выглядеть как потеря файлов.
+  SELECT count(*) INTO linked
+    FROM public.files AS f
+   WHERE f.mail_message_id = p_mail_id AND f.task_id = p_task_id;
   RETURN linked;
 END
 $$;
@@ -256,7 +288,7 @@ $$;
 
 -- Вложения одного письма: имя, тип, размер, ключ в хранилище и id файла задачи,
 -- если вложение уже перенесено. Финансовый файл без finance.read не отдаётся.
-CREATE OR REPLACE FUNCTION public.mail_attachment_list(p_mail_id uuid, p_attachments jsonb, p_finance boolean)
+CREATE OR REPLACE FUNCTION public.mail_attachment_list(p_mail_id uuid, p_task_id uuid, p_attachments jsonb, p_finance boolean)
 RETURNS jsonb
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
@@ -264,6 +296,7 @@ AS $$
     SELECT f.id, f.original_name AS file_name, f.content_type, f.byte_size, f.storage_key
       FROM public.files AS f
      WHERE f.mail_message_id = p_mail_id
+       AND f.task_id = p_task_id
        AND (NOT f.is_financial OR coalesce(p_finance, false))
   ), listed AS (
     SELECT nullif(btrim(coalesce(a.value ->> 'storageKey', '')), '') AS storage_key,
@@ -276,9 +309,13 @@ AS $$
     UNION ALL
     -- Вложение, которое ещё не стало файлом задачи (например, письмо пришло в закрытую
     -- задачу): показываем его имя, а открыть сможет тот, кто разбирает почту.
+    -- Если файлы письма в задаче уже есть, список берём только из них: у задач,
+    -- созданных до этой миграции, файлы лежат копией в папке задачи, и вложения
+    -- письма иначе показались бы дважды, причём вторая плитка не открывалась бы.
     SELECT NULL::uuid, listed.file_name, listed.content_type, listed.byte_size, listed.storage_key
       FROM listed
      WHERE listed.storage_key IS NOT NULL
+       AND NOT EXISTS (SELECT 1 FROM linked)
        AND NOT EXISTS (SELECT 1 FROM public.files AS f WHERE f.storage_key = listed.storage_key)
   )
   SELECT coalesce(jsonb_agg(jsonb_build_object(
@@ -291,11 +328,14 @@ AS $$
     FROM merged
 $$;
 
-REVOKE ALL ON FUNCTION public.mail_attachment_list(uuid, jsonb, boolean) FROM PUBLIC, anon, authenticated;
+REVOKE ALL ON FUNCTION public.mail_attachment_list(uuid, uuid, jsonb, boolean) FROM PUBLIC, anon, authenticated;
+DROP FUNCTION IF EXISTS public.mail_attachment_list(uuid, jsonb, boolean);
 
 -- Вся переписка по задаче по порядку: письма клиента и наши ответы.
--- Письма цепочки берём по thread_id, поэтому второе письмо клиента, пришедшее до
--- создания задачи, тоже видно в карточке.
+-- Кроме писем самой задачи берём письма той же цепочки, по которым задачи ещё нет
+-- (клиент дописал до того, как задачу создали) и только от того же отправителя.
+-- Письмо, по которому создана другая задача, в чужую карточку не попадает:
+-- из одной цепочки координатор мог сделать две задачи, и это разные работы.
 CREATE OR REPLACE FUNCTION public.task_mail_thread(p_task_id uuid)
 RETURNS TABLE(
   id uuid,
@@ -318,18 +358,29 @@ BEGIN
   IF NOT public.app_can_read_task(p_task_id) THEN
     RAISE EXCEPTION 'Недостаточно прав: задача недоступна' USING ERRCODE = '42501';
   END IF;
+  -- Задача видна, а переписка с клиентом — нет (заказчик, кладовщик): отдаём пусто,
+  -- и вкладки с письмом в карточке просто не будет.
+  IF NOT public.app_can_read_task_mail(p_task_id) THEN
+    RETURN;
+  END IF;
   RETURN QUERY
-  WITH threads AS (
-    SELECT DISTINCT coalesce(m.thread_id, m.external_message_id) AS thread
+  WITH own AS (
+    SELECT coalesce(m.thread_id, m.external_message_id) AS thread,
+           public.app_mail_address(m.sender) AS address
       FROM public.mail_messages AS m
      WHERE m.task_id = p_task_id
   )
   SELECT letter.id, 'incoming'::text, letter.sender, NULL::text, letter.subject, letter.body,
          letter.received_at, letter.status, NULL::text,
-         public.mail_attachment_list(letter.id, letter.attachments, finance)
+         public.mail_attachment_list(letter.id, p_task_id, letter.attachments, finance)
     FROM public.mail_messages AS letter
    WHERE letter.task_id = p_task_id
-      OR coalesce(letter.thread_id, letter.external_message_id) IN (SELECT thread FROM threads)
+      OR (letter.task_id IS NULL
+          AND EXISTS (
+                SELECT 1 FROM own
+                 WHERE own.thread = coalesce(letter.thread_id, letter.external_message_id)
+                   AND own.address IS NOT DISTINCT FROM public.app_mail_address(letter.sender)
+              ))
   UNION ALL
   SELECT reply.id, 'outgoing'::text, coalesce(author.full_name, 'Сотрудник МедТехСервиса'),
          reply.to_address, reply.subject, reply.body, reply.created_at, reply.status,
@@ -394,17 +445,16 @@ BEGIN
     RAISE EXCEPTION 'Ответ клиенту длиннее 20 000 символов: сократите текст' USING ERRCODE = '23514';
   END IF;
   IF NOT public.app_can_reply_task_mail(p_task_id) THEN
-    RAISE EXCEPTION 'Недостаточно прав: ответить клиенту по задаче может координатор'
+    RAISE EXCEPTION 'Недостаточно прав: отвечать клиенту по задаче может координатор или руководитель'
       USING ERRCODE = '42501';
   END IF;
 
-  -- Отвечаем на последнее письмо цепочки: если клиент уже дописывал, ответ уйдёт на него.
+  -- Отвечаем на последнее письмо этой задачи: если клиент уже дописывал, ответ уйдёт
+  -- на него. Берём только письма самой задачи: письмо, подброшенное в цепочку с чужого
+  -- адреса, задачу не получает (0042), и ответ на него не уйдёт.
   SELECT m.* INTO letter
     FROM public.mail_messages AS m
-   WHERE (m.task_id = p_task_id
-          OR coalesce(m.thread_id, m.external_message_id) IN (
-               SELECT DISTINCT coalesce(t.thread_id, t.external_message_id)
-                 FROM public.mail_messages AS t WHERE t.task_id = p_task_id))
+   WHERE m.task_id = p_task_id
      AND public.app_mail_address(m.sender) IS NOT NULL
    ORDER BY m.received_at DESC, m.created_at DESC
    LIMIT 1;
@@ -422,8 +472,7 @@ BEGIN
     SELECT thread_step.message_id, thread_step.at FROM (
       SELECT m.external_message_id AS message_id, m.received_at AS at
         FROM public.mail_messages AS m
-       WHERE coalesce(m.thread_id, m.external_message_id)
-               = coalesce(letter.thread_id, letter.external_message_id)
+       WHERE m.task_id = p_task_id
       UNION ALL
       SELECT r.external_message_id, r.created_at
         FROM public.mail_replies AS r

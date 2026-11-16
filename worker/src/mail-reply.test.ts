@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { processIncomingMail, type IncomingMail } from "./mail-intake.js";
 import { sendTaskMailReplies } from "./mail-reply.js";
-import type { OutboxSqlExecutor } from "./outbox.js";
+import { ChannelDeliveryError, type OutboxSqlExecutor } from "./outbox.js";
 import { smtpMessageData, type SmtpMessage } from "./smtp.js";
 
 function fakeDatabase(handler: (text: string, values: readonly unknown[]) => Record<string, unknown>[]) {
@@ -58,6 +58,20 @@ test("повтор ответа клиента второй раз не обра
   assert.equal(calls.length, 1);
 });
 
+test("вложения ответа клиента догружаются, если хранилище было недоступно", async () => {
+  // Прошлый проход письмо завёл, но файлы не сохранил: has_files = false, created = false.
+  const { database, calls } = fakeDatabase((text) => text.includes("ingest_mail_message")
+    ? [{ id: "22222222-2222-2222-2222-222222222222", created: false, needs_parse: false, has_files: false, is_reply: true }]
+    : []);
+  const stored: string[] = [];
+  const outcome = await processIncomingMail(CLIENT_REPLY, database, {
+    async put(mailId: string, fileName: string) { stored.push(fileName); return `mail/${mailId}/${stored.length}.bin`; }
+  }, undefined);
+  assert.equal(outcome, "reply");
+  assert.deepEqual(stored, ["message.eml", "после-ремонта.jpg"]);
+  assert.ok(calls.some((call) => call.text.includes("set_mail_attachments")));
+});
+
 test("ответ координатора уходит с заголовками цепочки и отмечается отправленным", async () => {
   const { database, calls } = fakeDatabase((text) => text.includes("claim_task_mail_replies")
     ? [{
@@ -102,10 +116,30 @@ test("ошибка отправки ответа сохраняется кодо
   });
   assert.deepEqual(result, { sent: 0, failed: 1 });
   const fail = calls.find((call) => call.text.includes("fail_task_mail_reply"))!;
-  assert.deepEqual(fail.values, ["44444444-4444-4444-4444-444444444444", "smtp_recipient_rejected"]);
+  // Третьим идёт признак повтора: отказ получателя повторять бессмысленно.
+  assert.deepEqual(fail.values, ["44444444-4444-4444-4444-444444444444", "smtp_recipient_rejected", false]);
   assert.ok(!calls.some((call) => call.text.includes("mark_task_mail_reply_sent")));
   // Письмо без цепочки всё равно уходит: заголовки необязательны.
   assert.ok(fail.values.every((value) => !String(value).includes("550")));
+});
+
+test("временный сбой почты возвращает ответ в очередь, неизвестная ошибка — нет", async () => {
+  const reply = {
+    id: "55555555-5555-5555-5555-555555555555",
+    to_address: "kdl@clinic.example", subject: "Re: x", body: "текст",
+    message_id: "reply-55555555@medtechservice", in_reply_to: null, reference_ids: null, task_number: "З-000014"
+  };
+  const attempt = async (thrown: unknown) => {
+    const { database, calls } = fakeDatabase((text) => (text.includes("claim_task_mail_replies") ? [reply] : []));
+    await sendTaskMailReplies(database, { async send() { throw thrown; } });
+    return calls.find((call) => call.text.includes("fail_task_mail_reply"))!.values;
+  };
+  // Почтовый сервер не ответил: служба повторит сама, координатору писать заново не нужно.
+  assert.deepEqual(await attempt(new ChannelDeliveryError("smtp_connection_failed", true)), [reply.id, "smtp_connection_failed", true]);
+  // Исход неизвестен (связь оборвалась после передачи): повтор дал бы клиенту два письма.
+  assert.deepEqual(await attempt(new ChannelDeliveryError("smtp_delivery_outcome_unknown", false)), [reply.id, "smtp_delivery_outcome_unknown", false]);
+  // Незнакомая ошибка: код из словаря экрана, а не «Error».
+  assert.deepEqual(await attempt(new Error("что-то пошло не так")), [reply.id, "channel_delivery_failed", false]);
 });
 
 test("SMTP: References несёт всю переписку, чужой заголовок не подставить", () => {

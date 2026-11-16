@@ -57,6 +57,16 @@ DECLARE
   existing_reply boolean;
   parent_thread text;
   known_ids text[] := coalesce(p_references, ARRAY[]::text[]) || coalesce(p_in_reply_to, '');
+  -- Автоответ «заявка принята» служба отправляет с Message-ID вида
+  -- <autoreply-<id письма>@medtechservice> (0017) и в базе его не хранит. Клиенту
+  -- в этом письме написано «ответьте на него», поэтому его id разбираем обратно:
+  -- иначе ответ клиента начал бы новую заявку.
+  known_autoreplies uuid[] := ARRAY(
+    SELECT (substring(known_id from '^<autoreply-([0-9a-f-]{36})@medtechservice>$'))::uuid
+      FROM unnest(known_ids) AS known_id
+     WHERE known_id ~ '^<autoreply-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}@medtechservice>$'
+  );
+  sender_address text := public.app_mail_address(p_sender);
   thread_task uuid;
   new_id uuid;
   new_thread text;
@@ -72,11 +82,12 @@ BEGIN
     RETURN QUERY SELECT existing_id, false, new_thread, existing_pending, existing_files, existing_reply;
     RETURN;
   END IF;
-  -- Цепочка: ищем известное письмо или наш ответ среди In-Reply-To и References.
+  -- Цепочка: ищем известное письмо, наш ответ или автоответ среди In-Reply-To и References.
   SELECT step.thread INTO parent_thread FROM (
     SELECT coalesce(m.thread_id, m.external_message_id) AS thread, m.received_at AS at
       FROM public.mail_messages AS m
      WHERE m.external_message_id = ANY (known_ids)
+        OR m.id = ANY (known_autoreplies)
     UNION ALL
     SELECT r.thread_id, r.created_at
       FROM public.mail_replies AS r
@@ -85,12 +96,17 @@ BEGIN
    ORDER BY step.at
    LIMIT 1;
   new_thread := coalesce(parent_thread, p_external_message_id);
-  -- Задача цепочки: по ней письмо и попадёт в карточку, а не в заявки.
-  IF parent_thread IS NOT NULL THEN
+  -- Задача цепочки: по ней письмо и попадёт в карточку, а не в заявки. Только если
+  -- письмо пришло с того же адреса, что и заявка: Message-ID уходит клиенту в заголовках,
+  -- и посторонний, подставив его в In-Reply-To, иначе попал бы в чужую задачу —
+  -- получал бы по ней уведомления и забирал себе ответы координатора.
+  -- Письмо с другого адреса остаётся обычной новой заявкой, её разбирает координатор.
+  IF parent_thread IS NOT NULL AND sender_address IS NOT NULL THEN
     SELECT m.task_id INTO thread_task
       FROM public.mail_messages AS m
      WHERE coalesce(m.thread_id, m.external_message_id) = parent_thread
        AND m.task_id IS NOT NULL
+       AND public.app_mail_address(m.sender) = sender_address
      ORDER BY m.received_at
      LIMIT 1;
   END IF;
@@ -151,6 +167,21 @@ $$;
 -- поэтому даже при сбое SMTP клиент не получит два одинаковых письма.
 -- message_id и заголовки цепочки отдаются готовыми: In-Reply-To — письмо клиента,
 -- References — вся переписка по порядку.
+-- Служба могла остановиться между взятием ответа и отметкой об отправке: такой
+-- ответ навсегда остался бы «отправляется». Через 15 минут помечаем его неудачным
+-- тем же кодом, что и прерванную доставку уведомления: повторять нельзя (письмо
+-- могло уйти), но координатор видит, что ответ завис, и может написать заново.
+CREATE OR REPLACE FUNCTION public.expire_stuck_task_mail_replies()
+RETURNS void
+LANGUAGE sql
+SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+  UPDATE public.mail_replies
+     SET status = 'failed', last_error = 'notification_delivery_lease_expired'
+   WHERE status = 'sending' AND coalesce(claimed_at, created_at) < now() - interval '15 minutes';
+$$;
+
 CREATE OR REPLACE FUNCTION public.claim_task_mail_replies(p_limit integer)
 RETURNS TABLE(
   id uuid,
@@ -166,6 +197,7 @@ LANGUAGE sql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
+  SELECT public.expire_stuck_task_mail_replies();
   WITH due AS (
     SELECT r.id
       FROM public.mail_replies AS r
@@ -175,7 +207,7 @@ AS $$
      FOR UPDATE OF r SKIP LOCKED
   ), claimed AS (
     UPDATE public.mail_replies AS r
-       SET status = 'sending', attempts = r.attempts + 1
+       SET status = 'sending', attempts = r.attempts + 1, claimed_at = now()
       FROM due
      WHERE r.id = due.id
     RETURNING r.id, r.to_address, r.subject, r.body, r.external_message_id, r.in_reply_to,
@@ -198,14 +230,20 @@ AS $$
    WHERE id = p_id AND status = 'sending';
 $$;
 
-CREATE OR REPLACE FUNCTION public.fail_task_mail_reply(p_id uuid, p_error text)
+-- Неудачная отправка. Временный сбой (почтовый сервер недоступен, 4xx) — p_retry:
+-- ответ возвращается в очередь и уходит следующим проходом, но не больше пяти раз.
+-- Остальное терминально: текст набрал человек, и писать его заново — его решение,
+-- а не молчание службы.
+DROP FUNCTION IF EXISTS public.fail_task_mail_reply(uuid, text);
+CREATE FUNCTION public.fail_task_mail_reply(p_id uuid, p_error text, p_retry boolean DEFAULT false)
 RETURNS void
 LANGUAGE sql
 SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
   UPDATE public.mail_replies
-     SET status = 'failed', last_error = left(coalesce(p_error, 'reply_failed'), 200)
+     SET status = CASE WHEN coalesce(p_retry, false) AND attempts < 5 THEN 'queued' ELSE 'failed' END,
+         last_error = left(coalesce(p_error, 'reply_failed'), 200)
    WHERE id = p_id AND status IN ('queued', 'sending');
 $$;
 
@@ -217,8 +255,9 @@ BEGIN
     'public.ingest_mail_message(text, text, text[], text, text, text, timestamptz)',
     'public.set_mail_attachments(uuid, text, jsonb)',
     'public.claim_task_mail_replies(integer)',
+    'public.expire_stuck_task_mail_replies()',
     'public.mark_task_mail_reply_sent(uuid)',
-    'public.fail_task_mail_reply(uuid, text)'
+    'public.fail_task_mail_reply(uuid, text, boolean)'
   ] LOOP
     EXECUTE format('REVOKE ALL ON FUNCTION %s FROM PUBLIC, anon, authenticated', fn);
     EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO medtech_worker', fn);
