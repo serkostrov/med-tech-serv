@@ -16,7 +16,11 @@
 --   4. task_mail_thread — вся цепочка для карточки задачи одним запросом.
 --   5. app_can_read_task_mail — кому переписка положена: тем, кто ведёт задачи
 --      (координатор, руководитель), и инженеру этой задачи. Заказчику своей организации
---      и кладовщику с резервом задача видна, а письма клиента и наши ответы — нет.
+--      и кладовщику с резервом задача видна, а текст письма и наши ответы — нет.
+--      Вложения правилу переписки не подчиняются: по ТЗ это обычные файлы задачи,
+--      их видит каждый, кому доступна задача (и раньше их копии лежали в папке задачи),
+--      а финансовые — только с finance.read. Поэтому у заказчика в «Работе и акте»
+--      по-прежнему есть и само письмо .eml, хотя вкладки «Письмо клиента» у него нет.
 --
 -- Отправка писем, разбор ИИ и настройки почты здесь не меняются.
 
@@ -100,6 +104,11 @@ CREATE TABLE IF NOT EXISTS public.mail_replies (
   sent_at timestamptz
 );
 
+-- Таблица могла быть создана прошлой версией этой миграции (ручная накатка на стенде):
+-- CREATE TABLE IF NOT EXISTS её не тронет, поэтому колонку добавляем отдельно, как в 0017.
+ALTER TABLE public.mail_replies
+  ADD COLUMN IF NOT EXISTS claimed_at timestamptz;
+
 CREATE INDEX IF NOT EXISTS mail_replies_task_idx ON public.mail_replies (task_id, created_at);
 CREATE INDEX IF NOT EXISTS mail_replies_queue_idx ON public.mail_replies (status, created_at) WHERE status = 'queued';
 
@@ -107,8 +116,9 @@ ALTER TABLE public.mail_replies ENABLE ROW LEVEL SECURITY;
 
 -- Переписку по задаче видят те, кто её ведёт: координатор и руководитель (почта
 -- и так их работа) и инженер этой задачи — ему нужно знать, что пообещали клиенту.
--- Заказчику (своя организация) и кладовщику (пока есть резерв) задача видна, но
--- переписка с клиентом и формулировки координатора — нет.
+-- Заказчику (своя организация) и кладовщику (пока есть резерв) задача видна, но текст
+-- письма и формулировки координатора — нет. На файлы задачи это правило не
+-- распространяется: вложения письма остаются обычными файлами задачи (см. шапку).
 CREATE OR REPLACE FUNCTION public.app_can_read_task_mail(p_task_id uuid)
 RETURNS boolean
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
@@ -295,12 +305,17 @@ CREATE OR REPLACE FUNCTION public.mail_attachment_list(p_mail_id uuid, p_task_id
 RETURNS jsonb
 LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
-  WITH linked AS (
-    SELECT f.id, f.original_name AS file_name, f.content_type, f.byte_size, f.storage_key
+  WITH owned AS (
+    -- Все файлы письма в этой задаче, включая финансовые: по ним решаем, что из
+    -- списка вложений письма показывать, иначе имя финансового файла всплыло бы
+    -- через сам список тому, кому файл не виден.
+    SELECT f.id, f.original_name AS file_name, f.content_type, f.byte_size, f.storage_key, f.is_financial
       FROM public.files AS f
-     WHERE f.mail_message_id = p_mail_id
-       AND f.task_id = p_task_id
-       AND (NOT f.is_financial OR coalesce(p_finance, false))
+     WHERE f.mail_message_id = p_mail_id AND f.task_id = p_task_id
+  ), linked AS (
+    SELECT owned.id, owned.file_name, owned.content_type, owned.byte_size, owned.storage_key
+      FROM owned
+     WHERE NOT owned.is_financial OR coalesce(p_finance, false)
   ), listed AS (
     SELECT nullif(btrim(coalesce(a.value ->> 'storageKey', '')), '') AS storage_key,
            coalesce(nullif(btrim(a.value ->> 'fileName'), ''), 'вложение') AS file_name,
@@ -311,14 +326,14 @@ AS $$
     SELECT linked.id, linked.file_name, linked.content_type, linked.byte_size, linked.storage_key FROM linked
     UNION ALL
     -- Вложение, которое ещё не стало файлом задачи (например, письмо пришло в закрытую
-    -- задачу): показываем его имя, а открыть сможет тот, кто разбирает почту.
-    -- Если файлы письма в задаче уже есть, список берём только из них: у задач,
-    -- созданных до этой миграции, файлы лежат копией в папке задачи, и вложения
-    -- письма иначе показались бы дважды, причём вторая плитка не открывалась бы.
+    -- задачу, куда файлы добавлять нельзя): показываем хотя бы имя, а открыть сможет
+    -- тот, кто разбирает почту. Вложение с таким же именем, уже лежащее в файлах задачи,
+    -- второй раз не показываем: у задач, созданных до этой миграции, файлы письма лежат
+    -- копией в папке задачи, и иначе половина плиток была бы мёртвой.
     SELECT NULL::uuid, listed.file_name, listed.content_type, listed.byte_size, listed.storage_key
       FROM listed
      WHERE listed.storage_key IS NOT NULL
-       AND NOT EXISTS (SELECT 1 FROM linked)
+       AND NOT EXISTS (SELECT 1 FROM owned WHERE owned.file_name = listed.file_name)
        AND NOT EXISTS (SELECT 1 FROM public.files AS f WHERE f.storage_key = listed.storage_key)
   )
   SELECT coalesce(jsonb_agg(jsonb_build_object(

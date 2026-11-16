@@ -15,12 +15,21 @@ function messageIds(value: unknown): readonly string[] {
 }
 
 function errorCode(error: unknown): string {
-  const value = error as { code?: unknown; diagnosticCode?: unknown } | undefined;
-  if (typeof value?.diagnosticCode === "string") return value.diagnosticCode;
-  if (typeof value?.code === "string") return value.code;
-  // Незнакомая ошибка: код из словаря экрана, иначе координатор прочитал бы «Error».
-  return "channel_delivery_failed";
+  const value = error as { diagnosticCode?: unknown } | undefined;
+  // Только коды канала: их интерфейс переводит на русский. Всё остальное (ECONNRESET,
+  // ошибка в коде) — общий код, иначе координатор прочитал бы «Не отправлено: ECONNRESET».
+  return typeof value?.diagnosticCode === "string" ? value.diagnosticCode : "channel_delivery_failed";
 }
+
+/** Ошибки настройки почты: повтор их не вылечит, а попытки потратит. */
+const SETTINGS_ERRORS: ReadonlySet<string> = new Set([
+  "smtp_authentication_failed",
+  "smtp_authentication_unavailable",
+  "smtp_starttls_unavailable",
+  "smtp_invalid_address",
+  "smtp_invalid_message",
+  "smtp_channel_mismatch"
+]);
 
 /**
  * Повтор уместен: почтовый сервер не ответил или ответил временным отказом.
@@ -29,8 +38,8 @@ function errorCode(error: unknown): string {
  */
 function retryAllowed(error: unknown): boolean {
   const value = error as { retryAllowed?: unknown; diagnosticCode?: unknown } | undefined;
-  if (typeof value?.retryAllowed === "boolean") return value.retryAllowed && typeof value.diagnosticCode === "string";
-  return false;
+  if (typeof value?.retryAllowed !== "boolean" || typeof value.diagnosticCode !== "string") return false;
+  return value.retryAllowed && !SETTINGS_ERRORS.has(value.diagnosticCode);
 }
 
 /**

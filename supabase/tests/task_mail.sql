@@ -550,8 +550,12 @@ SELECT pg_temp.check(
      FROM public.mail_replies WHERE body = 'Ответ с временным сбоем'),
   'временный сбой почты возвращает ответ в очередь');
 SELECT pg_temp.check(
+  (SELECT count(*) FROM public.claim_task_mail_replies(10) AS due WHERE due.body = 'Ответ с временным сбоем') = 0,
+  'повтор не уходит сразу же: служба опрашивает очередь каждые несколько секунд');
+UPDATE public.mail_replies SET claimed_at = now() - interval '3 minutes' WHERE body = 'Ответ с временным сбоем';
+SELECT pg_temp.check(
   (SELECT count(*) FROM public.claim_task_mail_replies(10) AS due WHERE due.body = 'Ответ с временным сбоем') = 1,
-  'следующий проход службы берёт его снова');
+  'через паузу служба берёт ответ снова');
 UPDATE public.mail_replies SET attempts = 5 WHERE body = 'Ответ с временным сбоем';
 SELECT public.fail_task_mail_reply(
   (SELECT id FROM public.mail_replies WHERE body = 'Ответ с временным сбоем'), 'smtp_connection_failed', true);
@@ -586,6 +590,32 @@ SELECT pg_temp.act_as(pg_temp.uid('coord'));
 SELECT pg_temp.check(pg_temp.thread_files(pg_temp.uid('other_task')) = 'скан-принтера.jpg',
   'у старой задачи вложение письма показано один раз, копией из папки задачи');
 SELECT pg_temp.act_as_nobody();
+
+-- Имя финансового вложения не всплывает через список вложений письма.
+UPDATE public.files SET is_financial = true WHERE original_name = 'скан-принтера.jpg';
+SELECT pg_temp.act_as(pg_temp.uid('eng2'));
+SELECT pg_temp.check(pg_temp.thread_files(pg_temp.uid('other_task')) = 'нет',
+  'финансовое вложение без finance.read не видно даже по имени');
+SELECT pg_temp.act_as_nobody();
+UPDATE public.files SET is_financial = false WHERE original_name = 'скан-принтера.jpg';
+
+-- В закрытую задачу файлы добавлять нельзя (0001): служба не должна на этом падать,
+-- а имя вложения в карточке всё равно видно.
+SET session_replication_role = replica;
+UPDATE public.tasks SET status_code = 'closed' WHERE id = pg_temp.uid('other_task');
+SET session_replication_role = origin;
+SELECT public.set_mail_attachments(
+  (SELECT id FROM public.mail_messages WHERE external_message_id = '<client-3@mail.test>'),
+  'mail/closed/message.eml',
+  jsonb_build_array(jsonb_build_object('storageKey', 'mail/closed/dogovor.pdf',
+    'fileName', 'договор-клиента.pdf', 'contentType', 'application/pdf', 'byteSize', 2000)));
+SELECT pg_temp.act_as(pg_temp.uid('coord'));
+SELECT pg_temp.check(pg_temp.thread_files(pg_temp.uid('other_task')) LIKE '%договор-клиента.pdf%',
+  'вложение письма в закрытую задачу видно в карточке хотя бы по имени');
+SELECT pg_temp.act_as_nobody();
+SET session_replication_role = replica;
+UPDATE public.tasks SET status_code = 'assigned' WHERE id = pg_temp.uid('other_task');
+SET session_replication_role = origin;
 
 -- ---------------------------------------------------------------- Права на функции
 SELECT pg_temp.check(has_function_privilege('authenticated', 'public.task_mail_thread(uuid)', 'execute'),

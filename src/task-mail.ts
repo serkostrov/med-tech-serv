@@ -21,9 +21,12 @@ export function taskMailReplyRefusal(body: string): string | null {
  * что и у send_task_mail_reply в базе. Координатор видит адрес до отправки.
  */
 export function taskMailReplyAddress(messages: readonly TaskMailMessage[]): string | undefined {
-  const letters = messages.filter((message) => message.direction === "incoming");
-  const last = letters[letters.length - 1];
-  return last ? taskMailAuthor(last.author).address : undefined;
+  // Письма без разбираемого адреса база тоже пропускает, когда выбирает, кому отвечать.
+  const addresses = messages
+    .filter((message) => message.direction === "incoming")
+    .map((message) => taskMailAuthor(message.author).address)
+    .filter((address): address is string => Boolean(address));
+  return addresses[addresses.length - 1];
 }
 
 /** Имя и адрес из заголовка письма: «Имя <адрес>», «адрес» или только имя. */

@@ -205,7 +205,10 @@ AS $$
   WITH due AS (
     SELECT r.id
       FROM public.mail_replies AS r
+     -- Повтор не сразу: служба опрашивает очередь каждые несколько секунд, и без паузы
+     -- все попытки сгорели бы за полминуты, не пережив даже минутного сбоя почты.
      WHERE r.status = 'queued'
+       AND (r.attempts = 0 OR coalesce(r.claimed_at, r.created_at) < now() - interval '2 minutes')
      ORDER BY r.created_at
      LIMIT least(greatest(coalesce(p_limit, 1), 1), 100)
      FOR UPDATE OF r SKIP LOCKED

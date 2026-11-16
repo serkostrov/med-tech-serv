@@ -81,6 +81,9 @@ describe("переписка с клиентом в карточке задач�
     assert.equal(taskMailReplyAddress([letter, reply("sent"), second]), "lab@gkb1.example");
     assert.equal(taskMailReplyAddress([reply("sent")]), undefined);
     assert.equal(taskMailReplyAddress([]), undefined);
+    // Письмо с нечитаемым адресом база пропускает, выбирая кому ответить: подсказка тоже.
+    const broken: TaskMailMessage = { ...letter, id: "m3", author: "Без адреса", occurredAt: "2026-11-13T05:00:00.000Z" };
+    assert.equal(taskMailReplyAddress([letter, broken]), "a.smirnova@gkb1.example");
   });
 
   it("отличает ответ, который служба ещё повторит, от потерянного", () => {

@@ -138,8 +138,12 @@ test("временный сбой почты возвращает ответ в 
   assert.deepEqual(await attempt(new ChannelDeliveryError("smtp_connection_failed", true)), [reply.id, "smtp_connection_failed", true]);
   // Исход неизвестен (связь оборвалась после передачи): повтор дал бы клиенту два письма.
   assert.deepEqual(await attempt(new ChannelDeliveryError("smtp_delivery_outcome_unknown", false)), [reply.id, "smtp_delivery_outcome_unknown", false]);
-  // Незнакомая ошибка: код из словаря экрана, а не «Error».
+  // Незнакомая ошибка: код из словаря экрана, а не «Error» и не ECONNRESET.
   assert.deepEqual(await attempt(new Error("что-то пошло не так")), [reply.id, "channel_delivery_failed", false]);
+  assert.deepEqual(await attempt(Object.assign(new Error("reset"), { code: "ECONNRESET" })), [reply.id, "channel_delivery_failed", false]);
+  // Ошибку в настройках почты повторять бессмысленно: попытки сгорели бы впустую.
+  assert.deepEqual(await attempt(new ChannelDeliveryError("smtp_authentication_failed", true)), [reply.id, "smtp_authentication_failed", false]);
+  assert.deepEqual(await attempt(new ChannelDeliveryError("smtp_starttls_unavailable", true)), [reply.id, "smtp_starttls_unavailable", false]);
 });
 
 test("SMTP: References несёт всю переписку, чужой заголовок не подставить", () => {
