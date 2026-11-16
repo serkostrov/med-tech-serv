@@ -221,7 +221,7 @@ SELECT pg_temp.check_eq(pg_temp.result('together') ->> 'eventsWithoutEquipment',
 SELECT pg_temp.check_eq(pg_temp.result('together') ->> 'equipmentAlready', '0',
   'повторов в файле не было');
 
--- Один прибор тремя строками файла: «уже было» не выдумывается из повторов.
+-- Один прибор двумя строками файла: «уже было» не выдумывается из повторов.
 INSERT INTO outcome
 SELECT 'repeats', public.import_equipment_history(
   'imp54-repeats.xlsx',
