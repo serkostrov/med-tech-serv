@@ -1,3 +1,5 @@
+import { TASK_STATUS_LABELS } from "./domain/task-status.js";
+
 /**
  * Журналы: что показывать на экране «Журналы» и как это называть по-русски.
  *
@@ -144,6 +146,13 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   telegram_chat_id: "Номер чата Telegram",
   updated_by: "Кто изменил",
   created_by: "Кто создал",
+  // Деньги в журнале есть только у счетов (0019) и только с правом на финансы.
+  total_amount: "Сумма счёта",
+  labor_amount: "Стоимость работ",
+  parts_amount: "Стоимость запчастей",
+  adjustment_amount: "Корректировка суммы",
+  unit_price: "Цена за единицу",
+  amount: "Сумма",
   closure_verified: "Закрытие принято",
   closureVerified: "Закрытие принято",
   verificationComment: "Комментарий проверки"
@@ -151,6 +160,26 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
 
 /** Служебные поля снимка, которые на экране только мешают. */
 const HIDDEN_FIELDS: readonly string[] = ["id", "created_at", "updated_at", "search_vector", "board_position"];
+
+/**
+ * Статусы в снимке лежат кодами. Коды повторяются у разных объектов и значат разное
+ * («issued» у счёта — выставлен, у резерва — выдан), поэтому переводим их по объекту
+ * события, а незнакомый код оставляем как есть.
+ */
+const STATUS_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  task: TASK_STATUS_LABELS,
+  invoice: { draft: "Черновик", issued: "Выставлен", transferred_to_1c: "Передан в 1С", cancelled: "Отменён" },
+  integration: {
+    queued: "В очереди", sending: "Отправка начата", sent: "Отправлено",
+    delivered: "Доставлено", failed: "Ошибка", cancelled: "Отменено"
+  },
+  warehouse: {
+    created: "Создан", warehouse_notified: "Склад уведомлён", issued: "Выдан",
+    installed: "Установлен", returned: "Возвращён", cancelled: "Отменён"
+  }
+};
+
+const STATUS_FIELDS: readonly string[] = ["status", "status_code", "from_status", "to_status"];
 
 export interface AuditJournalEvent {
   readonly id: number;
@@ -229,12 +258,18 @@ export function auditActorLabel(event: Pick<AuditJournalEvent, "actorName" | "ac
   return "Сотрудник удалён из CRM";
 }
 
-/** Значение поля в журнале одной строкой. */
-export function auditValueText(value: unknown): string {
+/** Значение поля в журнале одной строкой. Статусы показываем словами того объекта, у которого они стоят. */
+export function auditValueText(value: unknown, field?: string, entityType?: string): string {
   if (value === null || value === undefined || value === "") return "не задано";
   if (typeof value === "boolean") return value ? "да" : "нет";
   if (typeof value === "number") return String(value);
-  if (typeof value === "string") return value.length > 200 ? `${value.slice(0, 200)}…` : value;
+  if (typeof value === "string") {
+    if (field && entityType && STATUS_FIELDS.includes(field)) {
+      const label = STATUS_LABELS[entityType]?.[value];
+      if (label) return label;
+    }
+    return value.length > 200 ? `${value.slice(0, 200)}…` : value;
+  }
   return JSON.stringify(value);
 }
 
@@ -250,7 +285,9 @@ export interface AuditChangeLine {
  * Служебные поля и поля, которых нет ни в одном снимке, не показываются:
  * денежные поля счёта могли быть вырезаны по праву смотрящего.
  */
-export function auditChangeLines(event: Pick<AuditJournalEvent, "changedFields" | "beforeData" | "afterData">): readonly AuditChangeLine[] {
+export function auditChangeLines(
+  event: Pick<AuditJournalEvent, "changedFields" | "beforeData" | "afterData"> & { readonly entityType?: string }
+): readonly AuditChangeLine[] {
   const before = event.beforeData ?? {};
   const after = event.afterData ?? {};
   const fields = event.changedFields.length > 0
@@ -262,13 +299,15 @@ export function auditChangeLines(event: Pick<AuditJournalEvent, "changedFields" 
     .map((field) => ({
       field,
       label: auditFieldLabel(field),
-      before: auditValueText(before[field]),
-      after: auditValueText(after[field])
+      before: auditValueText(before[field], field, event.entityType),
+      after: auditValueText(after[field], field, event.entityType)
     }));
 }
 
 /** Сколько полей поменялось — для подписи в строке списка. */
-export function auditChangeSummary(event: Pick<AuditJournalEvent, "changedFields" | "beforeData" | "afterData">): string {
+export function auditChangeSummary(
+  event: Pick<AuditJournalEvent, "changedFields" | "beforeData" | "afterData"> & { readonly entityType?: string }
+): string {
   const lines = auditChangeLines(event);
   if (lines.length === 0) return "";
   const shown = lines.slice(0, 3).map((line) => line.label).join(", ");

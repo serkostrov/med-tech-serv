@@ -61,6 +61,18 @@ describe("журнал изменений", () => {
     assert.equal(auditValueText("а".repeat(250)).length, 201);
   });
 
+  it("показывает статусы словами того объекта, у которого они стоят", () => {
+    // «issued» у счёта — выставлен, у резерва — выдан: перевод зависит от объекта.
+    assert.equal(auditValueText("issued", "status", "invoice"), "Выставлен");
+    assert.equal(auditValueText("issued", "status", "warehouse"), "Выдан");
+    assert.equal(auditValueText("under_review", "status_code", "task"), "На проверке");
+    assert.equal(auditValueText("failed", "status", "integration"), "Ошибка");
+    // Незнакомый код и поля не про статус остаются как есть.
+    assert.equal(auditValueText("своё", "status", "invoice"), "своё");
+    assert.equal(auditValueText("issued", "notes", "invoice"), "issued");
+    assert.equal(auditValueText("issued"), "issued");
+  });
+
   it("сравнивает снимки по изменённым полям", () => {
     const lines = auditChangeLines({
       changedFields: ["title", "status_code"],

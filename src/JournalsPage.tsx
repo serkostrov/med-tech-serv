@@ -243,7 +243,7 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
               description={filtered ? "Измените условия или сбросьте фильтры." : "Записи появятся здесь после первого входа в систему."}
               status={filtered ? "filtered-empty" : "empty"}
               title={filtered ? "Входов по этим условиям нет" : "Входов пока нет"} />
-            : <div className="table-scroll"><table className="data-table journal-table">
+            : <div className="table-scroll"><table className="data-table journal-table journal-table--logins">
               <thead><tr>
                 <th scope="col">Когда</th>
                 <th scope="col">Кто</th>

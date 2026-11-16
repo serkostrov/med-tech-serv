@@ -8493,6 +8493,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* ===== Журналы: что меняли в системе и кто входил (ТЗ 6.3) ===== */
 .journal-table { min-width: 900px; }
+/* У входов всего четыре столбца: лишняя ширина уводила исход за край экрана. */
+.journal-table--logins { min-width: 620px; }
 .journal-table td strong { display: block; color: var(--color-ink); font-weight: 600; }
 .journal-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; word-break: break-word; }
 .journal-table__when { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-ink-soft); }
