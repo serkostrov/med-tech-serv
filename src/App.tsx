@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import type { BulkTaskCommandResponse, EngineerTaskListItem, EngineerTaskListResponse, EquipmentFileResponse, EquipmentHistoryEvent, EquipmentMeterReading, MailInboxRecord, NotificationJournalRecord, NotificationTemplateResponse, TaskPartPosition } from "./types.js";
+import type { BulkTaskCommandResponse, EngineerTaskListItem, EngineerTaskListResponse, EquipmentFileResponse, EquipmentHistoryEvent, EquipmentMeterReading, MailInboxRecord, NotificationJournalRecord, NotificationTemplateResponse, TaskMailMessage, TaskPartPosition } from "./types.js";
 import {
   getDefaultView,
   getRoleNavigation,
@@ -60,6 +60,7 @@ import { pendingAfterRetry, pendingUploadNames, pendingUploadsText, type Pending
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
+import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAuthor, taskMailReplyAddress, taskMailReplyLost, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
 import { tasksAvailableForInvoice } from "./invoice-tasks.js";
 import { InvoiceCardPage } from "./InvoiceCardPage.js";
 import {
@@ -649,6 +650,89 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
   </DialogForm>;
 }
 
+/**
+ * Переписка с клиентом в карточке задачи: письмо, которым пришла заявка, ответы клиента
+ * и наши ответы по порядку. Вложения показывает обычная галерея файлов задачи, поэтому
+ * открываются и скачиваются они так же и по тем же правам (их проверяет база).
+ */
+export function TaskMailThread({ messages, canReply, loading, error, onReload, onReply }: {
+  readonly messages: readonly TaskMailMessage[];
+  readonly canReply: boolean;
+  readonly loading: boolean;
+  readonly error: string | null;
+  readonly onReload: () => void;
+  readonly onReply: (body: string) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState("");
+  const [sending, setSending] = useState(false);
+  const refusal = taskMailReplyRefusal(draft);
+  // Кому уйдёт ответ, видно до отправки: правило то же, что в базе.
+  const replyTo = taskMailReplyAddress(messages);
+  const send = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    // Та же проверка, что в базе: пустой ответ клиенту не уходит.
+    if (refusal) { toast.warning(refusal); return; }
+    setSending(true);
+    try {
+      await onReply(draft);
+      setDraft("");
+      toast.success("Ответ встал в очередь: он уйдёт клиенту ответом на его письмо");
+    } catch (sendError) {
+      toast.error(sendError instanceof Error ? sendError.message : "Не получилось отправить ответ клиенту");
+    } finally {
+      setSending(false);
+    }
+  };
+  if (loading) return <ResourceState status="loading" title="Загружаем переписку" />;
+  if (error) return <ResourceState description={error} onRetry={onReload} status="error" title="Переписка не загрузилась" />;
+  return <div className="task-mail">
+    <ol className="task-mail__list">
+      {messages.map((message) => {
+        const author = taskMailAuthor(message.author);
+        // Код ошибки отправки показываем по-русски, тем же словарём, что и журнал уведомлений.
+        const status = taskMailReplyStatus(message, notificationErrorText);
+        const files = message.attachments.map((attachment) => taskMailAttachmentFile(message, attachment));
+        return <li className={`task-mail__item task-mail__item--${message.direction}`} key={message.id}>
+          <header className="task-mail__head">
+            <strong>{message.direction === "incoming" ? author.name : `Ответ · ${author.name}`}</strong>
+            <span className="task-mail__when">{formatTaskDate(message.occurredAt, true)}</span>
+            {status ? <StatusBadge tone={message.status === "sent" ? "success" : message.status === "failed" ? "danger" : "info"}>{status}</StatusBadge> : null}
+          </header>
+          <p className="task-mail__meta">
+            {message.direction === "incoming"
+              ? author.address && author.address !== author.name ? `от ${author.address}` : "письмо клиента"
+              : message.recipient ? `кому: ${message.recipient}` : "ответ клиенту"}
+            {message.subject ? ` · тема: ${message.subject}` : ""}
+          </p>
+          <pre className="task-mail__body">{message.body || "Письмо без текста"}</pre>
+          {files.length ? <div className="task-mail__files">
+            <h4>Вложения</h4>
+            <FileGallery files={files} showKind={false} />
+          </div> : null}
+          {taskMailReplyLost(message)
+            ? <p className="task-mail__warning" role="status">Ответ клиенту не ушёл. Напишите его заново или свяжитесь по телефону.</p>
+            : null}
+        </li>;
+      })}
+    </ol>
+    {canReply ? <form className="task-mail__reply" onSubmit={(event) => void send(event)}>
+      <label htmlFor="task-mail-reply">Ответ клиенту</label>
+      <AutoTextarea
+        id="task-mail-reply"
+        maxLength={MAX_TASK_MAIL_REPLY}
+        onChange={(event) => setDraft(event.target.value)}
+        placeholder="Например: инженер приедет в среду после обеда, перед выездом позвонит"
+        rows={4}
+        value={draft}
+      />
+      <div className="task-mail__reply-actions">
+        <p className="form-hint">{replyTo ? <>Ответ уйдёт на <strong>{replyTo}</strong> в том же письме: у клиента он встанет ответом на его заявку, а его ответ вернётся сюда.</> : "Ответ уйдёт отправителю письма в той же переписке: у клиента он встанет ответом на его заявку."}</p>
+        <Button busy={sending} disabled={sending || Boolean(refusal)} type="submit">Отправить ответ</Button>
+      </div>
+    </form> : <p className="form-hint">Отвечать клиенту по задаче может координатор или руководитель. Переписку читают они и инженер задачи.</p>}
+  </div>;
+}
+
 export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelated, initialTab = "overview", backLabel = "К задачам" }: {
   /** Подпись кнопки «назад»: «К прибору», если задачу открыли из паспорта. */
   readonly backLabel?: string;
@@ -657,7 +741,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   readonly onBack: () => void;
   readonly onChanged: () => Promise<void>;
   readonly onOpenRelated: (id: string) => Promise<void>;
-  readonly initialTab?: "overview" | "result" | "materials" | "parts" | "history";
+  readonly initialTab?: "overview" | "result" | "materials" | "parts" | "history" | "mail";
 }) {
   const [suggestions, setSuggestions] = useState<readonly AssignmentSuggestionRecord[]>([]);
   const [engineerId, setEngineerId] = useState("");
@@ -669,8 +753,13 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [actRowsEditing, setActRowsEditing] = useState(false);
   const [resultEditing, setResultEditing] = useState(false);
   const [overviewEditing, setOverviewEditing] = useState(false);
-  // Вкладки карточки: работа и акт (результат и файлы), запчасти отдельно, история.
-  const [detailTab, setDetailTab] = useState<"work" | "parts" | "history">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : "work");
+  // Вкладки карточки: работа и акт (результат и файлы), запчасти отдельно, письмо клиента, история.
+  const [detailTab, setDetailTab] = useState<"work" | "parts" | "history" | "mail">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : initialTab === "mail" ? "mail" : "work");
+  // Переписка с клиентом: грузим отдельно от карточки, как резервы склада.
+  const [mailThread, setMailThread] = useState<readonly TaskMailMessage[]>([]);
+  const [mailLoading, setMailLoading] = useState(true);
+  const [mailError, setMailError] = useState<string | null>(null);
+  const [canReplyMail, setCanReplyMail] = useState(false);
   const [resultCatalogs, setResultCatalogs] = useState<{ readonly reasons: readonly ReferenceCatalogValue[]; readonly workTypes: readonly ReferenceCatalogValue[] }>({ reasons: [], workTypes: [] });
   const task = card.task;
   // Черновик результата работ читаем один раз на открытие окна: инженер заполняет его
@@ -725,6 +814,24 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     }
   };
   useEffect(() => { void loadReservations(); }, [task.id]);
+
+  const loadMailThread = async () => {
+    setMailLoading(true);
+    try {
+      setMailThread(await m2Api.taskMailThread(task.id));
+      setMailError(null);
+    } catch (loadError) {
+      setMailThread([]);
+      setMailError(loadError instanceof Error ? loadError.message : "Не получилось загрузить переписку по задаче");
+    } finally {
+      setMailLoading(false);
+    }
+  };
+  useEffect(() => { void loadMailThread(); }, [task.id]);
+  // Право на ответ проверяет база (есть письмо, есть права на задачу): экран повторяет её ответ.
+  useEffect(() => {
+    void m2Api.canReplyTaskMail(task.id).then(setCanReplyMail).catch(() => setCanReplyMail(false));
+  }, [task.id]);
   useEffect(() => {
     void m2Api.hasPermission("warehouse.write").then(setCanReserveParts).catch(() => setCanReserveParts(false));
   }, []);
@@ -1194,7 +1301,24 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     <div className="task-layout">
       <div className="task-layout__main">
         {task.callReason ? <section className="task-brief" aria-label="Что случилось"><h2>Что случилось</h2><p>{task.callReason}</p></section> : null}
-        <PageTabs items={[{ value: "work", label: "Работа и акт", badge: card.files.length }, { value: "parts", label: "Запчасти", badge: card.parts.length }, { value: "history", label: "История", badge: card.journal.length }]} label="Разделы карточки задачи" onValueChange={setDetailTab} value={detailTab} />
+        <PageTabs items={[
+          { value: "work" as const, label: "Работа и акт", badge: card.files.length },
+          { value: "parts" as const, label: "Запчасти", badge: card.parts.length },
+          // Вкладка письма есть только у задач из почты: остальным она не нужна.
+          ...(mailThread.length || mailError ? [{ value: "mail" as const, label: "Письмо клиента", badge: mailThread.length }] : []),
+          { value: "history" as const, label: "История", badge: card.journal.length }
+        ]} label="Разделы карточки задачи" onValueChange={setDetailTab} value={detailTab} />
+        {detailTab === "mail" ? <section className="task-section" aria-labelledby={`task-mail-${task.id}`}>
+          <header className="task-section__head"><h3 id={`task-mail-${task.id}`}>Переписка с клиентом</h3></header>
+          <TaskMailThread
+            canReply={canReplyMail}
+            error={mailError}
+            loading={mailLoading}
+            messages={mailThread}
+            onReload={() => void loadMailThread()}
+            onReply={async (body) => { await m2Api.sendTaskMailReply(task.id, body); await loadMailThread(); }}
+          />
+        </section> : null}
         {detailTab === "work" ? <div className="task-work">
           <section className="task-section" aria-labelledby={`task-result-${task.id}`}>
             <header className="task-section__head">
@@ -1373,7 +1497,8 @@ interface TaskRegistryFilters {
 const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", periodFrom: "", periodTo: "", overdue: false, sort: "updated_desc" };
 
 const mailStatusLabels: Readonly<Record<MailInboxRecord["status"], string>> = {
-  pending: "Новое", parsed: "Распознано", converted: "Создана задача", ignored: "Не требует работы", failed: "Ошибка разбора"
+  pending: "Новое", parsed: "Распознано", converted: "Создана задача", ignored: "Не требует работы",
+  failed: "Ошибка разбора", reply: "Ответ по задаче"
 };
 
 function mailRecognized(mail: MailInboxRecord): string {
@@ -1431,7 +1556,8 @@ function MailInboxTab({ onCreateTask, onOpenTask }: { readonly onCreateTask: (ma
   };
   useEffect(() => { void reload({ search: "", status: "" }, 0); }, []);
   const apply = async () => { setPageIndex(0); await reload(filters, 0); };
-  const statusTone = (status: MailInboxRecord["status"]): StatusTone => status === "converted" ? "success" : status === "failed" ? "danger" : status === "ignored" ? "neutral" : status === "parsed" ? "info" : "warning";
+  // «Ответ по задаче» — не новая заявка: внимания координатора он не требует, задача уже есть.
+  const statusTone = (status: MailInboxRecord["status"]): StatusTone => status === "converted" ? "success" : status === "failed" ? "danger" : status === "ignored" ? "neutral" : status === "parsed" || status === "reply" ? "info" : "warning";
   // Клик по строке открывает письмо: окно задачи из письма с его текстом, а у обработанного письма саму задачу.
   // Письмо «Не требует работы» не открывается: задачу из него не связать с письмом, сначала «Вернуть в работу».
   const mailOpens = (mail: MailInboxRecord) => Boolean(mail.taskId) || mail.status !== "ignored";
@@ -1522,6 +1648,8 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const [bulkBusy, setBulkBusy] = useState(false);
   const [formOpen, setFormOpen] = useState(false);
   const [mailDraft, setMailDraft] = useState<MailInboxRecord | null>(null);
+  // Задачу открыли из раздела «Письма»: карточка сразу показывает переписку с клиентом.
+  const [openOnMailTab, setOpenOnMailTab] = useState(false);
   const [mailEquipment, setMailEquipment] = useState<EquipmentApiRecord | undefined>(undefined);
   const [mailRefresh, setMailRefresh] = useState(0);
   const [canAssignEngineer, setCanAssignEngineer] = useState(false);
@@ -1663,7 +1791,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const closeTask = () => {
     // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
     if (onReturnToEquipment) { onReturnToEquipment(); return; }
-    openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
+    openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); setOpenOnMailTab(false); onTaskRouteChange();
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
   useEffect(() => () => { openRequest.current += 1; }, []);
@@ -1728,7 +1856,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
-  if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }} workTypes={workTypes} />;
+  if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} initialTab={openOnMailTab ? "mail" : "overview"} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
@@ -1779,7 +1907,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         setMailEquipment(device);
         setMailDraft(mail);
         await openCreationForm();
-      })()} onOpenTask={(taskId) => void openTask(taskId).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} />}
+      })()} onOpenTask={(taskId) => { setOpenOnMailTab(true); void openTask(taskId).catch((loadError: unknown) => { setOpenOnMailTab(false); toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"); }); }} />}
     </>
   );
 }

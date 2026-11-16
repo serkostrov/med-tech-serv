@@ -443,7 +443,18 @@ SELECT pg_temp.check(NOT EXISTS (
        -- 0048: история движений подписывает выдачу номером задачи, а задачу кладовщик
        -- видит только пока по ней есть действующий резерв. Поэтому от владельца схемы
        -- с проверкой права на склад внутри.
-       'inventory_part_movements')
+       'inventory_part_movements',
+       -- 0041: письмо в карточке задачи. Таблица писем по политикам открыта только
+       -- тем, кто разбирает почту, а переписку по задаче должен видеть и инженер
+       -- этой задачи — поэтому от владельца схемы с проверкой app_can_read_task_mail
+       -- (она же решает, что заказчику и кладовщику переписка не положена).
+       'task_mail_thread', 'app_can_read_task_mail',
+       -- 0041: ответ клиенту пишется только этой функцией (прямой записи в mail_replies
+       -- нет ни у кого), право на ответ проверяет app_can_reply_task_mail внутри.
+       'send_task_mail_reply', 'app_can_reply_task_mail',
+       -- 0041: вложения письма становятся файлами задачи. Читает письмо и пишет files
+       -- за координатора и за службу, права на задачу проверяет внутри.
+       'attach_mail_files_to_task')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');

@@ -26,6 +26,8 @@ export interface MailIntakeResult {
   readonly created: number;
   readonly parsed: number;
   readonly failed: number;
+  /** Письма, которые легли в переписку уже созданной задачи, а не в новые заявки. */
+  readonly replies: number;
 }
 
 const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
@@ -98,16 +100,20 @@ export async function processIncomingMail(
   database: OutboxSqlExecutor,
   files: MailFileStore | undefined,
   ai: AiMailParser | undefined
-): Promise<"duplicate" | "parsed" | "failed" | "skipped"> {
+): Promise<"duplicate" | "parsed" | "failed" | "skipped" | "reply"> {
   if (!mail.from || mail.automatic) return "skipped";
   const ingested = await database.executeSql(
-    "SELECT id::text, created, needs_parse, has_files FROM public.ingest_mail_message($1, $2, $3::text[], $4, $5, $6, $7::timestamptz)",
+    "SELECT id::text, created, needs_parse, has_files, is_reply FROM public.ingest_mail_message($1, $2, $3::text[], $4, $5, $6, $7::timestamptz)",
     [mail.messageId, mail.inReplyTo ?? null, mail.references, mail.from, mail.subject, mail.text, mail.receivedAt.toISOString()]
   );
   const row = ingested.rows[0];
   const mailId = typeof row?.id === "string" ? row.id : undefined;
+  // Письмо в переписке уже созданной задачи: как заявку его не разбираем (задача есть),
+  // но вложения грузим — база сама отдаст их файлам задачи. Если в прошлый раз
+  // хранилище было недоступно, файлы догружаем следующим проходом.
+  const threadReply = row?.is_reply === true && row?.has_files !== true;
   // Повтор письма пропускаем, кроме оборванного разбора: его доделываем.
-  if (!mailId || row?.needs_parse !== true) return "duplicate";
+  if (!mailId || (row?.needs_parse !== true && !threadReply)) return "duplicate";
 
   // Файлы отдельно: сбой хранилища не мешает разобрать письмо, текст координатор увидит.
   let filesFailed = false;
@@ -125,6 +131,10 @@ export async function processIncomingMail(
       console.error(`Файлы письма не сохранены: ${errorCode(error)}`);
     }
   }
+
+  // Ответ клиента по задаче дальше не идёт: разбор заявки ему не нужен,
+  // в карточке задачи он виден следующим сообщением переписки.
+  if (threadReply) return "reply";
 
   try {
 
@@ -282,7 +292,7 @@ export class ImapMailIntake {
     });
     // Обрыв соединения imapflow сообщает событием; без обработчика упала бы вся служба.
     client.on("error", (error: unknown) => console.error(`Почтовый ящик: ошибка соединения ${errorCode(error)}`));
-    let fetched = 0; let created = 0; let parsed = 0; let failed = 0;
+    let fetched = 0; let created = 0; let parsed = 0; let failed = 0; let replies = 0;
     await client.connect();
     try {
       const mailbox = await client.mailboxOpen(this.settings.mailbox, { readOnly: true });
@@ -317,9 +327,10 @@ export class ImapMailIntake {
         try {
           const mail = await toIncomingMail(message.source, message.date);
           const outcome = await processIncomingMail(mail, this.database, this.files, this.ai);
-          if (outcome === "parsed" || outcome === "failed") created += 1;
+          if (outcome === "parsed" || outcome === "failed" || outcome === "reply") created += 1;
           if (outcome === "parsed") parsed += 1;
           if (outcome === "failed") failed += 1;
+          if (outcome === "reply") replies += 1;
         } catch (error) {
           // Временный сбой (база недоступна): повторим со следующим проходом.
           // Испорченное письмо после трёх попыток пропускаем, чтобы не держать остальные.
@@ -347,6 +358,6 @@ export class ImapMailIntake {
     } finally {
       await client.logout().catch(() => undefined);
     }
-    return { fetched, created, parsed, failed };
+    return { fetched, created, parsed, failed, replies };
   }
 }

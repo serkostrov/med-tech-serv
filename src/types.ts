@@ -46,7 +46,8 @@ export interface NotificationJournalResponse {
   readonly ownOnly?: boolean;
 }
 
-export type MailInboxStatus = "pending" | "parsed" | "converted" | "ignored" | "failed";
+/** «reply» — письмо пришло в переписку уже созданной задачи, новой заявкой оно не считается. */
+export type MailInboxStatus = "pending" | "parsed" | "converted" | "ignored" | "failed" | "reply";
 
 export interface MailInboxRecord {
   readonly id: string;
@@ -83,6 +84,31 @@ export interface MailAttachment {
   readonly fileName: string;
   readonly contentType: string;
   readonly byteSize: number;
+}
+
+/** Вложение письма: оно же файл задачи, если уже перенесено (fileId). */
+export interface TaskMailAttachment {
+  readonly fileId?: string;
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly byteSize: number;
+  readonly storageKey?: string;
+}
+
+/** Сообщение переписки по задаче: письмо клиента или наш ответ. */
+export interface TaskMailMessage {
+  readonly id: string;
+  readonly direction: "incoming" | "outgoing";
+  /** Для письма клиента — отправитель из заголовка, для ответа — сотрудник. */
+  readonly author: string;
+  readonly recipient?: string;
+  readonly subject: string;
+  readonly body: string;
+  readonly occurredAt: string;
+  /** У письма — его статус разбора, у ответа — queued, sending, sent или failed. */
+  readonly status: string;
+  readonly error?: string;
+  readonly attachments: readonly TaskMailAttachment[];
 }
 
 export interface MailInboxResponse {

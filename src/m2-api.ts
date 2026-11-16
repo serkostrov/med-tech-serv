@@ -16,6 +16,7 @@ import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
+import { taskMailReplyRefusal } from "./task-mail.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
   AccessRoleResponse,
@@ -33,6 +34,8 @@ import type {
   NotificationJournalResponse,
   NotificationTemplateResponse,
   ReplaceAnnualMaintenancePlanRequest,
+  TaskMailAttachment,
+  TaskMailMessage,
   TaskPartPosition,
   TaskPartsResponse,
   UpdateNotificationTemplateRequest
@@ -2727,34 +2730,62 @@ export class M2ApiClient {
   }
 
   /**
-   * Письмо и вложения переходят в файлы задачи: копия в папку задачи, чтобы их
-   * видел инженер (папка писем открыта только тем, кто разбирает почту).
+   * Письмо и вложения становятся файлами задачи: их открывает и скачивает каждый,
+   * кому доступна задача (права на объект письма в хранилище даёт та же строка files).
+   * Переносит база одной функцией (0041), поэтому половины файлов не бывает.
    * Возвращает число файлов, которые не получилось перенести.
    */
   public async attachMailToTask(mail: MailInboxRecord, taskId: string): Promise<number> {
-    const actor = await this.actorId();
-    const items: MailAttachment[] = [
-      ...(mail.rawStorageKey ? [{ storageKey: mail.rawStorageKey, fileName: "Письмо клиента.eml", contentType: "message/rfc822", byteSize: 0 }] : []),
-      ...(mail.attachments ?? [])
-    ];
-    let failed = 0;
-    for (const item of items) {
-      const target = `tasks/${taskId}/${storageObjectName(item.fileName)}`;
-      const { error: copyError } = await this.db().storage.from("medtech-files").copy(item.storageKey, target);
-      if (copyError) { failed += 1; continue; }
-      const { error } = await this.db().from("files").insert({
-        kind: "mail_attachment",
-        task_id: taskId,
-        storage_key: target,
-        original_name: item.fileName,
-        content_type: item.contentType || "application/octet-stream",
-        byte_size: item.byteSize > 0 ? item.byteSize : 1,
-        uploaded_by: actor,
-        is_financial: false
-      });
-      if (error) failed += 1;
-    }
-    return failed;
+    const expected = (mail.rawStorageKey ? 1 : 0) + (mail.attachments?.length ?? 0);
+    const { data, error } = await this.db().rpc("attach_mail_files_to_task", { p_mail_id: mail.id, p_task_id: taskId });
+    throwIfError(error, "Не получилось приложить письмо к задаче");
+    const linked = typeof data === "number" ? data : 0;
+    return Math.max(0, expected - linked);
+  }
+
+  /** Вся переписка по задаче для карточки: письма клиента и наши ответы по порядку. */
+  public async taskMailThread(taskId: string): Promise<readonly TaskMailMessage[]> {
+    const { data, error } = await this.db().rpc("task_mail_thread", { p_task_id: taskId });
+    throwIfError(error, "Не получилось загрузить переписку по задаче");
+    return (data as unknown[] ?? []).map((item) => {
+      const row = asRow(item);
+      const attachments = Array.isArray(row.attachments)
+        ? row.attachments.map((entry) => asRow(entry)).map((entry): TaskMailAttachment => ({
+            fileName: typeof entry.fileName === "string" && entry.fileName ? entry.fileName : "вложение",
+            contentType: typeof entry.contentType === "string" ? entry.contentType : "application/octet-stream",
+            byteSize: numberValue(entry.byteSize) ?? 0,
+            ...(typeof entry.fileId === "string" ? { fileId: entry.fileId } : {}),
+            ...(typeof entry.storageKey === "string" ? { storageKey: entry.storageKey } : {})
+          }))
+        : [];
+      return {
+        id: text(row, "id"),
+        direction: text(row, "direction") === "outgoing" ? "outgoing" : "incoming",
+        author: text(row, "author"),
+        subject: text(row, "subject"),
+        body: text(row, "body"),
+        occurredAt: iso(row.occurred_at),
+        status: text(row, "status"),
+        ...(optionalText(row, "recipient") ? { recipient: text(row, "recipient") } : {}),
+        ...(optionalText(row, "error") ? { error: text(row, "error") } : {}),
+        attachments
+      };
+    });
+  }
+
+  /** Можно ли отвечать клиенту по этой задаче: решает база, экран лишь повторяет. */
+  public async canReplyTaskMail(taskId: string): Promise<boolean> {
+    const { data, error } = await this.db().rpc("app_can_reply_task_mail", { p_task_id: taskId });
+    throwIfError(error);
+    return data === true;
+  }
+
+  /** Ответ координатора клиенту: база ставит его в очередь, служба отправляет в той же цепочке. */
+  public async sendTaskMailReply(taskId: string, body: string): Promise<void> {
+    const refusal = taskMailReplyRefusal(body);
+    if (refusal) throw new M2ApiError(422, refusal);
+    const { error } = await this.db().rpc("send_task_mail_reply", { p_task_id: taskId, p_body: body.trim() });
+    throwIfError(error, "Не получилось отправить ответ клиенту");
   }
 
   public async engineerTasks(limit = 20, offset = 0): Promise<EngineerTaskListResponse> {
