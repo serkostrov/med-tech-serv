@@ -55,6 +55,7 @@ import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate } from "./task-dates.js";
 import { clearClosureDraft, closureDraftChecked, closureDraftValue, closureDraftValues, readClosureDraft, saveClosureDraft } from "./closure-draft.js";
+import { pendingAfterRetry, pendingUploadNames, pendingUploadsText, type PendingUpload } from "./upload-retry.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
@@ -677,6 +678,12 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   // Черновик результата работ читаем один раз на открытие окна: инженер заполняет его
   // на выезде, и обрыв связи или перезагрузка страницы не должны стирать набранное.
   const closureDraft = useMemo(() => (resultEditing ? readClosureDraft(task.id) : null), [resultEditing, task.id]);
+  // Файлы, которые не дошли: держим в памяти страницы, чтобы отправить снова одной кнопкой.
+  // В браузерное хранилище файл не положить, поэтому при перезагрузке их придётся выбрать заново.
+  const [pendingUploads, setPendingUploads] = useState<readonly PendingUpload[]>([]);
+  const [retrying, setRetrying] = useState(false);
+  // Последний отправленный результат: нужен, чтобы при повторе привязать фото акта к задаче.
+  const lastResultPayload = useRef<Parameters<typeof m2Api.updateTaskResult>[1] | null>(null);
   type PartDraft = Omit<TaskPartPosition, "id" | "quantity"> & { readonly key: string; readonly quantity: string };
   const toPartDrafts = (parts: readonly TaskPartPosition[]): readonly PartDraft[] => parts.map((part) => ({
     key: part.id,
@@ -889,6 +896,44 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     return null;
   };
 
+  /**
+   * Отправляет файлы по одному и возвращает, что успело дойти. Останавливается на первой
+   * неудаче: если связь оборвалась, следующие попытки только тратят время инженера.
+   */
+  const sendFiles = async (items: readonly PendingUpload[]): Promise<{ readonly done: readonly PendingUpload[]; readonly error?: string }> => {
+    const done: PendingUpload[] = [];
+    for (const item of items) {
+      try {
+        const uploaded = await m2Api.uploadTaskFiles(task.id, [item.file], item.kind);
+        // Фото акта надо не только загрузить, но и привязать к результату работ.
+        if (item.kind === "act") {
+          const actFileId = [...uploaded].reverse().find((file) => file.kind === "act")?.id;
+          const payload = lastResultPayload.current;
+          if (actFileId && payload) await m2Api.updateTaskResult(task.id, { ...payload, actFileId });
+        }
+        done.push(item);
+      } catch (error) {
+        return { done, error: error instanceof Error ? error.message : "связь прервалась" };
+      }
+    }
+    return { done };
+  };
+
+  const retryUploads = async () => {
+    if (pendingUploads.length === 0) return;
+    setRetrying(true);
+    try {
+      const { done, error } = await sendFiles(pendingUploads);
+      const left = pendingAfterRetry(pendingUploads, done);
+      setPendingUploads(left);
+      if (left.length === 0) toast.success("Файлы загружены");
+      else toast.warning(`${pendingUploadsText(left)}: ${error ?? "связь прервалась"}`);
+      await onChanged();
+    } finally {
+      setRetrying(false);
+    }
+  };
+
   const saveResult = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setBusy(true);
@@ -957,24 +1002,27 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           toast.warning(markError instanceof Error ? `Результат сохранён, но отметки об установке не записались: ${markError.message}` : "Результат сохранён, отметки об установке не записались");
         }
       }
-      try {
-        if (actFiles.length) {
-          const uploaded = await m2Api.uploadTaskFiles(task.id, actFiles, "act");
-          const actFileId = [...uploaded].reverse().find((file) => file.kind === "act")?.id;
-          if (actFileId) await m2Api.updateTaskResult(task.id, { ...payload, actFileId });
-        }
-        if (photos.length) await m2Api.uploadTaskFiles(task.id, photos, "photo");
-        if (videos.length) await m2Api.uploadTaskFiles(task.id, videos, "video");
-        clearClosureDraft(task.id);
-      } catch (uploadError) {
-        // Текст уже сохранён: закрываем форму и показываем, что есть, чтобы повтор не дублировал файлы.
-        // Черновик тоже убираем, иначе при следующем открытии он подставит старое поверх сохранённого.
-        clearClosureDraft(task.id);
+      // Файлы идут по одному: при обрыве видно, какие именно не дошли, и повтор
+      // отправит только их, а не загрузит дошедшие второй раз.
+      lastResultPayload.current = payload;
+      const queue: PendingUpload[] = [
+        ...actFiles.map((file) => ({ kind: "act" as const, file })),
+        ...photos.map((file) => ({ kind: "photo" as const, file })),
+        ...videos.map((file) => ({ kind: "video" as const, file }))
+      ];
+      // Черновик убираем здесь: текст уже сохранён, и при следующем открытии он
+      // подставил бы старое поверх сохранённого. Файлы к черновику отношения не имеют.
+      clearClosureDraft(task.id);
+      const { done, error: uploadError } = await sendFiles(queue);
+      const left = pendingAfterRetry(queue, done);
+      if (left.length) {
+        setPendingUploads(left);
         setResultEditing(false);
-        toast.warning(`Результат сохранён, но часть файлов не загрузилась: ${uploadError instanceof Error ? uploadError.message : "ошибка"}. Проверьте вкладку «Работа и акт» и догрузите недостающие.`);
+        toast.warning(`Результат сохранён, но ${pendingUploadsText(left).toLowerCase()}. Нажмите «Отправить снова» в карточке задачи: ${uploadError ?? "связь прервалась"}`);
         await onChanged();
         return;
       }
+      setPendingUploads([]);
       setResultEditing(false);
       await onChanged();
     } catch (saveError) {
@@ -1120,6 +1168,17 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         {needsResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={workflowActions.length || !isTaskEngineer ? "secondary" : "primary"}>{!isTaskEngineer ? "Заполнить результат за инженера" : resultFilled ? "Изменить результат и фото" : "Заполнить результат и фото"}</Button> : null}
         {canAssign ? <Button disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)}>Назначить инженера</Button> : null}
         {workflowActions.filter((action) => action.code !== "submit_for_review" || readyForReview).map((action) => <Button busy={busy} disabled={busy} key={action.code} onClick={() => void perform(action.code)}>{action.label}</Button>)}
+      </div>
+    </section> : null}
+    {/* Текст результата уже сохранён, а файлы не дошли: отправляем только их, дошедшие не дублируем. */}
+    {pendingUploads.length ? <section aria-label="Файлы не загрузились" className="task-next-step task-next-step--warning">
+      <div className="task-next-step__text">
+        <strong>{pendingUploadsText(pendingUploads)}</strong>
+        <span>{pendingUploadNames(pendingUploads)}. Файлы ждут в этой вкладке: если обновить страницу, их придётся выбрать заново.</span>
+      </div>
+      <div className="task-next-step__actions">
+        <Button busy={retrying} disabled={retrying} onClick={() => void retryUploads()}>Отправить снова</Button>
+        <Button disabled={retrying} onClick={() => setPendingUploads([])} variant="ghost">Не отправлять</Button>
       </div>
     </section> : null}
     {card.isTaskEngineer && !["closed", "cancelled"].includes(task.status) ? <EngineerPickupNote reservations={reservations} /> : null}
