@@ -229,11 +229,13 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
             return (
             <tr className="task-registry-row" key={task.id} onClick={() => onOpen(task.id)}>
               <td className="task-select-cell" onClick={(event) => event.stopPropagation()}><input aria-label={`Выбрать задачу ${task.number}`} checked={selectedTaskIds.has(task.id)} onChange={(event) => onToggle(task.id, event.target.checked)} type="checkbox" /></td>
-              <td><button className="text-button" onClick={(event) => { event.stopPropagation(); onOpen(task.id); }} type="button"><strong>{task.number}</strong></button></td>
+              {/* Жирным только название задачи: по нему ищут глазами. Номер и так выделен
+                  цветом ссылки, остальные колонки идут обычным начертанием. */}
+              <td><button className="text-button" onClick={(event) => { event.stopPropagation(); onOpen(task.id); }} type="button">{task.number}</button></td>
               <td><strong>{task.title}</strong></td>
               <td>{task.customer?.siteName ?? "Не выбрана"}</td>
-              <td className="muted">{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · S/N ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · S/N ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</td>
-              <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="urgent-label">срочно</span> : null}{task.isOverdue ? <span className="status-badge status-badge--orange task-overdue-badge">просрочена</span> : null}</td>
+              <td>{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · S/N ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · S/N ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</td>
+              <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="task-registry-row__flag">срочно</span> : null}{task.isOverdue ? <span className="task-registry-row__flag">просрочена</span> : null}</td>
               <td>{task.engineerName ?? engineers.find((engineer) => engineer.id === task.engineerId)?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</td>
               <td><StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge></td>
             </tr>
