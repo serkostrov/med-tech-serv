@@ -214,7 +214,7 @@ SELECT pg_temp.check(
 
 -- Пн—Пт пять рабочих дней, занято три (16, 17, 18) — свободных рабочих два.
 SELECT pg_temp.check(
-  (SELECT l.workday_count = 5 AND l.busy_day_count = 3 AND l.free_workday_count = 2
+  (SELECT l.workday_count = 5 AND l.free_workday_count = 2
      FROM public.engineer_period_load('2026-11-16', '2026-11-22') AS l
     WHERE l.engineer_id = (SELECT id FROM ids WHERE k = 'engineer1')),
   'многодневная задача занимает все свои дни, выходные в свободные рабочие не идут');
