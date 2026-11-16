@@ -3490,10 +3490,16 @@ export class M2ApiClient {
     readonly condition?: "G" | "N" | "B";
     readonly comment?: string;
     readonly sourceDocument?: string;
+    /** Цена единицы в этом приходе: из неё счёт берёт стоимость запчасти (0040). */
+    readonly unitPrice?: number;
   }): Promise<InventoryPartRecord> {
     const quantity = Number(input.quantity);
     if (!Number.isFinite(quantity) || quantity <= 0) {
       throw new M2ApiError(400, "Укажите количество больше нуля");
+    }
+    const unitPrice = input.unitPrice === undefined ? undefined : Number(input.unitPrice);
+    if (unitPrice !== undefined && (!Number.isFinite(unitPrice) || unitPrice < 0)) {
+      throw new M2ApiError(400, "Цена прихода не может быть отрицательной");
     }
     const condition = input.condition ?? "N";
     const part = await this.loadInventoryPart(input.partId);
@@ -3513,10 +3519,18 @@ export class M2ApiClient {
         part_id: input.partId,
         part_condition: condition,
         lot_code: "default",
+        ...(unitPrice === undefined ? {} : { receipt_unit_price: unitPrice }),
         ...(input.sourceDocument ? { source_document: input.sourceDocument } : {})
       }).select("id").single();
       throwIfError(lotCreateError, "Не получилось подготовить партию на складе");
       lotId = text(asRow(createdLot), "id");
+    } else if (unitPrice !== undefined) {
+      // Приход этой запчасти в этом состоянии всегда идёт в одну и ту же партию,
+      // поэтому цена здесь и есть «последняя цена прихода»: её же берёт счёт.
+      // Читать её обратно склад не может (0040), поэтому и не читаем — только пишем.
+      const { error: priceError } = await this.db().from("stock_lots")
+        .update({ receipt_unit_price: unitPrice }).eq("id", lotId);
+      throwIfError(priceError, "Запчасть оприходована, но цена прихода не сохранилась");
     }
     const { error: movementError } = await this.db().from("stock_movements").insert({
       idempotency_key: `receipt:${input.partId}:${condition}:${crypto.randomUUID()}`,

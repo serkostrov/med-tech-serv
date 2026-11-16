@@ -16,6 +16,10 @@ describe("shared UI architecture", () => {
     assert.match(operations, /inventoryPartPage/u);
     assert.match(operations, /Пополнить/u);
     assert.match(operations, /receiveInventoryPart/u);
+    // Цена прихода: из неё счёт берёт стоимость запчасти (0040). Поле необязательное,
+    // но если его потерять, все запчасти в счетах молча встанут нулём.
+    assert.match(operations, /name="unitPrice"/u);
+    assert.match(operations, /unitPrice \}/u);
     assert.match(app, /className="table-actions equipment-registry-actions"[^>]*>[\s\S]*Сменить место/u);
     assert.doesNotMatch(app, /label="Открыть паспорт"/u);
     assert.match(app, /className="data-table__selectable"[^>]*onClick=\{\(\) => void openCard\(record\.id\)\}/u);

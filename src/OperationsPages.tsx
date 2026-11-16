@@ -6,6 +6,7 @@ import { competenciesToSave, competencyKey, competencyLabel, withManufacturerIds
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, ViewSwitch, toast } from "./ui.js";
 import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
+import { parseAmount } from "./price-list.js";
 import { companyToday } from "./task-dates.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { reportFileName, reportWorkbook } from "./report-export.js";
@@ -193,8 +194,16 @@ export function WarehousePage() {
     const quantity = Number(String(form.get("quantity") ?? "").replace(",", "."));
     const condition = String(form.get("condition") ?? "N");
     const comment = String(form.get("comment") ?? "").trim();
+    const priceDraft = String(form.get("unitPrice") ?? "").trim();
+    // Цена прихода нужна счёту: из неё берётся стоимость запчасти в позициях (0040).
+    // Поле необязательное: без него запчасть попадёт в счёт строкой с нулём и пометкой.
+    const unitPrice = priceDraft ? parseAmount(priceDraft) : undefined;
     if (!(quantity > 0)) {
       setFormError("Укажите количество больше нуля");
+      return;
+    }
+    if (priceDraft && unitPrice === null) {
+      setFormError("Укажите цену числом, например 1 500,50");
       return;
     }
     setSaving(true); setFormError(null);
@@ -203,6 +212,7 @@ export function WarehousePage() {
         partId: receiving.id,
         quantity,
         condition: condition === "G" || condition === "B" ? condition : "N",
+        ...(unitPrice === null || unitPrice === undefined ? {} : { unitPrice }),
         ...(comment ? { comment } : {})
       });
       setReceiving(null);
@@ -248,6 +258,7 @@ export function WarehousePage() {
     >
       <label>Количество *<input autoFocus min="0.001" name="quantity" placeholder="Сколько поступило" required step="0.001" type="number" /></label>
       <label>Состояние<Select defaultValue="N" name="condition"><option value="N">Н · новая</option><option value="G">Г · гарантийная</option><option value="B">Б · б/у</option></Select></label>
+      <label>Цена за единицу<input inputMode="decimal" name="unitPrice" placeholder="Как в накладной" /><small>Из неё счёт берёт стоимость запчасти. Без цены запчасть попадёт в счёт нулём с пометкой.</small></label>
       <label className="field-wide">Комментарий<AutoTextarea name="comment" placeholder="Накладная, поставщик — по желанию" rows={2} /></label>
     </DialogForm>
     <ConfirmationDialog confirmLabel="Отключить" description={deactivating ? <>Запчасть {deactivating.articleNumber} останется в истории и её нельзя будет брать в новые заявки.</> : null} onConfirm={async () => { if (!deactivating) return; await m2Api.updateInventoryPart(deactivating.id, { isActive: false }); await reload(); }} onOpenChange={(open) => { if (!open) setDeactivating(null); }} open={Boolean(deactivating)} title="Отключить запчасть?" />
