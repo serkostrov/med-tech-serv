@@ -6,6 +6,7 @@ import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistory
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
+import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
   AccessRoleResponse,
@@ -281,6 +282,11 @@ export interface ReferenceCatalogValue {
   readonly code?: string;
   readonly name: string;
   readonly isActive: boolean;
+  /**
+   * Встроенное значение: на нём держится работа базы, отключать и удалять его нельзя (миграция 0033).
+   * У справочников без такого признака поля нет вовсе, поэтому необязательное.
+   */
+  readonly isBuiltin?: boolean;
   readonly attributes: Readonly<Record<string, string | number | boolean | null>>;
 }
 
@@ -4054,6 +4060,8 @@ export class M2ApiClient {
         code: catalog.code ? optionalText(row, catalog.code) : undefined,
         name: text(row, "name"),
         isActive: row.is_active !== false,
+        // Признака нет у справочников, от которых база не зависит: там встроенных значений не бывает.
+        isBuiltin: row.is_builtin === true,
         attributes: {
           ...(row.requires_hours !== undefined ? { requiresHours: row.requires_hours === true } : {}),
           ...(row.sort_order !== undefined ? { sortOrder: numberValue(row.sort_order) ?? 0 } : {}),
@@ -4128,6 +4136,9 @@ export class M2ApiClient {
   }
 
   public async removeCatalogValue(key: string, id: string): Promise<{ readonly mode: "deactivated" | "deleted"; readonly after?: ReferenceCatalogValue }> {
+    // Встроенное значение не отключаем: база откажет (0033), но лучше сказать это сразу и по-человечески.
+    const existing = (await this.listCatalogValues(key)).find((item) => item.id === id);
+    if (existing) assertReferenceValueCanBeHidden(existing);
     const after = await this.updateCatalogValue(key, id, { isActive: false });
     return { mode: "deactivated", after };
   }

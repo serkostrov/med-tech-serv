@@ -11,7 +11,7 @@ import {
   type NavigationItem
 } from "./navigation.js";
 import { hasEquipmentSerialConflict } from "./equipment-passport.js";
-import { referenceEditPayload } from "./reference-edit.js";
+import { canHideReferenceValue, referenceEditPayload } from "./reference-edit.js";
 import {
   formatEquipmentAssignmentChange,
   formatEquipmentAssignmentDate,
@@ -2830,14 +2830,15 @@ function AdminReferencesPage() {
         <CardHeader action={<Button icon="plus" onClick={beginCreate}>Добавить запись</Button>} headingId="reference-admin-title" meta={`${records.filter((record) => record.isActive).length} активных · ${records.filter((record) => !record.isActive).length} неактивных`} title={selected.label} />
         <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th><th scope="col">Параметры</th><th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
           return <tr className={!record.isActive ? "reference-admin-table__inactive" : ""} key={record.id}>
-            <td><strong>{record.name}</strong></td>
+            <td><strong>{record.name}</strong>{record.isBuiltin ? <small>встроенное значение</small> : null}</td>
             <td className="muted">{Object.entries(record.attributes).filter(([key]) => key !== "sortOrder").map(([key, value]) => `${selected.fields.find((field) => field.key === key)?.label ?? key}: ${typeof value === "boolean" ? value ? "да" : "нет" : String(value)}`).join(" · ") || "—"}</td>
             <td><StatusBadge tone={record.isActive ? "success" : "neutral"}>{record.isActive ? "Активно" : "Неактивно"}</StatusBadge></td>
             <td><div className="reference-admin-actions">
               <IconButton disabled={index === 0} icon="moveUp" label="Выше" onClick={() => void moveRecord(record, "up")} />
               <IconButton disabled={index === records.length - 1} icon="moveDown" label="Ниже" onClick={() => void moveRecord(record, "down")} />
               <IconButton icon="edit" label="Изменить" onClick={() => beginEdit(record)} />
-              {record.isActive ? <IconButton icon="hide" label="Скрыть" onClick={() => setDeactivating(record)} /> : <IconButton icon="show" label="Показать" onClick={() => void reactivateRecord(record)} />}
+              {/* У встроенного значения кнопки «Скрыть» нет: без него база не работает (миграция 0033). */}
+              {!canHideReferenceValue(record) ? null : record.isActive ? <IconButton icon="hide" label="Скрыть" onClick={() => setDeactivating(record)} /> : <IconButton icon="show" label="Показать" onClick={() => void reactivateRecord(record)} />}
             </div></td>
           </tr>;
         })}{records.length === 0 ? <tr><td colSpan={4}><ResourceState description="Нажмите «Добавить запись», чтобы значение появилось в заявках." status="empty" title={`В списке «${selected.label}» пока нет записей`} /></td></tr> : null}</tbody></table></div>

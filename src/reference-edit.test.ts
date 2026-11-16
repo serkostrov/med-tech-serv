@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { referenceEditPayload } from "./reference-edit.js";
+import { assertReferenceValueCanBeHidden, canHideReferenceValue, referenceEditPayload } from "./reference-edit.js";
 
 describe("reference edit payload", () => {
   it("keeps numeric, reference and boolean attributes in an edit", () => {
@@ -22,5 +22,18 @@ describe("reference edit payload", () => {
         isTerminal: false
       }
     });
+  });
+});
+
+describe("встроенные значения справочника", () => {
+  it("не предлагает скрыть встроенный этап «Закрыта»", () => {
+    assert.equal(canHideReferenceValue({ name: "Закрыта", isBuiltin: true }), false);
+    assert.throws(() => assertReferenceValueCanBeHidden({ name: "Закрыта", isBuiltin: true }), /Закрыта.*встроенное значение/u);
+  });
+
+  it("обычное значение справочника скрывается как раньше", () => {
+    assert.equal(canHideReferenceValue({ name: "Ждёт запчасть", isBuiltin: false }), true);
+    assert.equal(canHideReferenceValue({ name: "cobas e 411" }), true);
+    assert.doesNotThrow(() => assertReferenceValueCanBeHidden({ name: "Ждёт запчасть" }));
   });
 });
