@@ -373,7 +373,8 @@ BEGIN
      ORDER BY d.tasks DESC, d.day
      LIMIT 1
   ) AS peak ON true
-  ORDER BY s.full_name;
+  -- Однофамильцы не должны меняться местами между запросами, поэтому в порядке есть id.
+  ORDER BY s.full_name, s.id;
 END
 $$;
 
