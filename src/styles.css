@@ -8859,3 +8859,97 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .price-history__list li, .price-preview__list li { align-items: flex-start; }
   .price-preview__amounts { white-space: normal; }
 }
+
+/* Карточка позиции склада: остатки по состояниям, артикулы поставщиков, история движений. */
+.part-card__section { display: grid; gap: 10px; padding-top: 16px; border-top: 1px solid var(--color-border-soft); }
+.part-card__section:first-child { padding-top: 0; border-top: 0; }
+.part-card__heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 650;
+}
+.part-card__count { color: var(--color-muted); font-size: 12.5px; font-weight: 500; }
+.part-card__hint, .part-card__empty { color: var(--color-muted); font-size: 13px; line-height: 1.45; }
+
+.part-card__conditions { display: grid; gap: 10px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.part-card__condition {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-soft);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+}
+.part-card__condition-letter {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  flex: none;
+  border-radius: 999px;
+  color: var(--color-accent-dark);
+  background: var(--color-accent-soft);
+  font-size: 14px;
+  font-weight: 700;
+  place-items: center;
+}
+.part-card__condition div { display: grid; gap: 1px; min-width: 0; }
+.part-card__condition strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.part-card__condition small { color: var(--color-muted); font-size: 12.5px; overflow-wrap: break-word; }
+
+.part-card__totals { display: grid; gap: 6px 18px; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); margin: 0; }
+.part-card__totals div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; font-size: 13px; }
+.part-card__totals dt { color: var(--color-muted); }
+.part-card__totals dd { margin: 0; font-variant-numeric: tabular-nums; font-weight: 600; }
+
+.part-card__actions, .part-card__form-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.part-card__form {
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-canvas);
+}
+.part-card__form-actions { justify-content: flex-end; grid-column: 1 / -1; }
+
+.part-card__aliases { margin: 0; }
+.part-card__aliases .tag { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; overflow-wrap: break-word; }
+.part-card__alias-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.part-card__alias-form input { min-width: min(100%, 260px); flex: 1; }
+
+.part-card__movements td { vertical-align: top; }
+.part-card__movements td small { display: block; color: var(--color-muted); font-size: 12.5px; }
+.part-card__movement-condition { display: block; margin-top: 3px; color: var(--color-muted); font-size: 12.5px; }
+
+/* Приход накладной файлом: что система распознала в каждой строке. */
+.receipt-import { display: grid; gap: 14px; }
+.receipt-import__fields { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
+.receipt-import__fields label { display: grid; gap: 4px; color: var(--color-muted); font-size: 13px; font-weight: 600; }
+.receipt-import__fields small { color: var(--color-muted); font-size: 12.5px; font-weight: 500; line-height: 1.4; }
+.receipt-import__table td { vertical-align: top; }
+.receipt-import__table td small { display: block; color: var(--color-muted); font-size: 12.5px; }
+/* Отказ базы по строке — целая фраза: даём ей перенестись, а не обрезаться по краю окна. */
+.receipt-import__table .status-badge { align-items: flex-start; line-height: 1.35; text-align: left; white-space: normal; }
+.receipt-import__row--broken { background: var(--color-danger-soft); }
+
+/* Карточка доски склада: кнопка с артикулом и таблица остатков под ней. */
+.inventory-board-card__open { padding-bottom: 0; }
+/* Ширина подписей та же, что была у списка внутри кнопки (строка с 84px выше):
+   «На складе» и «Г · Н · Б» должны стоять в одну строку со значением. */
+.inventory-board-card__stats { display: grid; gap: 6px; margin: 0; padding: 8px 12px 11px; }
+.inventory-board-card__stats div { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: 7px; font-size: 13px; }
+.inventory-board-card__stats div:first-child { padding-top: 8px; border-top: 1px solid var(--color-border-soft); }
+.inventory-board-card__stats dt { color: var(--color-muted); }
+.inventory-board-card__stats dd { margin: 0; overflow-wrap: break-word; white-space: normal; }
+
+/* Остаток по состояниям и артикулы поставщиков в строке списка склада. */
+.inventory-table__conditions { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.inventory-table__aliases { display: block; color: var(--color-muted); font-size: 12.5px; font-weight: 500; overflow-wrap: break-word; }
+
+@media (max-width: 620px) {
+  .part-card__totals div { justify-content: flex-start; }
+  .inventory-table__conditions { white-space: normal; }
+}

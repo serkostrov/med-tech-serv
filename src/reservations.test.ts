@@ -91,7 +91,7 @@ describe("резервы склада", () => {
     } as const;
     const items = [
       { ...base, taskNumber: "З-1", taskTitle: "Ремонт дозатора", engineerName: "Иванов Пётр Алексеевич" },
-      { ...base, id: "r2", number: "Р-000002", status: "issued", partId: "p2", articleNumber: "XN-FILTER", partName: "Фильтр крови", taskNumber: "З-2", engineerName: "Иванов Пётр Алексеевич", issuedToName: "Кузнецова Мария Олеговна" },
+      { ...base, id: "r2", number: "Р-000002", status: "issued", partId: "p2", articleNumber: "XN-FILTER", partName: "Фильтр крови", aliases: ["12V20W-AU"], taskNumber: "З-2", engineerName: "Иванов Пётр Алексеевич", issuedToName: "Кузнецова Мария Олеговна" },
       { ...base, id: "r3", number: "Р-000003", status: "issued", taskNumber: "З-2", engineerName: "Иванов Пётр Алексеевич" }
     ] as const;
     const pick = (filters: Partial<ReservationFilters>) => filterReservations(items, { ...EMPTY_RESERVATION_FILTERS, ...filters }).map((item) => item.id);
@@ -105,6 +105,11 @@ describe("резервы склада", () => {
     assert.deepEqual(pick({ search: "фильтр" }), ["r2"]);
     assert.deepEqual(pick({ search: "лампа З-2" }), ["r3"]);
     assert.deepEqual(pick({ search: "  " }), ["r1", "r2", "r3"]);
+    // Псевдонимы артикулов (0047): запчасть находится по артикулу любого поставщика,
+    // и так же, как на складе, — без пробелов и дефисов.
+    assert.deepEqual(pick({ search: "12V20W-AU" }), ["r2"]);
+    assert.deepEqual(pick({ search: "12v20wau" }), ["r2"]);
+    assert.deepEqual(pick({ search: "aulamp" }), ["r1", "r3"]);
     // Условия складываются: ничего не подходит — пустой список.
     assert.deepEqual(pick({ status: "created", engineer: "Кузнецова Мария Олеговна" }), []);
 

@@ -277,11 +277,22 @@ export function reservationEngineerName(reservation: Pick<StockReservationRecord
   return reservation.issuedToName ?? reservation.engineerName;
 }
 
+/** Артикул без пробелов и дефисов: «TC-7A 001» находится по «tc7a001», как в поиске склада. */
+function withoutSeparators(value: string): string {
+  // «ё» буква, а не разделитель: база в regexp_replace по [:alnum:] её оставляет.
+  return value.replace(/[^0-9a-zа-яё]+/giu, "");
+}
+
 function matchesSearch(reservation: StockReservationRecord, search: string): boolean {
   const normalized = search.trim().toLocaleLowerCase("ru-RU");
   if (!normalized) return true;
-  const haystack = [reservation.number, reservation.articleNumber, reservation.partName, reservation.taskNumber, reservation.taskTitle, reservationEngineerName(reservation)]
-    .filter(Boolean).join(" ").toLocaleLowerCase("ru-RU");
+  // Псевдонимы артикула (0047): по артикулу поставщика запчасть должна находиться так же,
+  // как по своему. Артикулы ищутся ещё и без пробелов с дефисами, как на складе.
+  const articles = [reservation.articleNumber, ...(reservation.aliases ?? [])];
+  const haystack = [
+    reservation.number, reservation.partName, reservation.taskNumber, reservation.taskTitle,
+    reservationEngineerName(reservation), ...articles, ...articles.map(withoutSeparators)
+  ].filter(Boolean).join(" ").toLocaleLowerCase("ru-RU");
   return normalized.split(/\s+/u).every((word) => haystack.includes(word));
 }
 

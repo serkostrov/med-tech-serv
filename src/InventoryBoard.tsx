@@ -1,6 +1,7 @@
 import React from "react";
 import type { InventoryPartRecord } from "./m2-api.js";
 import { partQuantityText } from "./TaskReservations.js";
+import { conditionTotalsText, conditionTotalsTitle } from "./stock-movements.js";
 
 /** Колонки склада по тревожности запаса, слева направо. */
 export type StockGroup = "out" | "below" | "low" | "normal";
@@ -39,9 +40,11 @@ export function inventoryStockGroup(part: Pick<InventoryPartRecord, "onHandQuant
  * Доска склада: позиции номенклатуры по состоянию запаса. Только смотреть: остаток
  * меняется приходом и выдачей, а не переносом карточки, поэтому карточки не перетаскиваются.
  */
-export function InventoryBoard({ parts, loading }: {
+export function InventoryBoard({ parts, loading, onOpen }: {
   readonly parts: readonly InventoryPartRecord[];
   readonly loading: boolean;
+  /** Открыть карточку позиции: остатки по состояниям, артикулы поставщиков и история движений. */
+  readonly onOpen?: (part: InventoryPartRecord) => void;
 }) {
   return <div className="task-board inventory-board" aria-label="Доска склада">{STOCK_GROUPS.map((group) => {
     const cards = parts.filter((part) => inventoryStockGroup(part) === group.id);
@@ -53,17 +56,22 @@ export function InventoryBoard({ parts, loading }: {
       <div className="task-board__cards">
         {loading && cards.length === 0 ? <p className="task-board__empty">Загружаем склад…</p> : null}
         {cards.map((part) => <article className="task-board-card" key={part.id}>
-          <div className="task-board-card__open">
+          {/* Артикул с наименованием — кнопка: по ней открывается карточка позиции
+              с историей движений. Таблица остатков стоит рядом, а не внутри кнопки:
+              <dl> в <button> вкладывать нельзя, и чтение с экрана ломается. */}
+          <button className="task-board-card__open inventory-board-card__open" onClick={() => onOpen?.(part)} type="button">
             <span className="task-board-card__top">{part.articleNumber}{part.isActive ? null : <i>Неактивна</i>}</span>
             <strong>{part.name}</strong>
-            {/* Единиц измерения в номенклатуре нет: целые считаем штуками, как в резервах и задачах. */}
-            <dl>
-              <div><dt>На складе</dt><dd>{partQuantityText(part.onHandQuantity)}</dd></div>
-              {part.reservedQuantity > 0 ? <div><dt>В резерве</dt><dd>{partQuantityText(part.reservedQuantity)}</dd></div> : null}
-              {part.reservedQuantity > 0 ? <div><dt>Доступно</dt><dd>{partQuantityText(part.availableQuantity)}</dd></div> : null}
-              <div><dt>Минимум</dt><dd>{part.minimumStock > 0 ? partQuantityText(part.minimumStock) : "не задан"}</dd></div>
-            </dl>
-          </div>
+          </button>
+          {/* Единиц измерения в номенклатуре нет: целые считаем штуками, как в резервах и задачах. */}
+          <dl className="inventory-board-card__stats">
+            <div><dt>На складе</dt><dd>{partQuantityText(part.onHandQuantity)}</dd></div>
+            {/* Резервируют и выдают в состоянии, поэтому Г, Н и Б видно сразу на карточке. */}
+            <div><dt>Г · Н · Б</dt><dd title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</dd></div>
+            {part.reservedQuantity > 0 ? <div><dt>В резерве</dt><dd>{partQuantityText(part.reservedQuantity)}</dd></div> : null}
+            {part.reservedQuantity > 0 ? <div><dt>Доступно</dt><dd>{partQuantityText(part.availableQuantity)}</dd></div> : null}
+            <div><dt>Минимум</dt><dd>{part.minimumStock > 0 ? partQuantityText(part.minimumStock) : "не задан"}</dd></div>
+          </dl>
         </article>)}
         {!loading && cards.length === 0 ? <p className="task-board__empty">Таких позиций нет.</p> : null}
       </div>

@@ -332,6 +332,9 @@ export interface EngineerOverview {
   readonly overdueTaskCount: number;
 }
 
+/** Количество по состояниям запчасти: гарантийная, новая, б/у. */
+export type PartConditionTotals = Readonly<Record<"G" | "N" | "B", number>>;
+
 export interface InventoryPartRecord {
   readonly id: string;
   readonly articleNumber: string;
@@ -344,6 +347,88 @@ export interface InventoryPartRecord {
   readonly availableQuantity: number;
   readonly withEngineersQuantity: number;
   readonly belowMinimum: boolean;
+  /** Артикулы поставщиков этой запчасти одной строкой (миграция 0047); пусто — псевдонимов нет. */
+  readonly aliases?: string;
+  /** На складе по состояниям Г, Н и Б (миграция 0050): резервируют и выдают именно в состоянии. */
+  readonly onHandByCondition: PartConditionTotals;
+  /** Доступно (на складе минус резерв) по тем же состояниям. */
+  readonly availableByCondition: PartConditionTotals;
+}
+
+/** Движение по позиции склада из истории (функция inventory_part_movements, миграция 0048). */
+export interface StockMovementRecord {
+  readonly id: string;
+  readonly type: StockMovementType;
+  readonly condition: "G" | "N" | "B";
+  readonly quantity: number;
+  /** Насколько изменился остаток: приход и возврат в плюс, выдача и списание в минус, резерв и установка ноль. */
+  readonly delta: number;
+  /** Остаток в этом состоянии сразу после движения. */
+  readonly onHandAfter: number;
+  readonly occurredAt: string;
+  readonly comment?: string;
+  readonly actorName?: string;
+  readonly taskId?: string;
+  readonly taskNumber?: string;
+  readonly reservationNumber?: string;
+  readonly equipmentSerialNumber?: string;
+  readonly lotCode?: string;
+}
+
+/** Тип движения склада (stock_movement_type в базе). */
+export type StockMovementType = "receipt" | "reserve" | "issue" | "install" | "writeoff" | "return" | "adjustment";
+
+export interface StockMovementPage {
+  readonly items: readonly StockMovementRecord[];
+  readonly total: number;
+}
+
+/** Псевдоним артикула: тот же артикул у другого поставщика (таблица part_aliases). */
+export interface PartAliasRecord {
+  readonly id: string;
+  readonly alias: string;
+  readonly createdAt: string;
+}
+
+/**
+ * Строка накладной, как её принимает база (0050): клетки файла как есть, число может
+ * прийти и строкой («2,5») — разбирает их сама база, одинаково для предпросмотра и прихода.
+ */
+export interface StockReceiptInputRow {
+  /** Номер строки в файле: по нему человек находит строку с ошибкой. */
+  readonly row?: number;
+  readonly article: string;
+  readonly quantity: string | number;
+  readonly condition?: string;
+  readonly unit_price?: string | number;
+  readonly comment?: string;
+}
+
+/** Строка накладной, как её разобрала база (preview_stock_receipt, миграция 0050). */
+export interface StockReceiptPreviewRow {
+  readonly rowNo: number;
+  readonly article: string;
+  readonly partId?: string;
+  readonly partArticle?: string;
+  readonly partName?: string;
+  /** По артикулу самой запчасти или по псевдониму поставщика. */
+  readonly matchedBy?: "article" | "alias";
+  readonly condition?: "G" | "N" | "B";
+  readonly quantity?: number;
+  readonly unitPrice?: number;
+  readonly comment?: string;
+  /** Что не так именно с этой строкой; пусто — строка готова к приходу. */
+  readonly error?: string;
+}
+
+/** Оприходованная строка накладной: сколько стало на складе по этой позиции и состоянию. */
+export interface StockReceiptAppliedRow {
+  readonly partId: string;
+  readonly partArticle: string;
+  readonly partName: string;
+  readonly condition: "G" | "N" | "B";
+  readonly quantity: number;
+  readonly onHandAfter: number;
 }
 
 export interface InventoryPartPage extends ApiPage<InventoryPartRecord> {
@@ -378,6 +463,8 @@ export interface StockReservationRecord {
   readonly partName: string;
   readonly condition: "G" | "N" | "B";
   readonly quantity: number;
+  /** Артикулы этой запчасти у других поставщиков (0047): по ним тоже ищут в окне резервов. */
+  readonly aliases?: readonly string[];
   readonly taskId?: string;
   readonly taskNumber?: string;
   readonly taskTitle?: string;
@@ -705,6 +792,9 @@ function reservationSteps(value: unknown): readonly StockReservationStep[] {
  */
 export function stockReservationRecord(row: Row): StockReservationRecord {
   const part = asRow(row.part);
+  // Псевдонимы артикула: в строке их не показываем (она и так длинная), но по ним ищут.
+  const aliases = (Array.isArray(part.part_aliases) ? part.part_aliases : [])
+    .map((item) => text(asRow(item), "alias").trim()).filter(Boolean);
   const task = asRow(row.task);
   const statusText = text(row, "status");
   const status = (RESERVATION_STATUSES as readonly string[]).includes(statusText) ? statusText as StockReservationStatus : "created";
@@ -725,6 +815,7 @@ export function stockReservationRecord(row: Row): StockReservationRecord {
     partName: text(part, "name"),
     condition,
     quantity: numberValue(row.quantity) ?? 0,
+    ...(aliases.length ? { aliases } : {}),
     ...(taskId ? { taskId } : {}),
     ...(taskNumber ? { taskNumber } : {}),
     ...(taskTitle ? { taskTitle } : {}),
@@ -819,7 +910,17 @@ function isMissingSchemaObject(
 }
 
 const RESERVATION_SELECT = "id, number, status, part_id, part_condition, quantity, task_id, created_at, updated_at, "
-  + "part:parts(article_number, name), task:tasks(number, title, status_code, engineer:users!engineer_id(full_name)), issued:users!issued_to(full_name)";
+  + "task:tasks(number, title, status_code, engineer:users!engineer_id(full_name)), issued:users!issued_to(full_name)";
+
+/**
+ * Запчасть резерва. С псевдонимами артикулов (0047): поиск в окне резервов должен находить
+ * запчасть по артикулу любого поставщика, как и склад. Таблицы псевдонимов в API нет —
+ * читаем запчасть без них, поиск останется по артикулу и наименованию.
+ */
+const RESERVATION_PART_SELECTS: readonly string[] = [
+  "part:parts(article_number, name, part_aliases(alias))",
+  "part:parts(article_number, name)"
+];
 
 /** Отметка «установлена» живёт в самом резерве (миграция 0028), а не в запчастях задачи. */
 const RESERVATION_MARK_SELECT = "install_marked";
@@ -840,6 +941,14 @@ const PART_SELECT = "id, article_number, name, minimum_stock, notes, is_active";
 
 /** Столбцы представления склада inventory_part_registry (миграция 0025): остатки уже посчитаны базой. */
 const INVENTORY_REGISTRY_SELECT = `${PART_SELECT}, on_hand_quantity, reserved_quantity, available_quantity, with_engineers_quantity, below_minimum`;
+
+/**
+ * Псевдонимы артикулов (0047) и остатки по состояниям (0050). В базе без этих миграций
+ * таких столбцов нет, и запрос с ними падает ошибкой столбца — тогда читаем склад без них:
+ * список работает, просто без колонки Г/Н/Б. Так же устроены шаги резерва.
+ */
+const INVENTORY_REGISTRY_EXTRA_SELECT = "aliases, on_hand_guarantee, on_hand_new, on_hand_used, "
+  + "available_guarantee, available_new, available_used";
 
 type SortColumns = readonly (readonly [column: string, ascending: boolean])[];
 
@@ -862,6 +971,7 @@ const INVENTORY_SORTS: ReadonlyMap<string, SortColumns> = new Map<string, SortCo
 function inventoryPartRecord(row: Row): InventoryPartRecord {
   const minimumStock = numberValue(row.minimum_stock) ?? 0;
   const availableQuantity = numberValue(row.available_quantity) ?? 0;
+  const aliases = optionalText(row, "aliases");
   return {
     id: text(row, "id"),
     articleNumber: text(row, "article_number"),
@@ -873,7 +983,63 @@ function inventoryPartRecord(row: Row): InventoryPartRecord {
     reservedQuantity: numberValue(row.reserved_quantity) ?? 0,
     availableQuantity,
     withEngineersQuantity: numberValue(row.with_engineers_quantity) ?? 0,
-    belowMinimum: typeof row.below_minimum === "boolean" ? row.below_minimum : availableQuantity < minimumStock
+    belowMinimum: typeof row.below_minimum === "boolean" ? row.below_minimum : availableQuantity < minimumStock,
+    ...(aliases ? { aliases } : {}),
+    onHandByCondition: {
+      G: numberValue(row.on_hand_guarantee) ?? 0,
+      N: numberValue(row.on_hand_new) ?? 0,
+      B: numberValue(row.on_hand_used) ?? 0
+    },
+    availableByCondition: {
+      G: numberValue(row.available_guarantee) ?? 0,
+      N: numberValue(row.available_new) ?? 0,
+      B: numberValue(row.available_used) ?? 0
+    }
+  };
+}
+
+const MOVEMENT_TYPES: readonly StockMovementType[] = ["receipt", "reserve", "issue", "install", "writeoff", "return", "adjustment"];
+
+/** Строка истории движений из функции базы (0048). */
+function stockMovementRecord(row: Row): StockMovementRecord {
+  const typeText = text(row, "movement_type");
+  const conditionText = text(row, "part_condition");
+  return {
+    id: text(row, "id"),
+    type: (MOVEMENT_TYPES as readonly string[]).includes(typeText) ? typeText as StockMovementType : "adjustment",
+    condition: conditionText === "G" || conditionText === "B" ? conditionText : "N",
+    quantity: numberValue(row.quantity) ?? 0,
+    delta: numberValue(row.on_hand_delta) ?? 0,
+    onHandAfter: numberValue(row.on_hand_after) ?? 0,
+    occurredAt: text(row, "occurred_at"),
+    ...(optionalText(row, "comment") ? { comment: optionalText(row, "comment") as string } : {}),
+    ...(optionalText(row, "performed_by_name") ? { actorName: optionalText(row, "performed_by_name") as string } : {}),
+    ...(optionalText(row, "task_id") ? { taskId: optionalText(row, "task_id") as string } : {}),
+    ...(optionalText(row, "task_number") ? { taskNumber: optionalText(row, "task_number") as string } : {}),
+    ...(optionalText(row, "reservation_number") ? { reservationNumber: optionalText(row, "reservation_number") as string } : {}),
+    ...(optionalText(row, "equipment_serial_number") ? { equipmentSerialNumber: optionalText(row, "equipment_serial_number") as string } : {}),
+    ...(optionalText(row, "lot_code") ? { lotCode: optionalText(row, "lot_code") as string } : {})
+  };
+}
+
+/** Строка разбора накладной из функции базы (0050). */
+function stockReceiptPreviewRow(row: Row): StockReceiptPreviewRow {
+  const matchedBy = optionalText(row, "matched_by");
+  const conditionText = optionalText(row, "part_condition");
+  const quantity = numberValue(row.quantity);
+  const unitPrice = numberValue(row.unit_price);
+  return {
+    rowNo: numberValue(row.row_no) ?? 0,
+    article: text(row, "article"),
+    ...(optionalText(row, "part_id") ? { partId: optionalText(row, "part_id") as string } : {}),
+    ...(optionalText(row, "part_article") ? { partArticle: optionalText(row, "part_article") as string } : {}),
+    ...(optionalText(row, "part_name") ? { partName: optionalText(row, "part_name") as string } : {}),
+    ...(matchedBy === "article" || matchedBy === "alias" ? { matchedBy } : {}),
+    ...(conditionText === "G" || conditionText === "N" || conditionText === "B" ? { condition: conditionText } : {}),
+    ...(quantity === undefined ? {} : { quantity }),
+    ...(unitPrice === undefined ? {} : { unitPrice }),
+    ...(optionalText(row, "comment") ? { comment: optionalText(row, "comment") as string } : {}),
+    ...(optionalText(row, "error") ? { error: optionalText(row, "error") as string } : {})
   };
 }
 
@@ -1267,6 +1433,11 @@ export class M2ApiClient {
   /** Отметка установки и история шагов из миграции 0028: пока их нет, резервы читаются без них. */
   private reservationMarkAvailable = true;
   private reservationHistoryLevel = 0;
+
+  /** Псевдонимы (0047) и остатки по состояниям (0050): пока их нет, склад читается без них. */
+  private inventoryExtraColumnsAvailable = true;
+  /** Псевдонимы запчасти в поиске резервов (0047): пока таблицы нет в API, резервы читаются без них. */
+  private reservationAliasesAvailable = true;
 
   private db(): AppSupabaseClient {
     return this.client ?? getSupabase();
@@ -3394,8 +3565,11 @@ export class M2ApiClient {
     limit: number,
     offset: number
   ): Promise<{ readonly items: readonly InventoryPartRecord[]; readonly total: number }> {
-    if (this.inventoryRegistryAvailable) {
-      let request = this.db().from("inventory_part_registry").select(INVENTORY_REGISTRY_SELECT, { count: "exact" });
+    while (this.inventoryRegistryAvailable) {
+      const select = this.inventoryExtraColumnsAvailable
+        ? `${INVENTORY_REGISTRY_SELECT}, ${INVENTORY_REGISTRY_EXTRA_SELECT}`
+        : INVENTORY_REGISTRY_SELECT;
+      let request = this.db().from("inventory_part_registry").select(select, { count: "exact" });
       if (query.state === "active" || query.state === "low") request = request.eq("is_active", true);
       if (query.state === "low") request = request.eq("below_minimum", true);
       if (query.state === "inactive") request = request.eq("is_active", false);
@@ -3408,9 +3582,15 @@ export class M2ApiClient {
         request = request.order(column, { ascending });
       }
       const { data, error, count } = await request.range(offset, offset + limit - 1);
+      if (!error) return { items: (data ?? []).map((item) => inventoryPartRecord(asRow(item))), total: count ?? 0 };
+      // Столбцов 0047/0050 в базе ещё нет: читаем склад без них, остальное работает.
+      if (this.inventoryExtraColumnsAvailable && /aliases|on_hand_new|on_hand_guarantee|on_hand_used|available_new|available_guarantee|available_used/iu.test(error.message ?? "")) {
+        this.inventoryExtraColumnsAvailable = false;
+        console.warn("В базе нет псевдонимов и остатков по состояниям: склад читаем без них", error.message);
+        continue;
+      }
       if (!isMissingSchemaObject(error, "inventory_part_registry")) {
         throwIfError(error, "Не получилось загрузить склад");
-        return { items: (data ?? []).map((item) => inventoryPartRecord(asRow(item))), total: count ?? 0 };
       }
       this.inventoryRegistryAvailable = false;
     }
@@ -3553,6 +3733,123 @@ export class M2ApiClient {
     return this.loadInventoryPart(input.partId);
   }
 
+  /**
+   * История движений по позиции (функция базы 0048): приход, выдача, установка, возврат,
+   * списание и корректировка с датой, автором, причиной и ссылками на задачу и прибор.
+   * Цены прихода в истории нет: складу и инженеру она закрыта (0040).
+   */
+  public async inventoryPartMovements(partId: string, limit = 100, offset = 0): Promise<StockMovementPage> {
+    const { data, error } = await this.db().rpc("inventory_part_movements", {
+      p_part_id: partId,
+      p_limit: limit,
+      p_offset: offset
+    }, { get: true });
+    throwIfError(error, "Не получилось загрузить историю движений");
+    const rows = Array.isArray(data) ? data.map((item) => asRow(item)) : [];
+    return {
+      items: rows.map((row) => stockMovementRecord(row)),
+      // Общее число приходит с каждой строкой; пустая страница — значит, движений нет.
+      total: rows.length ? numberValue(rows[0]?.total_count) ?? rows.length : 0
+    };
+  }
+
+  /** Псевдонимы артикула запчасти: тот же артикул у других поставщиков (0047). */
+  public async partAliases(partId: string): Promise<readonly PartAliasRecord[]> {
+    const { data, error } = await this.db().from("part_aliases")
+      .select("id, alias, created_at").eq("part_id", partId).order("alias");
+    throwIfError(error, "Не получилось загрузить псевдонимы артикула");
+    return (data ?? []).map((item) => {
+      const row = asRow(item);
+      return { id: text(row, "id"), alias: text(row, "alias"), createdAt: text(row, "created_at") };
+    });
+  }
+
+  /** Добавить псевдоним артикула. Дубли и чужие артикулы отказывает база сообщением по-русски (0047). */
+  public async addPartAlias(partId: string, alias: string): Promise<void> {
+    const value = alias.trim();
+    if (!value) throw new M2ApiError(400, "Напишите артикул поставщика");
+    const { error } = await this.db().from("part_aliases").insert({ part_id: partId, alias: value });
+    throwIfError(error, "Не получилось добавить псевдоним");
+  }
+
+  /** Убрать псевдоним: сам артикул запчасти остаётся, движения и история не меняются. */
+  public async removePartAlias(id: string): Promise<void> {
+    const { error } = await this.db().from("part_aliases").delete().eq("id", id);
+    throwIfError(error, "Не получилось убрать псевдоним");
+  }
+
+  /**
+   * Списать запчасть со склада: брак, утеря, бой (функция базы 0049). Причину, остаток
+   * и зарезервированное проверяет база, её сообщение показываем как есть.
+   * Возвращает остаток в этом состоянии после списания.
+   */
+  public async writeOffInventoryPart(input: {
+    readonly partId: string;
+    readonly condition: "G" | "N" | "B";
+    readonly quantity: number;
+    readonly reason: string;
+  }): Promise<number> {
+    const { data, error } = await this.db().rpc("write_off_stock", {
+      p_part_id: input.partId,
+      p_condition: input.condition,
+      p_quantity: input.quantity,
+      p_reason: input.reason
+    });
+    throwIfError(error, "Не получилось списать запчасть");
+    return numberValue(data) ?? 0;
+  }
+
+  /**
+   * Привести остаток к факту после инвентаризации (функция базы 0049): кладовщик вводит
+   * посчитанное количество, разницу база проводит встречным движением.
+   */
+  public async adjustInventoryPart(input: {
+    readonly partId: string;
+    readonly condition: "G" | "N" | "B";
+    readonly countedQuantity: number;
+    readonly reason: string;
+  }): Promise<number> {
+    const { data, error } = await this.db().rpc("adjust_stock", {
+      p_part_id: input.partId,
+      p_condition: input.condition,
+      p_counted_quantity: input.countedQuantity,
+      p_reason: input.reason
+    });
+    throwIfError(error, "Не получилось поправить остаток");
+    return numberValue(data) ?? 0;
+  }
+
+  /**
+   * Что база распознала в накладной (функция 0050). Ничего не меняет: приход идёт
+   * только после подтверждения человеком, отдельным вызовом receiveStockBatch.
+   */
+  public async previewStockReceipt(items: readonly StockReceiptInputRow[]): Promise<readonly StockReceiptPreviewRow[]> {
+    // Обычным запросом (POST), а не { get: true }: в строку адреса postgrest-js складывает
+    // массив через join, и накладная превратилась бы в «{[object Object],[object Object]}».
+    // Функция объявлена STABLE и ничего не меняет — приход идёт отдельным вызовом.
+    const { data, error } = await this.db().rpc("preview_stock_receipt", { p_items: items });
+    throwIfError(error, "Не получилось разобрать файл накладной");
+    return (Array.isArray(data) ? data : []).map((item) => stockReceiptPreviewRow(asRow(item)));
+  }
+
+  /** Оприходовать накладную целиком (функция 0050): ошибка хотя бы в одной строке — не проходит ни одна. */
+  public async receiveStockBatch(items: readonly StockReceiptInputRow[]): Promise<readonly StockReceiptAppliedRow[]> {
+    const { data, error } = await this.db().rpc("receive_stock_batch", { p_items: items });
+    throwIfError(error, "Не получилось оприходовать накладную");
+    return (Array.isArray(data) ? data : []).map((item) => {
+      const row = asRow(item);
+      const condition = text(row, "part_condition");
+      return {
+        partId: text(row, "part_id"),
+        partArticle: text(row, "part_article"),
+        partName: text(row, "part_name"),
+        condition: condition === "G" || condition === "B" ? condition : "N",
+        quantity: numberValue(row.quantity) ?? 0,
+        onHandAfter: numberValue(row.on_hand_after) ?? 0
+      };
+    });
+  }
+
   private async loadInventoryPart(id: string): Promise<InventoryPartRecord> {
     const { data, error } = await this.db().from("parts").select(PART_SELECT).eq("id", id).maybeSingle();
     throwIfError(error);
@@ -3569,26 +3866,65 @@ export class M2ApiClient {
   private async inventoryRecordsFromParts(rows: readonly Row[]): Promise<readonly InventoryPartRecord[]> {
     const ids = rows.map((row) => text(row, "id"));
     if (ids.length === 0) return [];
-    const [{ data: balances, error: balanceError }, withEngineersByPart] = await Promise.all([
-      this.db().from("stock_balances").select("part_id, on_hand_quantity, reserved_quantity, available_quantity").in("part_id", ids),
-      this.issuedQuantityByPart(ids)
+    const [{ data: balances, error: balanceError }, withEngineersByPart, aliasesByPart] = await Promise.all([
+      this.db().from("stock_balances").select("part_id, part_condition, on_hand_quantity, reserved_quantity, available_quantity").in("part_id", ids),
+      this.issuedQuantityByPart(ids),
+      this.aliasesByPart(ids)
     ]);
     throwIfError(balanceError);
-    const totals = new Map<string, { on_hand_quantity: number; reserved_quantity: number; available_quantity: number }>();
+    const totals = new Map<string, Row>();
     for (const item of balances ?? []) {
       const balance = asRow(item);
       const partId = text(balance, "part_id");
-      const current = totals.get(partId) ?? { on_hand_quantity: 0, reserved_quantity: 0, available_quantity: 0 };
+      const condition = text(balance, "part_condition");
+      const current = totals.get(partId) ?? {
+        on_hand_quantity: 0, reserved_quantity: 0, available_quantity: 0,
+        on_hand_guarantee: 0, on_hand_new: 0, on_hand_used: 0,
+        available_guarantee: 0, available_new: 0, available_used: 0
+      };
+      const onHand = numberValue(balance.on_hand_quantity) ?? 0;
+      const available = numberValue(balance.available_quantity) ?? 0;
+      // Остаток по состояниям, как его считает представление 0050: по строкам stock_balances.
+      const onHandKey = condition === "G" ? "on_hand_guarantee" : condition === "B" ? "on_hand_used" : "on_hand_new";
+      const availableKey = condition === "G" ? "available_guarantee" : condition === "B" ? "available_used" : "available_new";
       totals.set(partId, {
-        on_hand_quantity: current.on_hand_quantity + (numberValue(balance.on_hand_quantity) ?? 0),
-        reserved_quantity: current.reserved_quantity + (numberValue(balance.reserved_quantity) ?? 0),
-        available_quantity: current.available_quantity + (numberValue(balance.available_quantity) ?? 0)
+        ...current,
+        on_hand_quantity: (numberValue(current.on_hand_quantity) ?? 0) + onHand,
+        reserved_quantity: (numberValue(current.reserved_quantity) ?? 0) + (numberValue(balance.reserved_quantity) ?? 0),
+        available_quantity: (numberValue(current.available_quantity) ?? 0) + available,
+        [onHandKey]: (numberValue(current[onHandKey]) ?? 0) + onHand,
+        [availableKey]: (numberValue(current[availableKey]) ?? 0) + available
       });
     }
     return rows.map((row) => {
       const id = text(row, "id");
-      return inventoryPartRecord({ ...row, ...totals.get(id), with_engineers_quantity: withEngineersByPart.get(id) ?? 0 });
+      return inventoryPartRecord({
+        ...row,
+        ...totals.get(id),
+        with_engineers_quantity: withEngineersByPart.get(id) ?? 0,
+        ...(aliasesByPart.get(id) ? { aliases: aliasesByPart.get(id) } : {})
+      });
     });
+  }
+
+  /** Псевдонимы артикулов (0047) одной строкой на запчасть: так же, как их собирает представление склада. */
+  private async aliasesByPart(partIds: readonly string[]): Promise<ReadonlyMap<string, string>> {
+    const result = new Map<string, string>();
+    if (partIds.length === 0) return result;
+    const { data, error } = await this.db().from("part_aliases").select("part_id, alias").in("part_id", [...partIds]).order("alias");
+    // Псевдонимы — не повод ронять карточку запчасти: без них просто не будет колонки.
+    if (error) {
+      console.warn("Псевдонимы артикулов не прочитались", error.message);
+      return result;
+    }
+    for (const item of data ?? []) {
+      const row = asRow(item);
+      const partId = text(row, "part_id");
+      const alias = text(row, "alias").trim();
+      if (!alias) continue;
+      result.set(partId, result.has(partId) ? `${result.get(partId)}, ${alias}` : alias);
+    }
+    return result;
   }
 
   /** Сколько штук каждой запчасти сейчас выдано инженерам и ещё не установлено и не возвращено. */
@@ -3640,12 +3976,18 @@ export class M2ApiClient {
     for (let attempt = 0; attempt <= RESERVATION_HISTORY_SELECTS.length; attempt += 1) {
       const select = [
         RESERVATION_SELECT,
+        RESERVATION_PART_SELECTS[this.reservationAliasesAvailable ? 0 : 1] as string,
         ...(this.reservationMarkAvailable ? [RESERVATION_MARK_SELECT] : []),
         ...(RESERVATION_HISTORY_SELECTS[this.reservationHistoryLevel] ? [RESERVATION_HISTORY_SELECTS[this.reservationHistoryLevel] as string] : [])
       ].join(", ");
       const { data, error } = await request(select);
       if (!error) return (data ?? []).map((item) => stockReservationRecord(asRow(item)));
       const message = error.message ?? "";
+      if (this.reservationAliasesAvailable && /part_aliases/iu.test(message)) {
+        this.reservationAliasesAvailable = false;
+        console.warn("Псевдонимы артикулов не встроились: резервы ищем по артикулу и наименованию", message);
+        continue;
+      }
       if (this.reservationMarkAvailable && /install_marked/iu.test(message)) {
         this.reservationMarkAvailable = false;
         console.warn("В базе нет install_marked: отметки об установке появятся после обновления базы", message);
