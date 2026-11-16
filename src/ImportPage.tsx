@@ -167,6 +167,9 @@ export function ImportPage() {
     (issue) => issue.code === "layout_unknown" || issue.code === "sheet_empty"
   );
   const overLimit = sheetIssues.some((issue) => issue.code === "too_many_rows");
+  // Замечание ко всему листу считается в карточках за одну строку: пишем это прямо,
+  // чтобы «Строк с ошибками 1» на исправном файле не выглядело загадкой.
+  const sheetNote = sheetIssues.length > 0 ? " · включая замечание по всему листу" : "";
   const shownIssues = plan?.issues.slice(0, MAX_SHOWN_ISSUES) ?? [];
   const writeCount = (plan?.write.equipment.length ?? 0) + (plan?.write.events.length ?? 0);
   // Новая модель или производитель — это запись в справочник, и база спросит своё право.
@@ -228,14 +231,14 @@ export function ImportPage() {
             value={String(plan.equipment.length)}
           />
           <MetricCard
-            detail={summary.errorRows === 0 ? "Все строки читаются" : "Эти строки перенесены не будут"}
+            detail={summary.errorRows === 0 ? "Все строки читаются" : `Эти строки перенесены не будут${sheetNote}`}
             icon="info"
             label="Строк с ошибками"
             tone={summary.errorRows === 0 ? "green" : "red"}
             value={String(summary.errorRows)}
           />
           <MetricCard
-            detail={summary.warningRows === 0 ? "Оговорок нет" : "Перенесём, но прочитайте замечания"}
+            detail={summary.warningRows === 0 ? "Оговорок нет" : `Перенесём, но прочитайте замечания${sheetNote}`}
             icon="notifications"
             label="Предупреждений"
             tone={summary.warningRows === 0 ? "green" : "yellow"}

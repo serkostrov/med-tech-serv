@@ -529,3 +529,21 @@ test("серийный номер с неразрывным пробелом: п
   assert.equal(plan.summary.warningRows, 1);
   assert.equal(plan.summary.equipmentCreate, 1);
 });
+
+test("повтор показания счётчика в каждой строке не превращается в поток предупреждений", async () => {
+  const source = buildXlsx([{
+    name: "Работы",
+    rows: [
+      ["Серийный номер", "Модель", "Показание счётчика", "Дата", "Вид работ", "Описание работ"],
+      ["BE49081", "DxH-800", "1 200", "15.03.2023", "Ремонт", "замена иглы"],
+      ["BE49081", "DxH-800", "1 200", "16.03.2023", "Выезд ТО", "осмотр"],
+      ["BE49081", "DxH-800", "1300", "17.03.2023", "Ремонт", "замена насоса"]
+    ]
+  }]);
+  const reading = await readImportFile(source, { today: "2026-11-16" });
+  // «1 200» и «1200» — одно и то же число, предупреждения нет; изменившееся показание видно.
+  assert.deepEqual(reading.issues.map((issue) => [issue.row, issue.code]), [[4, "equipment_duplicate_in_file"]]);
+  assert.match(String(reading.issues[0]?.problem), /показание счётчика/u);
+  assert.equal(reading.equipment[0]?.meterReading, 1200);
+  assert.equal(reading.events.length, 3);
+});

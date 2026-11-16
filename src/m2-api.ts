@@ -2088,25 +2088,22 @@ export class M2ApiClient {
     };
   }
 
-  /** Все строки таблицы страницами: PostgREST отдаёт не больше max_rows за запрос. */
+  /**
+   * Все строки справочника: читаем общим постраничным помощником, которым уже
+   * читаются планы ТО и задачи. PostgREST отдаёт не больше max_rows за запрос,
+   * а обрезанный справочник сказал бы «модели нет» там, где она есть.
+   */
   private async readAllRows(
-    table: string, columns: string, order: string, activeOnly = false
+    table: string, columns: string, failure: string, activeOnly = false
   ): Promise<readonly Row[]> {
-    const PAGE = 500;
-    const rows: Row[] = [];
-    // Сдвигаемся на столько строк, сколько пришло: сервер может отдать меньше
-    // запрошенного (max_rows), и шаг по размеру страницы тогда пропускал бы записи.
-    // Сортировка с id вторым ключом: у площадок имена повторяются у разных организаций.
-    for (let from = 0; ; ) {
-      const query = this.db().from(table).select(columns).order(order).order("id")
-        .range(from, from + PAGE - 1);
-      const { data, error } = await (activeOnly ? query.eq("is_active", true) : query);
-      throwIfError(error);
-      const received = data ?? [];
-      for (const item of received) rows.push(asRow(item));
-      if (received.length === 0) return rows;
-      from += received.length;
-    }
+    const rows = await allPages((start, end, withCount) => {
+      const request = this.db().from(table)
+        .select(columns, withCount ? { count: "exact" } : undefined);
+      // Порядок с id вторым ключом: у площадок имена повторяются у разных организаций.
+      return (activeOnly ? request.eq("is_active", true) : request)
+        .order("name").order("id").range(start, end);
+    }, failure);
+    return rows.map(asRow);
   }
 
   /**
@@ -2120,10 +2117,10 @@ export class M2ApiClient {
     // а обрезанный справочник показал бы «модели нет» там, где она есть.
     const [manufacturers, models, sites, payers] = await Promise.all([
       // Скрытые записи справочника тоже нужны: название в них уже занято.
-      this.readAllRows("manufacturers", "id, name, is_active", "name"),
-      this.readAllRows("equipment_models", "id, name, manufacturer_id, is_active", "name"),
-      this.readAllRows("sites", "name", "name", true),
-      this.readAllRows("payers", "name", "name", true)
+      this.readAllRows("manufacturers", "id, name, is_active", "Не получилось прочитать справочник производителей"),
+      this.readAllRows("equipment_models", "id, name, manufacturer_id, is_active", "Не получилось прочитать справочник моделей"),
+      this.readAllRows("sites", "name", "Не получилось прочитать список площадок", true),
+      this.readAllRows("payers", "name", "Не получилось прочитать список плательщиков", true)
     ]);
     const manufacturerById = new Map(manufacturers
       .map((item) => [text(item, "id"), {

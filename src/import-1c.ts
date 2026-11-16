@@ -664,20 +664,21 @@ function readEquipmentSheet(
         });
       }
       // Данные прибора берутся из его первой строки: если дальше по файлу они
-      // другие, молча терять их нельзя.
-      const changed = ([
-        ["площадка", siteColumn, known.siteName],
-        ["плательщик", columns.payer, known.payerName],
-        ["примечание", columns.notes, known.notes],
-        ["показание счётчика", columns.meter, known.meterReading === undefined ? undefined : String(known.meterReading)]
-      ] as const).filter(([, column, before]) => {
-        const now = text(cell(row.cells, column));
-        return now !== "" && catalogKey(now) !== catalogKey(before ?? "");
-      });
+      // другие, молча терять их нельзя. Показание счётчика сравниваем числом:
+      // «1 200» и «1200» — одно и то же, и предупреждать тут не о чем.
+      const meterNow = readImportNumber(cell(row.cells, columns.meter));
+      const changed: string[] = ([
+        ["площадка", text(cell(row.cells, siteColumn)), known.siteName ?? ""],
+        ["плательщик", text(cell(row.cells, columns.payer)), known.payerName ?? ""],
+        ["примечание", text(cell(row.cells, columns.notes)), known.notes ?? ""]
+      ] as const)
+        .filter(([, now, before]) => now !== "" && catalogKey(now) !== catalogKey(before))
+        .map(([label]) => label);
+      if (meterNow !== undefined && meterNow !== known.meterReading) changed.push("показание счётчика");
       if (changed.length > 0) {
         state.issues.push({
           row: row.number, code: "equipment_duplicate_in_file",
-          problem: `У прибора ${serialNumber} здесь другие данные (${changed.map(([label]) => label).join(", ")}), чем в строке ${known.row}`,
+          problem: `У прибора ${serialNumber} здесь другие данные (${changed.join(", ")}), чем в строке ${known.row}`,
           fix: "Данные прибора импорт берёт из его первой строки: поправьте их там или уберите лишнее"
         });
       }
