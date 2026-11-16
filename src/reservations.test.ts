@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient, stockReservationRecord } from "./m2-api.js";
-import { RESERVATION_STATUS_LABELS, availableReservationActions, issueBlockReason, reservationActions, reservationQuantityText, reservationSummary, reservationTaskNote } from "./reservations.js";
+import { RESERVATION_STATUS_LABELS, availableReservationActions, issueBlockReason, reservationActions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote } from "./reservations.js";
 
 /** Поддельный клиент Supabase: запоминает цепочку запроса к таблице и вызовы функций базы. */
 function fakeClient(response: { data?: unknown; error?: { message: string; code?: string } | null }) {
@@ -47,6 +47,14 @@ describe("резервы склада", () => {
   it("подписи состояний про запчасть, а не команды", () => {
     assert.equal(RESERVATION_STATUS_LABELS.created, "Ждёт сборки");
     assert.equal(RESERVATION_STATUS_LABELS.cancelled, "Резерв снят");
+  });
+
+  it("подпись последнего шага рядом с бейджем без названия состояния, а в списке всех шагов с ним", () => {
+    const step = { status: "issued", changedAt: "2026-11-10T16:58:00Z", actorName: "Никитина Ольга Павловна" } as const;
+    assert.equal(reservationStepAuthorText(step), "Никитина Ольга Павловна · 10.11.2026 19:58");
+    assert.equal(reservationStepText(step), "У инженера · Никитина Ольга Павловна · 10.11.2026 19:58");
+    // Без автора остаётся только время, лишних разделителей нет.
+    assert.equal(reservationStepAuthorText({ status: "issued", changedAt: "2026-11-10T16:58:00Z" }), "10.11.2026 19:58");
   });
 
   it("не даёт выдать по отменённой или закрытой задаче и без инженера, объясняет почему", () => {

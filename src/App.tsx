@@ -158,7 +158,8 @@ function journalTitle(event: TaskCardResponse["journal"][number]): string {
   if (to === "closed") return "Проверена и закрыта";
   if (to === "cancelled") return "Отменена";
   if (to === "new") return from === "planned" ? "Отмечена как новая" : "Задача создана";
-  return `Этап: ${TASK_STATUS_LABELS[to] ?? to}`;
+  // Без «Этап: » — так название совпадает с бейджем, и бейдж рядом не печатается (см. TaskHistory).
+  return TASK_STATUS_LABELS[to] ?? to;
 }
 
 /** История задачи лентой по дням: что произошло, кто и когда, комментарий отдельно. */
@@ -173,18 +174,24 @@ function TaskHistory({ journal }: { readonly journal: TaskCardResponse["journal"
     {[...days.entries()].map(([day, events]) => <section className="task-history__day" key={day}>
       <h4>{day}</h4>
       <ol>
-        {events.map((event) => <li className="task-history__item" key={event.id}>
+        {events.map((event) => {
+          const title = journalTitle(event);
+          // Бейдж только если он добавляет этап, которого нет в названии события: «Отменена»
+          // и подобные названия сами равны ярлыку этапа, и бейдж повторял бы их слово в слово.
+          const badge = event.toStatus && title !== (TASK_STATUS_LABELS[event.toStatus] ?? event.toStatus) ? event.toStatus : undefined;
+          return <li className="task-history__item" key={event.id}>
           <span aria-hidden="true" className={`task-history__dot task-history__dot--${event.toStatus ? taskStatusTone(event.toStatus) : "neutral"}`} />
           <div className="task-history__body">
             <div className="task-history__line">
-              <strong>{journalTitle(event)}</strong>
-              {event.toStatus ? <StatusBadge tone={taskStatusTone(event.toStatus)}>{TASK_STATUS_LABELS[event.toStatus] ?? event.toStatus}</StatusBadge> : null}
+              <strong>{title}</strong>
+              {badge ? <StatusBadge tone={taskStatusTone(badge)}>{TASK_STATUS_LABELS[badge] ?? badge}</StatusBadge> : null}
               <time dateTime={event.occurredAt}>{new Date(event.occurredAt).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit" })}</time>
             </div>
             <span className="task-history__actor">{event.actorName ?? "Система"}</span>
             {event.comment ? <p className="task-history__comment">{event.comment}</p> : null}
           </div>
-        </li>)}
+        </li>;
+        })}
       </ol>
     </section>)}
   </div>;
@@ -1145,7 +1152,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             <div className="task-files">
               <div className="task-files__group">
                 <h4>Фото подписанного акта</h4>
-                <FileGallery emptyText={task.status === "in_progress" ? "Ещё не загружено. Без него задачу нельзя передать на проверку." : "Не загружено."} files={latestActFile ? [latestActFile] : []} />
+                {/* В этой группе только фото акта: вид файла в подписи плитки повторял бы заголовок. */}
+                <FileGallery emptyText={task.status === "in_progress" ? "Ещё не загружено. Без него задачу нельзя передать на проверку." : "Не загружено."} files={latestActFile ? [latestActFile] : []} showKind={false} />
               </div>
               <div className="task-files__group">
                 <h4>Фото и видео с выезда <small>{photoCount} из 10 фото, {videoCount} из 2 видео</small></h4>
@@ -2641,7 +2649,11 @@ function NotificationsPage() {
                 <tr className={`data-table__selectable${notification.status === "failed" ? " notification-table__failed" : ""}`} onClick={() => setOpenId(open ? null : notification.id)}>
                   <td className="notification-table__when">{formatDisplayDate(notification.createdAt, true)}</td>
                   <td>{notification.recipientAddress}</td>
-                  <td><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button><small>{eventLabel[notification.eventCode] ?? "Событие склада"}{notification.attempts > 1 ? ` · попыток: ${notification.attempts}` : ""}</small></td>
+                  <td><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button><small>{[
+                    // Без темы ярлык события уже стоит заголовком строки: второй раз его не печатаем.
+                    notification.subject ? eventLabel[notification.eventCode] ?? "Событие склада" : "",
+                    notification.attempts > 1 ? `попыток: ${notification.attempts}` : ""
+                  ].filter(Boolean).join(" · ")}</small></td>
                   <td>{channelLabel[notification.channel] ?? notification.channel}</td>
                   <td><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></td>
                 </tr>
@@ -3045,8 +3057,10 @@ function EngineerTaskCard({ task, onOpen }: {
     type="button"
   >
     <div className="mobile-task-card__top">
+      {/* Этап задачи говорит бейдж; отдельного чипа «Новая» нет — у статуса «Новая» он
+          повторял бейдж слово в слово, а у «Назначена» противоречил ему. Новая задача
+          по-прежнему выделена рамкой карточки (mobile-task-card--new). */}
       <div className="mobile-task-card__badges">
-        {task.isNew ? <span className="new-task-label">Новая</span> : null}
         <StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge>
       </div>
       {task.isOverdue ? <span className="urgent-label">Просрочена</span> : task.priority === "urgent" ? <span className="urgent-label">Срочная</span> : null}

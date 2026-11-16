@@ -100,9 +100,21 @@ export function lastReservationStep(reservation: Pick<StockReservationRecord, "s
   return reservation.steps.length ? reservation.steps[reservation.steps.length - 1] : undefined;
 }
 
-/** «Собрана · Никитина Ольга Павловна · 12.11.2026 09:30». Без автора — только время. */
+/**
+ * «Собрана · Никитина Ольга Павловна · 12.11.2026 09:30». Без автора — только время.
+ * С названием состояния: для списка всех шагов, где у каждого шага оно своё.
+ */
 export function reservationStepText(step: StockReservationStep): string {
   return [RESERVATION_STATUS_LABELS[step.status], step.actorName, companyDateTimeText(step.changedAt)].filter(Boolean).join(" · ");
+}
+
+/**
+ * Тот же шаг без названия состояния: «Никитина Ольга Павловна · 12.11.2026 09:30».
+ * Так подписан последний шаг рядом с бейджем состояния: бейдж уже называет его словом,
+ * и повторять то же слово в подписи незачем.
+ */
+export function reservationStepAuthorText(step: StockReservationStep): string {
+  return [step.actorName, companyDateTimeText(step.changedAt)].filter(Boolean).join(" · ");
 }
 
 /** Когда запчасть выдали инженеру: шаг «У инженера», иначе последнее изменение резерва. */

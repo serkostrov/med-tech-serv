@@ -357,7 +357,7 @@ export function ReportsPage() {
         <div className="metric-grid metric-grid--four">
           <MetricCard detail={periodLabel} icon="tasks" label="Всего заявок" value={String(report.metrics.taskCount)} />
           <MetricCard
-            detail={report.metrics.closedCount === 0 ? "ещё нет закрытых" : `${report.metrics.closedOnTimePercent}% закрыто вовремя`}
+            detail={report.metrics.closedCount === 0 ? "ещё нет закрытых" : `${report.metrics.closedOnTimePercent}% вовремя`}
             icon="check"
             label="Закрыто"
             tone="green"

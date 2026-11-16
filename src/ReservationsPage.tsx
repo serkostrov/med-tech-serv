@@ -8,11 +8,11 @@ import { ReservationSteps } from "./TaskReservations.js";
 import { engineerReservationsFileName, engineerReservationsWorkbook } from "./reservation-export.js";
 import { XLSX_MIME } from "./xlsx.js";
 import {
-  RESERVATION_CONDITION_LABELS,
   RESERVATION_STATUS_LABELS,
   RESERVATION_STATUS_TONES,
   availableReservationActions,
   issueBlockReason,
+  lastReservationStep,
   reservationIssuedAt,
   reservationQuantityText,
   reservationSummary,
@@ -166,11 +166,13 @@ export function ReservationsPage() {
             <div className="engineer-reservations__part">
               <strong>{reservation.articleNumber}</strong>
               <span>{reservation.partName}</span>
-              <small>{reservation.number} · {reservationQuantityText(reservation)} · {RESERVATION_CONDITION_LABELS[reservation.condition]}{reservation.taskNumber ? ` · задача ${reservation.taskNumber}` : ""}</small>
+              {/* Состояние запчасти уже входит в reservationQuantityText («2 шт. · новая»), второй раз не пишем. */}
+              <small>{reservation.number} · {reservationQuantityText(reservation)}{reservation.taskNumber ? ` · задача ${reservation.taskNumber}` : ""}</small>
             </div>
             <div className="engineer-reservations__when">
-              <small className="reservation-steps__last">Выдана {companyDateTimeText(reservationIssuedAt(reservation))}</small>
-              <ReservationSteps reservation={reservation} />
+              {/* Кто и когда выдал — одной подписью: последний шаг здесь всегда выдача, и его время то же самое. */}
+              <small className="reservation-steps__last">{["Выдана " + companyDateTimeText(reservationIssuedAt(reservation)), lastReservationStep(reservation)?.actorName].filter(Boolean).join(" · ")}</small>
+              <ReservationSteps reservation={reservation} showLast={false} />
             </div>
             <span className={`engineer-reservations__days${days >= 14 ? " engineer-reservations__days--long" : ""}`}>{formatRussianCount(days, ["день", "дня", "дней"])}</span>
           </li>)}</ul>

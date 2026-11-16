@@ -10,6 +10,7 @@ import {
   engineerReservationHint,
   lastReservationStep,
   reservationQuantityText,
+  reservationStepAuthorText,
   reservationStepText
 } from "./reservations.js";
 
@@ -22,13 +23,22 @@ export function partQuantityText(quantity: number): string {
   return Number.isInteger(quantity) ? `${quantity} шт.` : String(quantity).replace(".", ",");
 }
 
-/** Шаги резерва: последний всегда виден, остальные открываются по кнопке. */
-export function ReservationSteps({ reservation }: { readonly reservation: StockReservationRecord }) {
+/**
+ * Шаги резерва: последний всегда виден, остальные открываются по кнопке.
+ * У последнего шага название состояния не печатаем: рядом стоит бейдж с тем же словом.
+ * showLast=false — когда подпись над шагами уже называет это событие («Выдана 12.11.2026 09:30»).
+ */
+export function ReservationSteps({ reservation, showLast = true }: {
+  readonly reservation: StockReservationRecord;
+  readonly showLast?: boolean;
+}) {
   const [open, setOpen] = useState(false);
   const last = lastReservationStep(reservation);
   if (!last) return null;
+  // Последний шаг не показываем, а других шагов нет: показывать нечего.
+  if (!showLast && reservation.steps.length < 2) return null;
   return <div className="reservation-steps">
-    <small className="reservation-steps__last">{reservationStepText(last)}</small>
+    {showLast ? <small className="reservation-steps__last">{reservationStepAuthorText(last)}</small> : null}
     {reservation.steps.length > 1 ? <button
       aria-expanded={open}
       className="text-button reservation-steps__toggle"
