@@ -11,7 +11,9 @@
  *     открывает блок, следующие строки — события по этому прибору. В первом
  *     столбце у блока название прибора, а у события дата; во втором — S/N у
  *     блока и клиент у события;
- *   - «приборы списком»: обычная таблица с заголовком, одна строка — один прибор.
+ *   - «приборы списком»: обычная таблица с заголовком, одна строка — один прибор;
+ *     если в ней есть столбец даты, строка даёт ещё и событие истории этого прибора
+ *     (так 1С выгружает работы списком).
  *
  * Ключи сопоставления берём те же, что у базы: прибор — серийный номер без
  * пробелов и регистра (generated column equipment.serial_number_normalized),
@@ -38,7 +40,6 @@
  * площадки во времени (equipment_site_history) импорт не делает: её пишут только
  * триггеры при смене места установки.
  */
-import { normalizeEquipmentSerial } from "./equipment-passport.js";
 import { companyDayStart, companyToday } from "./task-dates.js";
 import { excelSerialToDateText, readXlsxWorkbook, type XlsxCellValue, type XlsxReadSheet } from "./xlsx-read.js";
 
