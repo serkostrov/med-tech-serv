@@ -167,6 +167,9 @@ describe("журнал входов", () => {
     assert.deepEqual(auditActionCodesForSearch("updated"), ["updated"]);
     assert.deepEqual(auditActionCodesForSearch("  "), []);
     assert.deepEqual(auditActionCodesForSearch("З-001258"), []);
+    // Одна-две буквы входят почти в каждое название: по ним журнал не фильтруется.
+    assert.deepEqual(auditActionCodesForSearch("о"), []);
+    assert.deepEqual(auditActionCodesForSearch("из"), []);
   });
 
   it("превращает ошибку входа в короткий код причины, не передавая её текст в журнал", () => {

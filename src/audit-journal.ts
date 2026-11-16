@@ -241,7 +241,9 @@ export function auditActionLabel(action: string): string {
  */
 export function auditActionCodesForSearch(search: string): readonly string[] {
   const needle = search.trim().toLocaleLowerCase("ru-RU");
-  if (!needle) return [];
+  // Одна-две буквы входят почти в каждое название: по ним нашёлся бы весь журнал,
+  // и человек решил бы, что фильтр не сработал. Ищем действие от трёх знаков.
+  if (needle.length < 3) return [];
   return Object.entries(ACTION_LABELS)
     .filter(([code, label]) => label.toLocaleLowerCase("ru-RU").includes(needle) || code.includes(needle))
     .map(([code]) => code);
