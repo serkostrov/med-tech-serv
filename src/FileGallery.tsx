@@ -57,9 +57,11 @@ function useFileUrls(files: readonly EquipmentFileResponse[]): ReadonlyMap<strin
  * Файлы задачи плиткой: у фото превью, у видео кадр и значок, у остального — название.
  * Клик открывает файл целиком в новой вкладке.
  */
-export function FileGallery({ files: incoming, emptyText = "Файлов пока нет." }: {
+export function FileGallery({ files: incoming, emptyText = "Файлов пока нет.", showKind = true }: {
   readonly files: readonly EquipmentFileResponse[];
   readonly emptyText?: string;
+  /** false — когда вид файлов уже назван заголовком галереи и в подписи плитки он лишний. */
+  readonly showKind?: boolean;
 }) {
   const urls = useFileUrls(incoming);
   if (incoming.length === 0) return <p className="file-gallery__empty">{emptyText}</p>;
@@ -76,7 +78,7 @@ export function FileGallery({ files: incoming, emptyText = "Файлов пок�
           </span>
           <span className="file-gallery__caption">
             <strong>{file.originalName}</strong>
-            <small>{label} · {fileSizeLabel(file.byteSize)}</small>
+            <small>{showKind ? `${label} · ` : ""}{fileSizeLabel(file.byteSize)}</small>
           </span>
         </a>
       </li>;

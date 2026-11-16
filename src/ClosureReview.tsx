@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import type { StockReservationRecord, TaskCardResponse } from "./m2-api.js";
-import { AutoTextarea, Button, StatusBadge } from "./ui.js";
+import { AutoTextarea, Button } from "./ui.js";
 import { formatDisplayDate } from "./date-format.js";
 import { RESERVATION_CONDITION_LABELS, reservationQuantityText } from "./reservations.js";
 import { partQuantityText } from "./TaskReservations.js";
@@ -105,7 +105,8 @@ export function ClosureReview({ card, busy, canClose, canReturn, onClose, onRetu
   return <section aria-labelledby="closure-review-title" className="closure-review">
     <header className="closure-review__header">
       <div>
-        <h2 id="closure-review-title">Проверка закрытия <StatusBadge tone="info">На проверке</StatusBadge></h2>
+        {/* Бейдж «На проверке» не дублируем: блок видно только у задачи на проверке, а в её шапке он уже есть. */}
+        <h2 id="closure-review-title">Проверка закрытия</h2>
         <p>
           {submitter} передал работу на проверку
           {submittedAt ? ` ${formatDisplayDate(submittedAt, true)}` : ""}. Сверьте результат, фото акта и запчасти ниже и примите решение.

@@ -3252,7 +3252,7 @@ export class M2ApiClient {
    * inventory_part_registry, карточки над списком — функция inventory_part_summary() по всему
    * складу, а не по странице (миграция 0025).
    */
-  public async inventoryPartPage(query: { readonly search?: string; readonly state?: string; readonly sort?: string; readonly limit?: number; readonly offset?: number } = {}): Promise<InventoryPartPage> {
+  public async inventoryPartPage(query: { readonly search?: string; readonly state?: string; readonly stock?: string; readonly sort?: string; readonly limit?: number; readonly offset?: number } = {}): Promise<InventoryPartPage> {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
     const [{ items, total }, summary] = await Promise.all([
@@ -3273,10 +3273,11 @@ export class M2ApiClient {
 
   /**
    * Строки склада по состоянию (active, low — активные ниже минимума, inactive, all),
+   * наличию (available — есть доступные, none — доступных нет, engineers — на руках у инженеров),
    * словам поиска (артикул, наименование) и сортировке из окна «Склад».
    */
   private async inventoryPartRows(
-    query: { readonly search?: string; readonly state?: string; readonly sort?: string },
+    query: { readonly search?: string; readonly state?: string; readonly stock?: string; readonly sort?: string },
     limit: number,
     offset: number
   ): Promise<{ readonly items: readonly InventoryPartRecord[]; readonly total: number }> {
@@ -3285,6 +3286,10 @@ export class M2ApiClient {
       if (query.state === "active" || query.state === "low") request = request.eq("is_active", true);
       if (query.state === "low") request = request.eq("below_minimum", true);
       if (query.state === "inactive") request = request.eq("is_active", false);
+      // Наличие считаем по доступному остатку (на складе минус резервы), а не по приходу.
+      if (query.stock === "available") request = request.gt("available_quantity", 0);
+      if (query.stock === "none") request = request.lte("available_quantity", 0);
+      if (query.stock === "engineers") request = request.gt("with_engineers_quantity", 0);
       for (const token of searchTokens(query.search)) request = request.ilike("search_text", searchTextPattern(token));
       for (const [column, ascending] of INVENTORY_SORTS.get(query.sort ?? "") ?? DEFAULT_INVENTORY_SORT) {
         request = request.order(column, { ascending });
@@ -3299,7 +3304,11 @@ export class M2ApiClient {
     return this.legacyInventoryPartRows(query, limit, offset);
   }
 
-  /** Склад без миграции 0025, как раньше: фильтр только «Активные», порядок по наименованию. */
+  /**
+   * Склад без миграции 0025, как раньше: фильтр только «Активные», порядок по наименованию.
+   * Остатки в этой базе считаются уже после выборки, поэтому фильтра по наличию здесь нет:
+   * он отсеивал бы строки после подсчёта страницы и общее число перестало бы сходиться.
+   */
   private async legacyInventoryPartRows(
     query: { readonly search?: string; readonly state?: string },
     limit: number,

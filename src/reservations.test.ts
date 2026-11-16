@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient, stockReservationRecord } from "./m2-api.js";
-import { RESERVATION_STATUS_LABELS, availableReservationActions, issueBlockReason, reservationActions, reservationQuantityText, reservationSummary, reservationTaskNote } from "./reservations.js";
+import { EMPTY_RESERVATION_FILTERS, RESERVATION_BOARD_STATUSES, RESERVATION_STATUS_LABELS, availableReservationActions, filterReservations, hasReservationFilters, issueBlockReason, reservationActions, reservationDropDecision, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
 
 /** Поддельный клиент Supabase: запоминает цепочку запроса к таблице и вызовы функций базы. */
 function fakeClient(response: { data?: unknown; error?: { message: string; code?: string } | null }) {
@@ -47,6 +47,79 @@ describe("резервы склада", () => {
   it("подписи состояний про запчасть, а не команды", () => {
     assert.equal(RESERVATION_STATUS_LABELS.created, "Ждёт сборки");
     assert.equal(RESERVATION_STATUS_LABELS.cancelled, "Резерв снят");
+  });
+
+  it("подпись последнего шага рядом с бейджем без названия состояния, а в списке всех шагов с ним", () => {
+    const step = { status: "issued", changedAt: "2026-11-10T16:58:00Z", actorName: "Никитина Ольга Павловна" } as const;
+    assert.equal(reservationStepAuthorText(step), "Никитина Ольга Павловна · 10.11.2026 19:58");
+    assert.equal(reservationStepText(step), "У инженера · Никитина Ольга Павловна · 10.11.2026 19:58");
+    // Без автора остаётся только время, лишних разделителей нет.
+    assert.equal(reservationStepAuthorText({ status: "issued", changedAt: "2026-11-10T16:58:00Z" }), "10.11.2026 19:58");
+  });
+
+  it("колонки доски идут по ходу жизни резерва, снятого резерва на доске нет", () => {
+    assert.deepEqual(RESERVATION_BOARD_STATUSES, ["created", "warehouse_notified", "issued", "installed", "returned"]);
+  });
+
+  it("переносом карточки делает ровно то, что кнопками, и объясняет отказ", () => {
+    const ready = { status: "created", taskStatus: "in_progress", engineerName: "Иванов", taskNumber: "З-1" } as const;
+    // Те же три действия, что у кнопок строки: собрать, выдать, принять обратно.
+    assert.deepEqual(reservationDropDecision(ready, "warehouse_notified"), { kind: "move", action: "ready" });
+    assert.deepEqual(reservationDropDecision({ ...ready, status: "warehouse_notified" }, "issued"), { kind: "move", action: "issue" });
+    assert.deepEqual(reservationDropDecision({ ...ready, status: "issued" }, "returned"), { kind: "move", action: "return" });
+    // Своя колонка: переносить нечего, молча.
+    assert.deepEqual(reservationDropDecision(ready, "created"), { kind: "no", reason: "" });
+    /** Причина отказа: на перенос, который разрешён, тест и не должен попадать. */
+    const refusal = (reservation: Parameters<typeof reservationDropDecision>[0], to: Parameters<typeof reservationDropDecision>[1]) => {
+      const decision = reservationDropDecision(reservation, to);
+      assert.equal(decision.kind, "no");
+      return decision.kind === "no" ? decision.reason : "";
+    };
+    // Установку отмечает инженер, назад резерв не возвращают, через состояние не прыгают.
+    assert.match(refusal(ready, "installed"), /отмечает инженер/u);
+    assert.match(refusal({ ...ready, status: "issued" }, "created"), /не возвращают/u);
+    assert.match(refusal(ready, "issued"), /только в следующее состояние/u);
+    // Нельзя выдать: причина та же, что в подсказке неактивной кнопки.
+    assert.match(refusal({ status: "warehouse_notified", taskStatus: "in_progress", taskNumber: "З-1" }, "issued"), /не назначен инженер/u);
+    assert.match(refusal({ status: "created", taskStatus: "cancelled", engineerName: "Иванов", taskNumber: "З-1" }, "warehouse_notified"), /Задача отменена.*снимите резерв/u);
+  });
+
+  it("отбирает резервы по состоянию, инженеру, задаче, запчасти и словам поиска", () => {
+    const base = {
+      id: "r1", number: "Р-000001", status: "created", partId: "p1", articleNumber: "AU-LAMP", partName: "Лампа галогеновая",
+      condition: "N", quantity: 1, installMarked: false, steps: [], createdAt: "2026-11-10T07:00:00Z", updatedAt: "2026-11-10T07:00:00Z"
+    } as const;
+    const items = [
+      { ...base, taskNumber: "З-1", taskTitle: "Ремонт дозатора", engineerName: "Иванов Пётр Алексеевич" },
+      { ...base, id: "r2", number: "Р-000002", status: "issued", partId: "p2", articleNumber: "XN-FILTER", partName: "Фильтр крови", taskNumber: "З-2", engineerName: "Иванов Пётр Алексеевич", issuedToName: "Кузнецова Мария Олеговна" },
+      { ...base, id: "r3", number: "Р-000003", status: "issued", taskNumber: "З-2", engineerName: "Иванов Пётр Алексеевич" }
+    ] as const;
+    const pick = (filters: Partial<ReservationFilters>) => filterReservations(items, { ...EMPTY_RESERVATION_FILTERS, ...filters }).map((item) => item.id);
+    assert.deepEqual(pick({}), ["r1", "r2", "r3"]);
+    assert.deepEqual(pick({ status: "issued" }), ["r2", "r3"]);
+    // Инженер строки — тот, кому выдали, а не инженер задачи.
+    assert.deepEqual(pick({ engineer: "Кузнецова Мария Олеговна" }), ["r2"]);
+    assert.deepEqual(pick({ engineer: "Иванов Пётр Алексеевич" }), ["r1", "r3"]);
+    assert.deepEqual(pick({ taskNumber: "З-2" }), ["r2", "r3"]);
+    assert.deepEqual(pick({ partId: "p1" }), ["r1", "r3"]);
+    assert.deepEqual(pick({ search: "фильтр" }), ["r2"]);
+    assert.deepEqual(pick({ search: "лампа З-2" }), ["r3"]);
+    assert.deepEqual(pick({ search: "  " }), ["r1", "r2", "r3"]);
+    // Условия складываются: ничего не подходит — пустой список.
+    assert.deepEqual(pick({ status: "created", engineer: "Кузнецова Мария Олеговна" }), []);
+
+    const options = reservationFilterOptions(items);
+    // В списках только то, что есть в загруженных резервах, состояния по ходу жизни резерва.
+    assert.deepEqual(options.statuses, [{ value: "created", label: "Ждёт сборки" }, { value: "issued", label: "У инженера" }]);
+    assert.deepEqual(options.engineers.map((item) => item.value), ["Иванов Пётр Алексеевич", "Кузнецова Мария Олеговна"]);
+    assert.deepEqual(options.tasks.map((item) => item.label), ["З-1 · Ремонт дозатора", "З-2"]);
+    // У одной задачи резервы пришли и с названием, и без: в списке остаётся подпись подробнее.
+    assert.deepEqual(reservationFilterOptions([...items, { ...items[1]!, id: "r4", taskTitle: "Замена фильтра" }]).tasks.map((item) => item.label),
+      ["З-1 · Ремонт дозатора", "З-2 · Замена фильтра"]);
+    assert.equal(hasReservationFilters(EMPTY_RESERVATION_FILTERS), false);
+    assert.equal(hasReservationFilters({ ...EMPTY_RESERVATION_FILTERS, search: "  " }), false);
+    assert.equal(hasReservationFilters({ ...EMPTY_RESERVATION_FILTERS, status: "issued" }), true);
+    assert.deepEqual(options.parts.map((item) => item.label), ["AU-LAMP · Лампа галогеновая", "XN-FILTER · Фильтр крови"]);
   });
 
   it("не даёт выдать по отменённой или закрытой задаче и без инженера, объясняет почему", () => {
