@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { AccessRoleResponse } from "./types.js";
 import type { Permission, WorkingRole } from "./domain/access.js";
+import { initialEmployeeRoleKey } from "./access-admin.js";
 import { m2Api, type AccessUserRecord } from "./m2-api.js";
 import { toTechnicalCode } from "./slug.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DialogForm, IconButton, PageIntro, PageTabs, ResourceState, StatusBadge, Select, toast } from "./ui.js";
@@ -91,7 +92,8 @@ export function AccessAdminPage() {
   };
   const openUser = (user?: AccessUserRecord) => {
     setFormError(null);
-    setUserRoleKey(user?.accessRoleKey ?? user?.role ?? roles.find((role) => role.isActive)?.key ?? "");
+    // Роль нового сотрудника не подставляем: раньше здесь оказывался «Главный администратор».
+    setUserRoleKey(initialEmployeeRoleKey(user));
     setUserEditor(user ? { mode: "edit", id: user.id } : { mode: "create" });
   };
   const togglePermission = (permission: Permission) => setRolePermissions((current) => current.includes(permission)
