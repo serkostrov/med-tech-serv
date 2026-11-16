@@ -67,6 +67,15 @@ describe("сетка календаря загрузки", () => {
     assert.match(html, /engineer-calendar__name is-inactive/u);
   });
 
+  it("период, начавшийся раньше окна, помечен и без подписи", () => {
+    // Окно со среды: трёхдневная задача началась до него и видна с обрезанным краем.
+    const html = markup("2026-11-18", "2026-11-24");
+    assert.match(html, /calendar-task--from-before/u);
+    assert.match(html, /день 3 из 3/u);
+    // У плашки без срока подсказка читается целиком, а не одним номером.
+    assert.match(html, /aria-label="З-000090 · Проверка заземления · Назначена · срок не задан"/u);
+  });
+
   it("в длинном периоде клетки становятся полосками", () => {
     assert.doesNotMatch(markup(), /engineer-calendar__grid--dense/u);
     assert.match(markup("2026-11-01", "2026-11-30"), /engineer-calendar__grid--dense/u);
