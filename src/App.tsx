@@ -58,6 +58,7 @@ import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, com
 import { clearClosureDraft, closureDraftChecked, closureDraftValue, closureDraftValues, readClosureDraft, saveClosureDraft } from "./closure-draft.js";
 import { pendingAfterRetry, pendingUploadNames, pendingUploadsText, type PendingUpload } from "./upload-retry.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
+import { allRegistryRows, downloadWorkbook, equipmentRegistrySheets, registryExportNote, registryFileName, taskRegistrySheets } from "./registry-export.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
 import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAuthor, taskMailReplyAddress, taskMailReplyLost, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
@@ -1653,6 +1654,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const [mailEquipment, setMailEquipment] = useState<EquipmentApiRecord | undefined>(undefined);
   const [mailRefresh, setMailRefresh] = useState(0);
   const [canAssignEngineer, setCanAssignEngineer] = useState(false);
+  const [exporting, setExporting] = useState(false);
   useEffect(() => { void m2Api.hasPermission("tasks.assign").then(setCanAssignEngineer).catch(() => setCanAssignEngineer(false)); }, []);
   // Порядок карточек общий для всех: расставляет тот, кто может менять задачи (координатор, руководитель).
   const [canArrangeBoard, setCanArrangeBoard] = useState(false);
@@ -1855,12 +1857,46 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         onTaskRouteChange(undefined, true);
       });
   }, [initialTaskId]);
+  // Выгрузка реестра задач: все задачи под текущим отбором, а не только открытая страница.
+  // Фильтры те же, что применены на экране. Переключатель доски «Закрытые и отменённые»
+  // в выгрузку не входит: он прячет колонки доски, а не меняет отбор, и файл реестра
+  // должен отвечать фильтрам, а не виду.
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const { rows, truncated } = await allRegistryRows<TaskApiRecord>((limit, offset) => m2Api.tasksPage({
+        ...(appliedFilters.search ? { search: appliedFilters.search } : {}), ...(appliedFilters.status ? { status: appliedFilters.status } : {}),
+        ...(appliedFilters.engineerId ? { engineerId: appliedFilters.engineerId } : {}), ...(appliedFilters.siteId ? { siteId: appliedFilters.siteId } : {}),
+        ...(appliedFilters.workTypeCode ? { workTypeCode: appliedFilters.workTypeCode } : {}),
+        ...(appliedFilters.priority ? { priority: appliedFilters.priority as "urgent" | "planned" } : {}),
+        ...(appliedFilters.periodFrom ? { periodFrom: appliedFilters.periodFrom } : {}), ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
+        ...(appliedFilters.overdue ? { overdue: true } : {}), sort: appliedFilters.sort, limit, offset
+      }));
+      // Пустой файл с одной шапкой человеку не нужен: говорим, что по отбору ничего нет.
+      if (rows.length === 0) {
+        toast.warning("По этому отбору задач нет: менять нечего, файл не нужен", { title: "Выгружать нечего" });
+        return;
+      }
+      await downloadWorkbook(taskRegistrySheets(rows, {
+        workTypes: Object.fromEntries(workTypes.map((item) => [item.code, item.name])),
+        statuses: Object.fromEntries(taskStatuses.map((item) => [item.code, item.name]))
+      }), registryFileName("Задачи"));
+      toast.success(`В файле ${formatRussianCount(rows.length, ["задача", "задачи", "задач"])}${registryExportNote(truncated)}`, { title: "Задачи выгружены" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить задачи", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
   if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
   if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} initialTab={openOnMailTab ? "mail" : "overview"} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
-        actions={<Button disabled={formDataState === "loading"} icon="plus" onClick={() => void openCreationForm()}>{formDataState === "loading" ? "Открываем форму…" : "Создать задачу"}</Button>}
+        actions={<>
+          <Button busy={exporting} busyLabel="Готовим файл…" disabled={loading} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>
+          <Button disabled={formDataState === "loading"} icon="plus" onClick={() => void openCreationForm()}>{formDataState === "loading" ? "Открываем форму…" : "Создать задачу"}</Button>
+        </>}
         title="Задачи"
         titleAside={<>
           <ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }, { value: "mail", label: "Письма" }]} label="Как показать задачи" onValueChange={(value) => { setRegistryView(value); setSelectedTaskIds(new Set()); setShowCompletedBoard(false); }} value={registryView} />
@@ -2450,6 +2486,9 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   // Паспорт, который сейчас открывается из списка: показываем его каркас.
   const [openingId, setOpeningId] = useState<string | null>(null);
   const [siteChangeId, setSiteChangeId] = useState<string | null>(null);
+  // Состояние выгрузки стоит здесь, рядом с остальными: ниже по коду есть ранние return
+  // (открытый паспорт и его каркас), а хуки должны вызываться в одном порядке всегда.
+  const [exporting, setExporting] = useState(false);
   const editingRecord = records.find((record) => record.id === editingId);
   const selectedRecord = records.find((record) => record.id === selectedId);
   const siteChangeRecord = records.find((record) => record.id === siteChangeId);
@@ -2682,11 +2721,36 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
 
   const filteredEmpty = Boolean(filters.search || filters.manufacturer || filters.status || filters.site || filters.payer);
   const initialLoading = loading && records.length === 0;
+  // Выгрузка всех найденных приборов, а не открытой страницы: столбцы те же, что в реестре.
+  const exportExcel = async () => {
+    setExporting(true);
+    try {
+      const { rows, truncated } = await allRegistryRows<EquipmentApiRecord>((limit, offset) => m2Api.equipmentPage({
+        limit,
+        offset,
+        ...(filters.search ? { search: filters.search } : {}),
+        ...(filters.manufacturer ? { manufacturer: filters.manufacturer } : {}),
+        ...(filters.status ? { status: filters.status } : {}),
+        ...(filters.site ? { site: filters.site } : {}),
+        ...(filters.payer ? { payer: filters.payer } : {})
+      }));
+      const statuses = Object.fromEntries(references.statuses.map((item) => [item.code, item.name]));
+      await downloadWorkbook(equipmentRegistrySheets(rows, statuses), registryFileName(engineer ? "Мои приборы" : "Приборы"));
+      toast.success(`В файле ${formatRussianCount(rows.length, ["прибор", "прибора", "приборов"])}${registryExportNote(truncated)}`, { title: "Приборы выгружены" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить приборы", { title: "Файл не выгрузился" });
+    } finally {
+      setExporting(false);
+    }
+  };
 
   return (
     <>
       <PageIntro
-        actions={engineer ? undefined : <Button icon="plus" onClick={openCreate}>Добавить прибор</Button>}
+        actions={<>
+          <Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || total === 0} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>
+          {engineer ? null : <Button icon="plus" onClick={openCreate}>Добавить прибор</Button>}
+        </>}
         description={engineer ? "Приборы с ваших заявок и их история обслуживания." : "Найдите прибор, откройте паспорт или добавьте новый."}
         title={engineer ? "Мои приборы" : "Приборы"}
       />

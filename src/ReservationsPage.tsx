@@ -7,6 +7,7 @@ import { formatRussianCount } from "./equipment-changes.js";
 import { companyDateTimeText } from "./task-dates.js";
 import { ReservationSteps } from "./TaskReservations.js";
 import { engineerReservationsFileName, engineerReservationsWorkbook } from "./reservation-export.js";
+import { downloadWorkbook, registryFileName, reservationRegistrySheets } from "./registry-export.js";
 import { XLSX_MIME } from "./xlsx.js";
 import {
   EMPTY_RESERVATION_FILTERS,
@@ -68,7 +69,11 @@ export function ReservationsPage() {
   const [canWrite, setCanWrite] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<{ readonly reservation: StockReservationRecord; readonly action: ConfirmedAction } | null>(null);
+  // Два разных файла с одной вкладки: реестр резервов и список «у кого что на руках».
+  // Флаги раздельные, иначе на вкладке «У инженеров» обе кнопки сразу писали бы
+  // «Готовим файл…», и было бы не понять, какая из них работает.
   const [exporting, setExporting] = useState(false);
+  const [exportingEngineers, setExportingEngineers] = useState(false);
   // Условия в полях и условия, по которым сейчас отобран список: как в других реестрах,
   // набранное применяется по «Показать». Резервы уже загружены, поэтому отбираем на месте.
   const [filters, setFilters] = useState<ReservationFilters>(EMPTY_RESERVATION_FILTERS);
@@ -174,7 +179,7 @@ export function ReservationsPage() {
 
   // Выгрузка того, что сейчас на вкладке: по строке на каждую выданную запчасть.
   const exportEngineers = async () => {
-    setExporting(true);
+    setExportingEngineers(true);
     try {
       const url = URL.createObjectURL(new Blob([(await engineerReservationsWorkbook(visible)) as BlobPart], { type: XLSX_MIME }));
       const link = document.createElement("a");
@@ -188,12 +193,39 @@ export function ReservationsPage() {
     } catch (exportError) {
       toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить файл", { title: "Файл не выгрузился" });
     } finally {
+      setExportingEngineers(false);
+    }
+  };
+
+  // Выгрузка реестра резервов со всей цепочкой: состояние, задача, кому выдали, когда.
+  // Читаем все резервы страницами, а не только те 500 (или 100 закрытых), что держит
+  // окно на экране, и применяем к ним тот же отбор, что виден сейчас. Набор берём по
+  // виду, а не по вкладке: вкладки есть только у списка, а доска показывает
+  // действующие и закрытые разом, кроме снятых, — файл должен совпадать с экраном.
+  const exportRegistry = async () => {
+    setExporting(true);
+    try {
+      const loaded = view === "board"
+        ? [...await m2Api.allStockReservations("active"), ...await m2Api.allStockReservations("closed")]
+            .filter((item) => item.status !== "cancelled")
+        : await m2Api.allStockReservations(tab === "closed" ? "closed" : "active");
+      const rows = filterReservations(loaded, appliedFilters);
+      if (rows.length === 0) {
+        toast.warning("По этому отбору резервов нет: выгружать нечего", { title: "Выгружать нечего" });
+        return;
+      }
+      await downloadWorkbook(reservationRegistrySheets(rows), registryFileName("Резервы"));
+      toast.success(`В файле ${formatRussianCount(rows.length, ["резерв", "резерва", "резервов"])}`, { title: "Резервы выгружены" });
+    } catch (exportError) {
+      toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить резервы", { title: "Файл не выгрузился" });
+    } finally {
       setExporting(false);
     }
   };
 
   return <>
     <PageIntro
+      actions={<Button busy={exporting} busyLabel="Готовим файл…" disabled={loading} onClick={() => void exportRegistry()} variant="secondary">Скачать в Excel</Button>}
       description="Запчасти под задачи: собрать, выдать инженеру, принять обратно."
       title="Резервы"
       titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать резервы" onValueChange={changeView} value={view} />}
@@ -228,7 +260,7 @@ export function ReservationsPage() {
           <ReservationBoard busyId={busyId} canWrite={canWrite} items={visible} loading={loading} onAction={runFromRow} />
         </>}
     </> : tab === "engineers" ? <DataTableShell
-      action={items.length ? <Button busy={exporting} busyLabel="Готовим файл…" disabled={issuedCount === 0} onClick={() => void exportEngineers()} variant="secondary">Скачать в Excel</Button> : undefined}
+      action={items.length ? <Button busy={exportingEngineers} busyLabel="Готовим файл…" disabled={issuedCount === 0} onClick={() => void exportEngineers()} variant="secondary">Скачать «У инженеров»</Button> : undefined}
       meta={loading ? undefined : `${formatRussianCount(issuedCount, ["запчасть", "запчасти", "запчастей"])} у ${formatRussianCount(groups.length, ["инженера", "инженеров", "инженеров"])}`}
       title="Запчасти у инженеров"
     >

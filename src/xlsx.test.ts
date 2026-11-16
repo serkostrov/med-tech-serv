@@ -81,13 +81,21 @@ describe("Excel file", () => {
   });
 });
 
+/** Отчёт без новых разрезов: такой приходит, пока в базе нет миграций 0044 и 0045. */
+const NO_CUTS = {
+  tasksByReason: [], worksByModifier: [], tasksByEquipment: [], tasksBySite: [], tasksByEngineer: [],
+  partsByCondition: [], engineerLoad: [], equipmentSpend: [], payerSpend: [],
+  canSeeFinance: false, databaseCuts: false, databaseSpend: false
+} as const;
+
 describe("report export", () => {
   const report: OperationsReportRecord = {
     period: { from: "2026-11-01", to: "2026-11-12" },
     metrics: { taskCount: 3, closedCount: 1, closedOnTimePercent: 100, overdueCount: 1, activeEngineerCount: 0, belowMinimumCount: 0 },
     tasksByStatus: [{ code: "in_progress", name: "В работе", value: 2 }, { code: "closed", name: "Закрыта", value: 1 }],
     tasksByWorkType: [{ code: "repair", name: "Ремонт", value: 3 }],
-    tasksByMonth: [{ key: "2026-11", name: "ноя 2026", value: 3 }]
+    tasksByMonth: [{ key: "2026-11", name: "ноя 2026", value: 3 }],
+    ...NO_CUTS
   };
   const tasks: ReportTaskRow[] = [
     { number: "З-1", createdAt: "2026-11-02T07:00:00.000Z", title: "Не включается", status: "closed", statusName: "Закрыта", priority: "urgent", workTypeName: "Ремонт", siteName: "ГКБ № 1", equipment: "Beckman AU 480", serialNumber: "SN-1", engineerName: "Иванов П. А.", periodFrom: "2026-11-02", periodTo: "2026-11-05", completedAt: "2026-11-04T10:00:00.000Z" },
@@ -109,6 +117,71 @@ describe("report export", () => {
     assert.equal(first?.[13], "Да");
     assert.equal(second?.[14], "Да", "срок вышел, задача открыта");
     assert.equal(third?.[14], "", "срок ещё не вышел");
+  });
+
+  it("не добавляет листы разрезов, пока база их не считает", () => {
+    const names = reportWorkbookSheets(report, tasks, "2026-11-12").map((sheet) => sheet.name);
+    assert.deepEqual(names, ["Сводка", "Заявки"]);
+  });
+
+  it("кладёт разрезы, загрузку и затраты на отдельные листы", () => {
+    const full: OperationsReportRecord = {
+      ...report,
+      databaseCuts: true,
+      databaseSpend: true,
+      canSeeFinance: true,
+      tasksByReason: [{ code: "wear", name: "Износ", value: 2, closed: 1, overdue: 0 }, { code: "unset", name: "Причина не указана", value: 1, closed: 0, overdue: 1 }],
+      worksByModifier: [{ code: "N", name: "Н · вина пользователя", value: 3, closed: 1, overdue: 1 }],
+      tasksByEquipment: [{ code: "eq-1", name: "Beckman AU 480 · SN-1", value: 3, closed: 1, overdue: 1 }],
+      tasksBySite: [{ code: "site-1", name: "ГКБ № 1", value: 3, closed: 1, overdue: 1 }],
+      tasksByEngineer: [{ code: "u-1", name: "Иванов П. А.", value: 3, closed: 1, overdue: 1 }],
+      partsByCondition: [
+        { code: "G", name: "Г · гарантийная", taskCount: 2, positionCount: 3, quantity: 4 },
+        { code: "N", name: "Н · новая", taskCount: 1, positionCount: 1, quantity: 2 }
+      ],
+      engineerLoad: [{ engineerId: "u-1", name: "Иванов П. А.", taskCount: 3, closedCount: 1, overdueCount: 1, busyDays: 6, periodDays: 12, workHours: 4.5 }],
+      equipmentSpend: [{ id: "eq-1", name: "Beckman AU 480 · SN-1", detail: "ГКБ № 1 · Плательщик", taskCount: 2, invoiceCount: 2, workAmount: 2000, partsAmount: 500, totalAmount: 2500 }],
+      payerSpend: [{ id: "p-1", name: "Плательщик", taskCount: 2, invoiceCount: 2, workAmount: 2000, partsAmount: 500, adjustmentAmount: -100, totalAmount: 2400 }]
+    };
+    const sheets = reportWorkbookSheets(full, tasks, "2026-11-12");
+    assert.deepEqual(sheets.map((sheet) => sheet.name), ["Сводка", "Разрезы", "Загрузка инженеров", "Затраты", "Заявки"]);
+    const cuts = sheets[1]!.rows.map((row) => row.map((cell) => (cell && typeof cell === "object" && "bold" in cell ? cell.bold : cell)));
+    const titles = cuts.filter((row) => row.length === 5).map((row) => row[0]);
+    assert.deepEqual(titles.filter((title) => typeof title === "string" && title.length > 0 && !title.startsWith("Г ·") && !title.startsWith("Н ·")), [
+      "Причины обращений", "Износ", "Причина не указана",
+      "Гарантийность работ",
+      "Гарантийность замен запчастей",
+      "Приборы", "Beckman AU 480 · SN-1",
+      "Площадки", "ГКБ № 1",
+      "Инженеры", "Иванов П. А."
+    ]);
+    // Доля в разрезе считается от всех заявок периода, а у запчастей — от позиций.
+    assert.deepEqual(cuts.find((row) => row[0] === "Износ"), ["Износ", 2, { percent: 2 / 3 }, 1, 0]);
+    assert.deepEqual(cuts.find((row) => row[0] === "Г · гарантийная"), ["Г · гарантийная", 3, { percent: 3 / 4 }, 2, 4]);
+    const load = sheets[2]!;
+    assert.equal(load.headerRow, 1);
+    assert.deepEqual(load.rows[1], ["Иванов П. А.", 3, 1, 1, 6, 12, { percent: 0.5 }, 4.5]);
+    const spend = sheets[3]!.rows.map((row) => row.map((cell) => (cell && typeof cell === "object" && "bold" in cell ? cell.bold : cell)));
+    assert.deepEqual(spend.find((row) => row[0] === "Beckman AU 480 · SN-1"), ["Beckman AU 480 · SN-1", "ГКБ № 1 · Плательщик", 2, 2, 2000, 500, 2500]);
+    assert.deepEqual(spend.find((row) => row[0] === "Плательщик"), ["Плательщик", -100, 2, 2, 2000, 500, 2400]);
+  });
+
+  it("без права на деньги листа затрат в файле нет", () => {
+    const full: OperationsReportRecord = {
+      ...report,
+      databaseCuts: true,
+      databaseSpend: true,
+      canSeeFinance: false,
+      tasksByReason: [{ code: "wear", name: "Износ", value: 3, closed: 1, overdue: 1 }],
+      equipmentSpend: [{ id: "eq-1", name: "Beckman AU 480 · SN-1", taskCount: 2, invoiceCount: 2, workAmount: 2000, partsAmount: 500, totalAmount: 2500 }],
+      payerSpend: [{ id: "p-1", name: "Плательщик", taskCount: 2, invoiceCount: 2, workAmount: 2000, partsAmount: 500, totalAmount: 2500 }]
+    };
+    const sheets = reportWorkbookSheets(full, tasks, "2026-11-12");
+    assert.deepEqual(sheets.map((sheet) => sheet.name), ["Сводка", "Разрезы", "Заявки"]);
+    // Сумм в файле нет совсем: ни на листе разрезов, ни где-либо ещё.
+    const everything = JSON.stringify(sheets);
+    assert.ok(!everything.includes("2500"), "итог счёта не попал в файл");
+    assert.ok(!everything.includes("Затрат"), "про затраты в файле ничего нет");
   });
 
   it("shows the end time only when the work end time was entered", () => {
@@ -154,7 +227,8 @@ describe("large reports", () => {
       metrics: { taskCount: 20_000, closedCount: 10_000, closedOnTimePercent: 80, overdueCount: 500, activeEngineerCount: 0, belowMinimumCount: 0 },
       tasksByStatus: [{ code: "closed", name: "Закрыта", value: 10_000 }, { code: "in_progress", name: "В работе", value: 10_000 }],
       tasksByWorkType: [{ code: "repair", name: "Ремонт", value: 20_000 }],
-      tasksByMonth: [{ key: "2026-01", name: "янв 2026", value: 20_000 }]
+      tasksByMonth: [{ key: "2026-01", name: "янв 2026", value: 20_000 }],
+      ...NO_CUTS
     };
     const tasks: ReportTaskRow[] = Array.from({ length: 20_000 }, (_, index) => ({
       number: `З-${String(index + 1).padStart(6, "0")}`,
@@ -226,7 +300,10 @@ describe("large reports, edge cases", () => {
     const bounds = reportPeriodBounds("2026-11-01", "2026-11-30");
     assert.equal(bounds.start, "2026-10-31T21:00:00.000Z");
     assert.equal(bounds.end, "2026-11-30T20:59:59.999Z");
-    assert.deepEqual(reportPeriodBounds("не дата", "тоже"), { start: "не дата", end: "тожеT23:59:59.999Z" });
+    // Верхняя граница выгрузки — начало следующего дня, как в базе: заявка последнего
+    // мига 30-го попадает и в цифры отчёта, и в лист «Заявки».
+    assert.equal(bounds.endBefore, "2026-11-30T21:00:00.000Z");
+    assert.deepEqual(reportPeriodBounds("не дата", "тоже"), { start: "не дата", end: "тожеT23:59:59.999Z", endBefore: "тожеT23:59:59.999Z" });
   });
 
   it("counts overdue by the Moscow day when no day is given", () => {
