@@ -454,7 +454,11 @@ SELECT pg_temp.check(NOT EXISTS (
        'send_task_mail_reply', 'app_can_reply_task_mail',
        -- 0041: вложения письма становятся файлами задачи. Читает письмо и пишет files
        -- за координатора и за службу, права на задачу проверяет внутри.
-       'attach_mail_files_to_task')
+       'attach_mail_files_to_task',
+       -- 0058: удачные входы лежат в схеме auth (журнал GoTrue), сотруднику её читать
+       -- нельзя — досталась бы вся служебная история входа. Поэтому от владельца схемы
+       -- с проверкой audit.read первой же строкой.
+       'login_journal')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');

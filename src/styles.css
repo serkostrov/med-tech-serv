@@ -8520,6 +8520,26 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .notification-table__body { margin: 0; max-width: 90ch; color: var(--color-ink); font-size: 14px; line-height: 1.55; white-space: pre-wrap; }
 .notification-table__detail .notification-item__error { margin-top: 10px; }
 
+/* ===== Журналы: что меняли в системе и кто входил (ТЗ 6.3) ===== */
+.journal-table { min-width: 900px; }
+/* У входов всего четыре столбца: лишняя ширина уводила исход за край экрана. */
+.journal-table--logins { min-width: 620px; }
+.journal-table td strong { display: block; color: var(--color-ink); font-weight: 600; }
+.journal-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; word-break: break-word; }
+/* Дату и адрес не переносим по словам: «217.118.92. / 40» читается как другой адрес,
+   а «11.11.2026, / 13:12» — как две разные записи. Селектор с td, иначе общее
+   правило .data-table td (white-space: normal) оказывается сильнее. */
+.journal-table td.journal-table__when { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-ink-soft); }
+.journal-table td.journal-table__ip { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.journal-table__toggle { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.journal-table__toggle:hover strong { color: var(--color-accent-dark); text-decoration: underline; }
+.journal-table__toggle:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; border-radius: 4px; }
+.journal-table__detail td { background: #fafbfc; }
+.journal-table__empty { margin: 10px 0 0; color: var(--color-muted); font-size: 13px; }
+.journal-diff { min-width: 0; margin: 0; background: var(--color-surface); }
+.journal-diff td, .journal-diff th { font-size: 13px; vertical-align: top; word-break: break-word; }
+.journal-diff td:first-child { width: 28%; color: var(--color-ink-soft); }
+
 /* ===== Исправления по проверке ===== */
 /* Заготовки загрузки на всю ширину (центрирование сжимало их до нуля) */
 .resource-state.resource-state--skeleton { place-content: stretch; justify-items: stretch; width: 100%; }
