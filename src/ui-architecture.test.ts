@@ -207,4 +207,27 @@ describe("shared UI architecture", () => {
     assert.match(css, /\.equipment-folder__row/u);
     assert.match(css, /\.equipment-picker__selected/u);
   });
+
+  it("на телефоне реестр приборов и «Инженеры» разворачиваются в карточки", async () => {
+    const [app, operations, css] = await Promise.all([
+      readFile(new URL("./App.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./OperationsPages.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./styles.css", import.meta.url), "utf8")
+    ]);
+    // Подпись каждой ячейки берётся из data-label, когда шапка таблицы спрятана.
+    for (const label of ["Прибор", "S/N", "Площадка", "Плательщик", "Статус"]) {
+      assert.match(app, new RegExp(`data-label="${label}"`, "u"));
+    }
+    for (const label of ["Инженер", "Компетенции", "Загрузка", "Открытые", "В работе", "Просрочено", "Состояние"]) {
+      assert.match(operations, new RegExp(`data-label="${label}"`, "u"));
+    }
+    assert.match(app, /className="table-scroll equipment-registry-scroll"/u);
+    assert.match(operations, /className="table-scroll engineer-load-scroll"/u);
+    assert.match(css, /\.equipment-registry-scroll\s*\{\s*container-type:\s*inline-size;\s*\}/u);
+    assert.match(css, /\.engineer-load-scroll\s*\{\s*container-type:\s*inline-size;\s*\}/u);
+    assert.match(css, /@container \(max-width: 680px\)[\s\S]*?\.equipment-registry-table thead \{ display: none; \}/u);
+    assert.match(css, /@container \(max-width: 760px\)[\s\S]*?\.engineer-load-table thead \{ display: none; \}/u);
+    // Серийный номер не рвётся по буквам: нужен селектор сильнее, чем `.data-table td`.
+    assert.match(css, /\.equipment-registry-table td\.equipment-registry-table__serial\s*\{[^}]*white-space:\s*nowrap/u);
+  });
 });

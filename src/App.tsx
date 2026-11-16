@@ -2529,17 +2529,18 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
         {initialLoading
           ? <ResourceState description="Подождите, список приборов сейчас появится." status="loading" title="Загружаем приборы" />
           : <>
-            <div className="table-scroll">
+            {/* data-label: на телефоне строка разворачивается в карточку, подпись берётся отсюда. */}
+            <div className="table-scroll equipment-registry-scroll">
               <table className="data-table equipment-registry-table">
                 <thead><tr><th scope="col">Прибор</th><th scope="col">S/N</th><th scope="col">Площадка</th>{engineer ? null : <th scope="col">Плательщик</th>}<th scope="col">Статус</th>{engineer ? null : <th scope="col"><span className="sr-only">Действия</span></th>}</tr></thead>
                 <tbody>
                   {records.map((record) => <tr className="data-table__selectable" key={record.id} onClick={() => void openCard(record.id)}>
-                    <td><strong>{record.manufacturer} {record.model}</strong><small>{record.guarantee}</small></td>
-                    <td className="equipment-registry-table__serial">{record.serial}</td>
-                    <td>{record.place === "Не указана" ? <span className="muted">Не указана</span> : record.place}</td>
-                    {engineer ? null : <td>{record.payer === "Не указан" ? <span className="muted">Не указан</span> : record.payer}</td>}
-                    <td><StatusBadge tone={record.tone}>{record.status}</StatusBadge></td>
-                    {engineer ? null : <td onClick={(event) => event.stopPropagation()}><div className="table-actions equipment-registry-actions"><Button className="button--compact" onClick={() => setSiteChangeId(record.id)} variant="ghost">Сменить место</Button><IconButton icon="edit" label="Изменить паспорт" onClick={() => openEdit(record.id)} /></div></td>}
+                    <td className="equipment-registry-table__wide" data-label="Прибор"><strong>{record.manufacturer} {record.model}</strong><small>{record.guarantee}</small></td>
+                    <td className="equipment-registry-table__serial" data-label="S/N">{record.serial}</td>
+                    <td data-label="Площадка">{record.place === "Не указана" ? <span className="muted">Не указана</span> : record.place}</td>
+                    {engineer ? null : <td data-label="Плательщик">{record.payer === "Не указан" ? <span className="muted">Не указан</span> : record.payer}</td>}
+                    <td data-label="Статус"><StatusBadge tone={record.tone}>{record.status}</StatusBadge></td>
+                    {engineer ? null : <td className="equipment-registry-table__wide" onClick={(event) => event.stopPropagation()}><div className="table-actions equipment-registry-actions"><Button className="button--compact" onClick={() => setSiteChangeId(record.id)} variant="ghost">Сменить место</Button><IconButton icon="edit" label="Изменить паспорт" onClick={() => openEdit(record.id)} /></div></td>}
                   </tr>)}
                   {records.length === 0 ? <tr><td className="equipment-registry-empty" colSpan={engineer ? 4 : 6}><ResourceState description={filteredEmpty ? "Измените поиск или сбросьте фильтры." : engineer ? "Приборы с ваших заявок появятся здесь." : "Добавьте прибор, чтобы вести паспорт и историю обслуживания."} status={filteredEmpty ? "filtered-empty" : "empty"} title={filteredEmpty ? "Приборы не найдены" : "Приборов пока нет"} /></td></tr> : null}
                 </tbody>

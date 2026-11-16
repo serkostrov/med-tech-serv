@@ -8374,8 +8374,23 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 .equipment-registry-table td strong { display: block; color: var(--color-ink); font-weight: 650; }
 .equipment-registry-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; }
-.equipment-registry-table__serial { font-variant-numeric: tabular-nums; white-space: nowrap; }
+/* Серийный номер не рвётся: иначе «0971-12» на телефоне раскладывался на четыре строки.
+   Селектор с таблицей, чтобы перебить общее `white-space: normal` у `.data-table td`. */
+.equipment-registry-table td.equipment-registry-table__serial { font-variant-numeric: tabular-nums; white-space: nowrap; overflow-wrap: normal; }
 .equipment-registry-actions { gap: 4px; }
+/* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана. */
+.equipment-registry-scroll { container-type: inline-size; }
+/* Узко (телефон): прибор карточкой, подпись над каждым значением, слова целиком. */
+@container (max-width: 680px) {
+  .equipment-registry-table { min-width: 0; }
+  .equipment-registry-table thead { display: none; }
+  .equipment-registry-table tbody tr { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px 14px; padding: 14px 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .equipment-registry-table tbody td { display: block; padding: 0; border: 0; overflow-wrap: break-word; }
+  .equipment-registry-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .equipment-registry-table td.equipment-registry-table__wide { grid-column: 1 / -1; }
+  .equipment-registry-table .equipment-registry-actions { justify-content: flex-start; flex-wrap: wrap; }
+  .equipment-registry-table .equipment-registry-empty { grid-column: 1 / -1; }
+}
 
 .equipment-tasks { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .equipment-tasks__item {
@@ -8531,9 +8546,26 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* ===== Компетенции инженера: теги «производитель · линейка» ===== */
 .competency-tags { display: flex; flex-wrap: wrap; gap: 4px; margin: 0; padding: 0; list-style: none; }
 .competency-tags .tag { max-width: 100%; padding: 3px 8px; overflow-wrap: break-word; white-space: normal; }
-/* Таблица инженеров на телефоне прокручивается вбок: имена и теги не рвутся посреди слова. */
 .engineer-load-table td:first-child { min-width: 140px; }
 .engineer-load-table .competency-tags { min-width: 200px; }
+/* Вид таблицы или карточек выбирает ширина самой карточки раздела, а не экрана. */
+.engineer-load-scroll { container-type: inline-size; }
+/* Узко (телефон): инженер карточкой. Раньше «Загрузка», «Открытые», «В работе»,
+   «Просрочено» и «Состояние» уезжали вправо, и цифр не было видно вообще. */
+@container (max-width: 760px) {
+  .engineer-load-table { min-width: 0; }
+  .engineer-load-table thead { display: none; }
+  .engineer-load-table tbody tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 12px; padding: 14px 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .engineer-load-table tbody td { display: block; padding: 0; border: 0; overflow-wrap: break-word; }
+  .engineer-load-table td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .engineer-load-table td.engineer-load-table__wide { grid-column: 1 / -1; }
+  .engineer-load-table td:first-child { min-width: 0; }
+  .engineer-load-table .competency-tags { min-width: 0; }
+  /* Цифры читаются как цифры: подпись слева, значение под ней. */
+  .engineer-load-table td.numeric { text-align: left; }
+  .engineer-load-table tbody tr > td:last-child { grid-column: 1 / -1; }
+  .engineer-load-table tbody tr > td:last-child .table-actions { justify-content: flex-start; }
+}
 .competency-field { display: grid; gap: 6px; min-width: 0; }
 .competency-field__label { color: var(--color-ink); font-size: 12px; font-weight: 600; }
 .competency-editor {
