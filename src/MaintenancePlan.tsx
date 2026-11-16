@@ -405,7 +405,8 @@ export function MaintenancePlanPage() {
         meta={`${plural(items.length, "период", "периода", "периодов")} · задач создано: ${generatedCount} · ${plural(organizations, "организация", "организации", "организаций")}`}
         title={`График на ${year} год`}
       />
-      <div className="maintenance-months" aria-hidden="true">{MAINTENANCE_MONTHS.map((month) => <span key={month}>{month}</span>)}{today !== undefined ? <i className="maintenance-today-label" style={{ left: `${today}%` }}>сегодня</i> : null}</div>
+      {/* Шкала месяцев лежит в той же колонке сетки, что и дорожка строки, поэтому подписи совпадают с полосками. */}
+      <div className="maintenance-months" aria-hidden="true"><div className="maintenance-months__scale">{MAINTENANCE_MONTHS.map((month) => <span key={month}>{month}</span>)}{today !== undefined ? <i className="maintenance-today-label" style={{ left: `${today}%` }}>сегодня</i> : null}</div></div>
       {loading ? <div className="resource-state resource-state--skeleton" role="status"><span className="sr-only">Загружаем план</span>{[0, 1, 2, 3].map((row) => <div className="skeleton-row" key={row}><div className="skeleton-row__a" /><div className="skeleton-row__b" /><div className="skeleton-row__c" /></div>)}</div> : data ? data.groups.map((group) => {
         const first = group.items[0];
         // По приборам подписываем группу моделью и клиентом, а не одним серийным номером.

@@ -371,4 +371,21 @@ describe("план ТО: экран", () => {
     // Enter в поиске прибора не отправляет окно, даже когда список пуст или грузится.
     assert.match(picker, /if \(event\.key === "Enter"\) \{[^}]*?event\.preventDefault\(\);\s*if \(open && activeDevice\)/su);
   });
+
+  it("рисует шкалу месяцев и полоски ТО по одной сетке, без фиксированных полей", async () => {
+    const [source, css] = await Promise.all([
+      readFile(new URL("./MaintenancePlan.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./styles.css", import.meta.url), "utf8")
+    ]);
+    // Шкала живёт внутри той же колонки сетки, что и дорожка строки.
+    assert.match(source, /<div className="maintenance-months" aria-hidden="true"><div className="maintenance-months__scale">/u);
+    assert.match(css, /\.maintenance-schedule\s*\{[^}]*--maintenance-grid:/su);
+    assert.match(css, /\.maintenance-months\s*\{[^}]*grid-template-columns:\s*var\(--maintenance-grid\)/su);
+    assert.match(css, /\.maintenance-row\s*\{[^}]*grid-template-columns:\s*var\(--maintenance-grid\)/su);
+    assert.match(css, /\.maintenance-months__scale\s*\{[^}]*grid-column:\s*3[^}]*grid-template-columns:\s*repeat\(12,\s*1fr\)/su);
+    // Отметка «сегодня» считает проценты от шкалы, а не от всей строки с полями.
+    assert.match(css, /\.maintenance-months__scale\s*\{\s*position:\s*relative;\s*\}/u);
+    // Фиксированные поля у шкалы и были причиной сдвига ТО на два-три месяца.
+    assert.doesNotMatch(css, /\.maintenance-months\s*\{[^}]*margin:\s*8px\s+145px/su);
+  });
 });

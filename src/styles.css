@@ -6497,23 +6497,38 @@ td .resource-state {
 }
 
 .maintenance-schedule {
+  /* Одна раскладка на шкалу месяцев и на строки графика: иначе подписи и полоски
+     считают проценты от разной ширины и ТО показывается не в своём месяце. */
+  --maintenance-grid: 26px 245px minmax(260px, 1fr) 130px;
+  --maintenance-gap: 10px;
+  --maintenance-pad: 14px;
   overflow-x: auto;
 }
 
 .maintenance-months,
 .maintenance-group {
-  min-width: 920px;
+  min-width: 760px;
 }
 
 .maintenance-months {
   display: grid;
-  grid-template-columns: repeat(12, 1fr);
-  margin: 8px 145px 2px 305px;
+  grid-template-columns: var(--maintenance-grid);
+  gap: var(--maintenance-gap);
+  margin: 8px 0 2px;
+  padding: 0 var(--maintenance-pad);
   color: var(--color-ink-soft);
   font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.02em;
   text-align: center;
+}
+
+/* Шкала стоит ровно в той же колонке, что и дорожка с полосками, поэтому
+   «сегодня» и подпись месяца всегда совпадают с полоской на любой ширине. */
+.maintenance-months__scale {
+  display: grid;
+  grid-column: 3;
+  grid-template-columns: repeat(12, 1fr);
 }
 
 .maintenance-group {
@@ -6543,11 +6558,11 @@ td .resource-state {
 
 .maintenance-row {
   display: grid;
-  grid-template-columns: 26px 245px minmax(320px, 1fr) 130px;
+  grid-template-columns: var(--maintenance-grid);
   align-items: center;
-  gap: 10px;
+  gap: var(--maintenance-gap);
   min-height: 48px;
-  padding: 6px 14px;
+  padding: 6px var(--maintenance-pad);
   border-top: 1px solid var(--color-border-soft);
 }
 
@@ -8392,7 +8407,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .year-stepper button { display: inline-grid; width: 30px; height: 30px; place-items: center; border: 0; border-radius: 6px; color: var(--color-muted); background: transparent; font-size: 18px; line-height: 1; cursor: pointer; }
 .year-stepper button:hover { color: var(--color-ink); background: #eef2f5; }
 .year-stepper strong { min-width: 46px; color: var(--color-ink); font-size: 14px; font-variant-numeric: tabular-nums; text-align: center; }
-.maintenance-months { position: relative; }
+.maintenance-months__scale { position: relative; }
 .maintenance-today-label { position: absolute; top: -16px; transform: translateX(-50%); color: var(--color-danger); font-size: 11px; font-style: normal; font-weight: 700; white-space: nowrap; }
 .maintenance-today { position: absolute; top: -2px; bottom: -2px; z-index: 1; width: 2px; margin-left: -1px; background: var(--color-danger); opacity: .7; }
 .maintenance-group > header h3 { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
