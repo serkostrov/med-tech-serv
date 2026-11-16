@@ -2653,17 +2653,17 @@ function NotificationsPage() {
           : <div className="table-scroll"><table className="data-table notification-table"><thead><tr><th scope="col">Когда</th><th scope="col">Кому</th><th scope="col">О чём</th><th scope="col">Канал</th><th scope="col">Статус</th></tr></thead><tbody>
             {items.map((notification) => {
               const open = openId === notification.id;
+              // Подпись под темой: ярлык события, если тема его не называет, и число попыток.
+              // Когда нечего писать, подписи нет вовсе, а не пустая строка под заголовком.
+              const subtitle = [
+                eventLabelOutsideSubject(notification.subject, eventLabel[notification.eventCode] ?? "Событие склада"),
+                notification.attempts > 1 ? `попыток: ${notification.attempts}` : ""
+              ].filter(Boolean).join(" · ");
               return <React.Fragment key={notification.id}>
                 <tr className={`data-table__selectable${notification.status === "failed" ? " notification-table__failed" : ""}`} onClick={() => setOpenId(open ? null : notification.id)}>
                   <td className="notification-table__when">{formatDisplayDate(notification.createdAt, true)}</td>
                   <td>{notification.recipientAddress}</td>
-                  <td><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button><small>{[
-                    // Ярлык события печатаем, только если его нет в теме: без темы он уже стоит
-                    // заголовком строки, а в теме вроде «Новый резерв запчастей по задаче З-1»
-                    // повторял бы её начало слово в слово.
-                    eventLabelOutsideSubject(notification.subject, eventLabel[notification.eventCode] ?? "Событие склада"),
-                    notification.attempts > 1 ? `попыток: ${notification.attempts}` : ""
-                  ].filter(Boolean).join(" · ")}</small></td>
+                  <td><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button>{subtitle ? <small>{subtitle}</small> : null}</td>
                   <td>{channelLabel[notification.channel] ?? notification.channel}</td>
                   <td><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></td>
                 </tr>
