@@ -39,6 +39,11 @@ export interface SmtpMessage {
   readonly html?: string;
   /** Message-ID письма, на которое отвечаем, вместе с угловыми скобками. */
   readonly inReplyTo?: string;
+  /**
+   * Вся переписка по порядку для заголовка References (каждый Message-ID со скобками).
+   * Нет — в References уходит одно письмо из inReplyTo, как было раньше.
+   */
+  readonly references?: readonly string[];
   /** Автоматический ответ (RFC 3834): почтовые программы не отвечают на него автоответом. */
   readonly autoSubmitted?: boolean;
   /** Куда отвечать, если не на адрес отправителя (например, на адрес для заявок). */
@@ -122,13 +127,30 @@ function assertMailbox(value: string): void {
   throw new ChannelDeliveryError("smtp_invalid_address", false);
 }
 
+/** Message-ID в заголовке: ровно <что-то без пробелов и скобок>. */
+const MESSAGE_ID = /^<[^<>\s\r\n]{1,250}>$/u;
+
 function assertMessageEnvelope(message: SmtpMessage): void {
   assertMailbox(message.fromAddress);
   assertMailbox(message.toAddress);
   if (message.replyTo !== undefined) assertMailbox(message.replyTo);
-  if (/[\r\n]/u.test(message.subject) || /[\r\n]/u.test(message.messageId) || (message.inReplyTo !== undefined && !/^<[^<>\s\r\n]{1,250}>$/u.test(message.inReplyTo))) {
+  if (/[\r\n]/u.test(message.subject) || /[\r\n]/u.test(message.messageId) || (message.inReplyTo !== undefined && !MESSAGE_ID.test(message.inReplyTo))) {
     throw new ChannelDeliveryError("smtp_invalid_message", false);
   }
+  // Чужой Message-ID в References не должен превратиться в свой заголовок письма.
+  if (message.references?.some((item) => !MESSAGE_ID.test(item))) {
+    throw new ChannelDeliveryError("smtp_invalid_message", false);
+  }
+}
+
+/**
+ * References: переписка по порядку. Заголовок переносим по строкам (RFC 5322, 2.2.3):
+ * у долгой переписки он легко перерастёт предел длины строки SMTP.
+ */
+function referencesHeader(message: SmtpMessage): readonly string[] {
+  const chain = message.references?.length ? [...message.references] : message.inReplyTo ? [message.inReplyTo] : [];
+  if (chain.length === 0) return [];
+  return [`References: ${chain.join("\r\n ")}`];
 }
 
 /** Короткий ASCII-заголовок идёт как есть; остальное — словами RFC 2047. */
@@ -206,7 +228,8 @@ export function smtpMessageData(message: SmtpMessage): string {
     `To: <${message.toAddress}>`,
     `Subject: ${encodedHeader(message.subject)}`,
     ...(message.replyTo ? [`Reply-To: <${message.replyTo}>`] : []),
-    ...(message.inReplyTo ? [`In-Reply-To: ${message.inReplyTo}`, `References: ${message.inReplyTo}`] : []),
+    ...(message.inReplyTo ? [`In-Reply-To: ${message.inReplyTo}`] : []),
+    ...referencesHeader(message),
     ...(message.autoSubmitted ? ["Auto-Submitted: auto-replied"] : []),
     "MIME-Version: 1.0"
   ];

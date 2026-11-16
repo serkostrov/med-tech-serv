@@ -8,6 +8,7 @@ import { CompositeEventDeliveryPlanner, DryRunDeliveryChannel, runPollCycle } fr
 import { NodeSmtpTransport, PostgresEmailTaskCardSource, SmtpDeliveryChannel, smtpConfiguration } from "./smtp.js";
 import { aiMailParserOrRules } from "./ai-parser.js";
 import { sendMailAutoreplies, type AutoreplySender } from "./mail-autoreply.js";
+import { sendTaskMailReplies, type TaskMailReplySender } from "./mail-reply.js";
 import { ImapMailIntake, imapSettings } from "./mail-intake.js";
 import { supabaseMailFileStore } from "./storage-upload.js";
 import {
@@ -98,6 +99,27 @@ if (enabled.telegram) {
 }
 const channels = configuredDeliveryChannels({ enabled }, adapters);
 
+/**
+ * Отправитель писем вне очереди уведомлений: автоответ «заявка принята» и ответ
+ * координатора из карточки задачи. Ошибка в настройках отправки (SMTP_*) выключает
+ * только эти письма, а не всю службу.
+ * replyTo: ответ клиента должен вернуться в заявки, то есть на ящик, с которого их берём.
+ */
+function mailSender(
+  texts: { readonly letter: string; readonly disabled: string },
+  replyTo: string | undefined
+): AutoreplySender | undefined {
+  if (dryRun) return { send: async (message) => console.log(`Пробный режим: ${texts.letter} на ${message.toAddress} не отправлен`) };
+  try {
+    const smtp = smtpConfiguration(process.env);
+    const transport = new NodeSmtpTransport(smtp);
+    return { send: (message) => transport.send({ ...message, fromAddress: smtp.fromAddress, fromName: smtp.fromName, ...(replyTo ? { replyTo } : {}) }) };
+  } catch (error) {
+    console.error(`${texts.disabled}, ошибка в настройках почты: ${error instanceof Error ? error.message : String(error)}`);
+    return undefined;
+  }
+}
+
 // Заявки из почты (Блок 4): забор писем, разбор, автоответ «заявка принята».
 const mailIntakeEnabled = flag("MAIL_INTAKE_ENABLED", false);
 const mailIntervalMs = interval("MAIL_POLL_INTERVAL_MS", 60_000);
@@ -119,26 +141,20 @@ if (intakeSettings) {
   // Ошибка в настройках нейросети (AI_*) тоже не останавливает службу: письма разбираются по правилам.
   mailIntake = new ImapMailIntake(intakeSettings, database, files, aiMailParserOrRules(process.env));
   if (flag("MAIL_AUTOREPLY_ENABLED", true)) {
-    // Ответ клиента на автоответ должен вернуться в заявки: адрес для ответа тот, с которого берём заявки.
-    const replyTo = intakeSettings.onlyTo;
-    if (dryRun) {
-      autoreplySender = { send: async (message) => console.log(`Пробный режим: автоответ на ${message.toAddress} не отправлен`) };
-    } else {
-      // Ошибка в настройках отправки (SMTP_*) выключает только автоответы, а не всю службу.
-      try {
-        const smtp = smtpConfiguration(process.env);
-        const transport = new NodeSmtpTransport(smtp);
-        autoreplySender = { send: (message) => transport.send({ ...message, fromAddress: smtp.fromAddress, fromName: smtp.fromName, ...(replyTo ? { replyTo } : {}) }) };
-      } catch (error) {
-        console.error(`Автоответы на заявки выключены, ошибка в настройках почты: ${error instanceof Error ? error.message : String(error)}`);
-      }
-    }
+    autoreplySender = mailSender({ letter: "автоответ", disabled: "Автоответы на заявки выключены" }, intakeSettings.onlyTo);
   }
+}
+
+// Ответы координатора из карточки задачи уходят, пока работает почта: по старой
+// переписке ответить нужно и тогда, когда забор новых писем выключен.
+let taskReplySender: TaskMailReplySender | undefined;
+if (enabled.email) {
+  taskReplySender = mailSender({ letter: "ответ клиенту", disabled: "Ответы клиентам по задачам выключены" }, intakeSettings?.onlyTo);
 }
 const planner = new CompositeEventDeliveryPlanner(planners);
 const repository = new PostgresEventOutboxRepository(database);
 
-console.log(`Служба уведомлений запущена: каналы ${channels.map((item) => item.code).join(", ") || "нет"}${mailIntake ? ", заявки из почты" : ""}${dryRun ? ", пробный режим" : ""}`);
+console.log(`Служба уведомлений запущена: каналы ${channels.map((item) => item.code).join(", ") || "нет"}${mailIntake ? ", заявки из почты" : ""}${taskReplySender ? ", ответы клиентам по задачам" : ""}${dryRun ? ", пробный режим" : ""}`);
 
 let running = false;
 let stopping = false;
@@ -173,13 +189,25 @@ let mailRunning = false;
 let replyRunning = false;
 
 async function sendReplies(): Promise<void> {
-  if (!autoreplySender || replyRunning || stopping) return;
+  if ((!autoreplySender && !taskReplySender) || replyRunning || stopping) return;
   replyRunning = true;
   try {
-    const replies = await sendMailAutoreplies(database, autoreplySender);
-    if (replies.sent || replies.failed) console.log(`Автоответы: отправлено ${replies.sent}, ошибок ${replies.failed}`);
+    if (autoreplySender) {
+      const replies = await sendMailAutoreplies(database, autoreplySender);
+      if (replies.sent || replies.failed) console.log(`Автоответы: отправлено ${replies.sent}, ошибок ${replies.failed}`);
+    }
   } catch (error) {
     console.error(`Автоответы не отправлены: ${errorCode(error)}`);
+  }
+  try {
+    // Ответы координатора из карточки задачи: отдельно от автоответов, чтобы сбой
+    // одной очереди не останавливал другую.
+    if (taskReplySender) {
+      const answers = await sendTaskMailReplies(database, taskReplySender);
+      if (answers.sent || answers.failed) console.log(`Ответы клиентам: отправлено ${answers.sent}, ошибок ${answers.failed}`);
+    }
+  } catch (error) {
+    console.error(`Ответы клиентам не отправлены: ${errorCode(error)}`);
   } finally {
     replyRunning = false;
   }
@@ -190,7 +218,7 @@ async function pollMail(): Promise<void> {
   mailRunning = true;
   try {
     const result = await mailIntake.poll();
-    if (result.created) console.log(`Письма: новых ${result.created}, разобрано ${result.parsed}, ошибок ${result.failed}`);
+    if (result.created) console.log(`Письма: новых ${result.created}, разобрано ${result.parsed}, ответов клиентов ${result.replies}, ошибок ${result.failed}`);
   } catch (error) {
     console.error(`Забор писем не выполнен: ${errorCode(error)}`);
   } finally {
@@ -225,6 +253,9 @@ if (!stopping) timer = setInterval(() => void poll(), pollIntervalMs);
 if (mailIntake && !stopping) {
   void pollMail();
   mailTimer = setInterval(() => void pollMail(), mailIntervalMs);
-  // Автоответ после создания задачи координатором уходит через несколько секунд, независимо от забора писем.
-  if (autoreplySender) replyTimer = setInterval(() => void sendReplies(), pollIntervalMs);
+}
+// Автоответ после создания задачи координатором и его ответ клиенту из карточки уходят
+// через несколько секунд, независимо от забора писем.
+if ((autoreplySender || taskReplySender) && !stopping) {
+  replyTimer = setInterval(() => void sendReplies(), pollIntervalMs);
 }
