@@ -8,6 +8,7 @@ export type NavigationId =
   | "warehouse"
   | "customers"
   | "notifications"
+  | "journals"
   | "reports"
   | "references"
   | "finance"
@@ -32,6 +33,7 @@ export type NavigationIcon =
   | "reservations"
   | "inventory"
   | "handoff"
+  | "clock"
   | "shield";
 
 export interface NavigationItem {
@@ -73,6 +75,9 @@ const coordinatorNavigation: readonly NavigationItem[] = [
   { id: "price", label: "Прайс", description: "Цены по видам работ и их история", group: "Контроль", icon: "price" },
   { id: "reports", label: "Отчёты", description: "Сводка по задачам за период", group: "Контроль", icon: "reports" },
   { id: "notifications", label: "Уведомления", description: "Письма клиентам и сотрудникам", group: "Контроль", icon: "notifications" },
+  // Журналы — чувствительные данные: раздел остаётся только у тех, у кого есть право
+  // «Просмотр аудита» (navigationForSession в App.tsx), и то же право проверяет база.
+  { id: "journals", label: "Журналы", description: "Что меняли в системе и кто входил", group: "Контроль", icon: "clock" },
   { id: "references", label: "Справочники", description: "Виды работ, статусы и модели приборов", group: "Настройки", icon: "references" }
 ];
 

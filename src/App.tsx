@@ -72,6 +72,7 @@ import { installedReservationNumbers } from "./reservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { PricePage } from "./PricePage.js";
+import { JournalsPage } from "./JournalsPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { preselectedEngineerId } from "./engineer-competencies.js";
@@ -3124,6 +3125,7 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
     case "warehouse": return <OperationsWarehousePage />;
     case "reservations": return <ReservationsPage />;
     case "notifications": return <NotificationsPage />;
+    case "journals": return <JournalsPage />;
     case "reports": return <OperationsReportsPage />;
     case "customers": return <CustomersPage />;
     case "references": return <ReferencesWorkspace />;
@@ -3398,7 +3400,7 @@ function appRoleForApiRole(role: string, accessRoleKey?: string): AppRole {
 const navigationPermission: Partial<Record<NavigationId, string>> = {
   tasks: "tasks.read", maintenance: "tasks.assign", equipment: "equipment.read", engineers: "tasks.assign",
   warehouse: "warehouse.read", reservations: "warehouse.read", inventory: "warehouse.read", handoff: "warehouse.write",
-  notifications: "notifications.read", reports: "reports.read", customers: "references.read", references: "references.read", finance: "finance.read",
+  notifications: "notifications.read", journals: "audit.read", reports: "reports.read", customers: "references.read", references: "references.read", finance: "finance.read",
   price: "price.read", access: "users.read"
 };
 

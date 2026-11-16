@@ -6,6 +6,7 @@ import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistory
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
+import { loginFailureReason, type AuditJournalPage, type LoginJournalPage } from "./audit-journal.js";
 import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
@@ -497,6 +498,9 @@ function numberValue(value: unknown): number | undefined {
 }
 
 const MAIL_SELECT = "id, sender, subject, body, received_at, status, ai_confidence, parsed_payload, parsed_at, task_id, raw_storage_key, attachments, autoreply_sent_at, autoreply_error";
+
+/** Поля журнала изменений (представление audit_log_journal, 0057). */
+const AUDIT_JOURNAL_SELECT = "id, occurred_at, actor_type, actor_user_id, actor_name, action, outcome, entity_type, entity_id, table_name, changed_fields, before_data, after_data, metadata, money_hidden, ip_address";
 
 function mailRecord(row: Record<string, unknown>): MailInboxRecord {
   const payload = asRow(row.parsed_payload);
@@ -1502,8 +1506,24 @@ export class M2ApiClient {
     // Ссылки на файлы прежнего входа другому пользователю не достаются.
     this.signedUrlCache.clear();
     const { error } = await this.db().auth.signInWithPassword({ email, password });
-    throwIfError(error, "Неверный e-mail или пароль");
+    if (error) {
+      // Неудачную попытку GoTrue у себя не сохраняет, поэтому её пишем сами (0058).
+      // В журнал уходят только набранный адрес и короткий код причины: ни пароля,
+      // ни его длины, ни текста ошибки службы входа. Время, адрес обращения и
+      // сотрудника подставляет база.
+      await this.recordFailedLogin(email, loginFailureReason(error));
+      throwIfError(error, "Неверный e-mail или пароль");
+    }
     return this.session();
+  }
+
+  /** Запись неудачной попытки входа. Сессии у неудачной попытки нет: пишет anon-ключ. */
+  private async recordFailedLogin(email: string, reason: string): Promise<void> {
+    try {
+      await this.db().rpc("record_failed_login", { p_login: email, p_reason: reason });
+    } catch {
+      // Журнал входов не должен мешать входу: об отказе всё равно скажет сам экран.
+    }
   }
 
   public async logout(): Promise<void> {
@@ -1772,6 +1792,131 @@ export class M2ApiClient {
       isActive: row.is_active !== false,
       updatedAt: iso(row.updated_at)
     };
+  }
+
+  /**
+   * Журнал изменений (ТЗ 6.3). Читается из представления audit_log_journal (0057):
+   * доступ решает правило строк audit_log по праву «Просмотр аудита», отбор, счёт
+   * и порядок делает база — на стенде записей десятки тысяч.
+   */
+  public async auditJournal(query: {
+    readonly actorId?: string;
+    readonly entityType?: string;
+    readonly search?: string;
+    readonly from?: string;
+    readonly to?: string;
+    readonly limit?: number;
+    readonly offset?: number;
+  } = {}): Promise<AuditJournalPage> {
+    const limit = query.limit ?? 50;
+    const offset = query.offset ?? 0;
+    let request = this.db().from("audit_log_journal")
+      .select(AUDIT_JOURNAL_SELECT, { count: "exact" })
+      .order("occurred_at", { ascending: false })
+      .order("id", { ascending: false })
+      .range(offset, offset + limit - 1);
+    if (query.actorId) request = request.eq("actor_user_id", query.actorId);
+    if (query.entityType) request = request.eq("entity_type", query.entityType);
+    if (query.from) request = request.gte("occurred_at", companyDayStart(query.from) ?? query.from);
+    if (query.to) request = request.lte("occurred_at", companyDayEnd(query.to) ?? query.to);
+    // Поиск по номеру объекта, действию, таблице и автору: всё это столбцы, отбор в базе.
+    const search = escapePostgrestSearchTerm(query.search ?? "");
+    if (search) {
+      request = request.or([
+        `entity_id.ilike.*${search}*`,
+        `action.ilike.*${search}*`,
+        `table_name.ilike.*${search}*`,
+        `actor_name.ilike.*${search}*`
+      ].join(","));
+    }
+    const { data, error, count } = await request;
+    throwIfError(error, "Не получилось загрузить журнал изменений");
+    return {
+      items: (data ?? []).map((item) => {
+        const row = asRow(item);
+        return {
+          id: numberValue(row.id) ?? 0,
+          occurredAt: iso(row.occurred_at),
+          actorType: text(row, "actor_type"),
+          ...(optionalText(row, "actor_user_id") ? { actorUserId: optionalText(row, "actor_user_id") } : {}),
+          ...(optionalText(row, "actor_name") ? { actorName: optionalText(row, "actor_name") } : {}),
+          action: text(row, "action"),
+          outcome: text(row, "outcome"),
+          entityType: text(row, "entity_type"),
+          entityId: text(row, "entity_id"),
+          ...(optionalText(row, "table_name") ? { tableName: optionalText(row, "table_name") } : {}),
+          changedFields: Array.isArray(row.changed_fields) ? row.changed_fields.map((field) => String(field)) : [],
+          ...(row.before_data ? { beforeData: asRow(row.before_data) } : {}),
+          ...(row.after_data ? { afterData: asRow(row.after_data) } : {}),
+          ...(row.metadata ? { metadata: asRow(row.metadata) } : {}),
+          moneyHidden: row.money_hidden === true,
+          ...(optionalText(row, "ip_address") ? { ipAddress: optionalText(row, "ip_address") } : {})
+        };
+      }),
+      total: count ?? 0,
+      limit,
+      offset
+    };
+  }
+
+  /**
+   * Журнал входов (ТЗ 6.3). Удачные входы лежат в журнале службы входа (схема auth),
+   * поэтому страницу собирает функция login_journal (0058): она же проверяет право
+   * «Просмотр аудита» и считает всё в базе.
+   */
+  public async loginJournal(query: {
+    readonly userId?: string;
+    readonly outcome?: "success" | "failure";
+    readonly search?: string;
+    readonly from?: string;
+    readonly to?: string;
+    readonly limit?: number;
+    readonly offset?: number;
+  } = {}): Promise<LoginJournalPage> {
+    const limit = query.limit ?? 50;
+    const offset = query.offset ?? 0;
+    const { data, error } = await this.db().rpc("login_journal", {
+      p_user_id: query.userId ?? null,
+      p_outcome: query.outcome ?? null,
+      p_search: query.search?.trim() || null,
+      p_from: query.from ? companyDayStart(query.from) ?? query.from : null,
+      p_to: query.to ? companyDayEnd(query.to) ?? query.to : null,
+      p_limit: limit,
+      p_offset: offset
+    });
+    throwIfError(error, "Не получилось загрузить журнал входов");
+    const page = asRow(data);
+    const items = Array.isArray(page.items) ? page.items : [];
+    return {
+      items: items.map((item) => {
+        const row = asRow(item);
+        return {
+          id: text(row, "id"),
+          source: text(row, "source") === "gotrue" ? "gotrue" : "app",
+          occurredAt: iso(row.occurredAt),
+          ...(optionalText(row, "userId") ? { userId: optionalText(row, "userId") } : {}),
+          ...(optionalText(row, "userName") ? { userName: optionalText(row, "userName") } : {}),
+          ...(optionalText(row, "login") ? { login: optionalText(row, "login") } : {}),
+          ...(optionalText(row, "ipAddress") ? { ipAddress: optionalText(row, "ipAddress") } : {}),
+          success: row.success === true,
+          ...(optionalText(row, "failureReason") ? { failureReason: optionalText(row, "failureReason") } : {})
+        };
+      }),
+      total: numberValue(page.total) ?? 0,
+      limit,
+      offset,
+      successSourceAvailable: page.successSourceAvailable === true
+    };
+  }
+
+  /** Сотрудники для фильтра «кто» в журналах: имена видит любой сотрудник CRM. */
+  public async journalPeople(): Promise<readonly { readonly id: string; readonly fullName: string }[]> {
+    const { data, error } = await this.db().from("users").select("id, full_name").order("full_name");
+    throwIfError(error, "Не получилось загрузить список сотрудников");
+    return (data ?? []).map((item) => {
+      const row = asRow(item);
+      return { id: text(row, "id"), fullName: text(row, "full_name") };
+    });
   }
 
   public async equipmentPage(query: {
