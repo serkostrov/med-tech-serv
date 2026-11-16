@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient } from "./m2-api.js";
 import {
+  canExportInvoice,
   invoiceActions,
   invoiceAmounts,
   invoiceFileName,
@@ -113,6 +114,11 @@ describe("карточка счёта", () => {
     assert.deepEqual(kinds("cancelled"), []);
     // Пересобрать по прайсу можно только черновик, скорректировать — пока счёт не в 1С.
     assert.ok(!kinds("issued").includes("rebuild"));
+  });
+
+  it("выгрузку файлом даёт на любом статусе, но только если есть что выгружать", () => {
+    assert.equal(canExportInvoice({ itemCount: 3 }), true);
+    assert.equal(canExportInvoice({ itemCount: 0 }), false);
   });
 
   it("без права finance.write кнопок нет ни на одном статусе", () => {

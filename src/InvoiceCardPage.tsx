@@ -16,6 +16,7 @@ import { formatRussianCount } from "./equipment-changes.js";
 import { XLSX_MIME } from "./xlsx.js";
 import { invoiceWorkbook } from "./invoice-export.js";
 import {
+  canExportInvoice,
   invoiceActions,
   invoiceAmounts,
   invoiceFileName,
@@ -259,7 +260,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
   return <div className="equipment-card-view">
     <EntityDetailToolbar
       actions={<>
-        <Button busy={exporting} disabled={items.length === 0} onClick={() => void exportFile()} variant="secondary">Выгрузить в Excel</Button>
+        <Button busy={exporting} disabled={!canExportInvoice({ itemCount: items.length })} onClick={() => void exportFile()} variant="secondary">Выгрузить в Excel</Button>
         {actions.map((action) => <Button key={action.kind} onClick={() => start(action.kind)} variant={action.variant}>{action.label}</Button>)}
       </>}
       backLabel="К счетам"
