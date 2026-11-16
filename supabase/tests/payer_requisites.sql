@@ -90,6 +90,11 @@ SELECT pg_temp.check(public.is_valid_kpp('773601001'), 'КПП из девяти
 SELECT pg_temp.check(public.is_valid_kpp('7736AB001'), 'КПП иностранной организации с буквами принимается');
 SELECT pg_temp.check(NOT public.is_valid_kpp('12'), 'КПП из двух цифр не принимается');
 SELECT pg_temp.check(NOT public.is_valid_kpp('7736ab001'), 'строчные буквы в КПП не принимаются');
+-- Пробелы из буфера обмена и выгрузки 1С не должны менять вердикт: правило общее с интерфейсом.
+SELECT pg_temp.check(public.is_valid_inn(' 7736012343 '), 'обычные пробелы вокруг ИНН не мешают');
+SELECT pg_temp.check(public.is_valid_inn(E'7736012343\t'), 'табуляция вокруг ИНН не мешает');
+SELECT pg_temp.check(public.is_valid_inn(E'\u00A07736012343'), 'неразрывный пробел вокруг ИНН не мешает');
+SELECT pg_temp.check(public.is_valid_kpp(E' 773601001\u00A0'), 'то же правило у КПП');
 
 -- ---------------------------------------------------------------- Случай из аудита
 SELECT pg_temp.act_as(pg_temp.uid('coord'));
@@ -109,6 +114,14 @@ SELECT pg_temp.check(pg_temp.rows_affected(
 SELECT pg_temp.check(pg_temp.rows_affected(
   'INSERT INTO public.payers (name) VALUES (''Человек с одним телефоном'')') = 1,
   'человек площадки без реквизитов заводится как раньше');
+-- Лишние пробелы не просто пропускаются, а убираются: дальше реквизиты уходят в счёт и в акт.
+SELECT pg_temp.check(pg_temp.rows_affected(
+  'INSERT INTO public.payers (name, requisites) VALUES (''Плательщик с пробелами'', ''{"inn":" 7736012343 ","kpp":"773601001 "}''::jsonb)') = 1,
+  'реквизиты с пробелами принимаются');
+SELECT pg_temp.check(
+  (SELECT requisites ->> 'inn' FROM payers WHERE name = 'Плательщик с пробелами') = '7736012343'
+  AND (SELECT requisites ->> 'kpp' FROM payers WHERE name = 'Плательщик с пробелами') = '773601001',
+  'и сохраняются уже обрезанными, а не с пробелом внутри');
 SELECT pg_temp.check(pg_temp.rows_affected(
   format('UPDATE public.payers SET name = ''Старый плательщик, переименован'' WHERE id = %L', (SELECT id FROM ids WHERE k = 'legacy'))) = 1,
   'старую запись с мусором можно переименовать: проверка идёт только по реквизитам');

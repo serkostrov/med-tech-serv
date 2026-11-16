@@ -2296,7 +2296,9 @@ export class M2ApiClient {
     if (input.requisites !== undefined || input.inn !== undefined || input.kpp !== undefined) {
       const inn = optionalText(requisitesSource, "inn") ?? optionalText(input, "inn");
       const kpp = optionalText(requisitesSource, "kpp") ?? optionalText(input, "kpp");
-      assertRequisites({ ...(inn ? { inn } : {}), ...(kpp ? { kpp } : {}) });
+      // Здесь не проверяем: база (миграция 0036) пропускает старую запись с мусором,
+      // пока реквизиты не трогают, а отсюда прежних значений не видно. Проверяет экран,
+      // где известно, что человек изменил, — иначе правка ФИО упиралась бы в чужую опечатку.
       patch.requisites = {
         ...(inn ? { inn } : {}),
         ...(kpp ? { kpp } : {})

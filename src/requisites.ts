@@ -39,7 +39,7 @@ export function requisitesRefusal(input: { readonly inn?: string; readonly kpp?:
   const inn = (input.inn ?? "").trim();
   const kpp = (input.kpp ?? "").trim();
   if (inn && !isValidInn(inn)) {
-    return `ИНН «${inn}» не похож на настоящий: нужно 10 цифр у организации или 12 у предпринимателя, и последняя цифра должна сойтись с остальными`;
+    return `ИНН «${inn}» не похож на настоящий: у организации 10 цифр, у предпринимателя 12, и номер должен сойтись с собственной контрольной суммой`;
   }
   if (kpp && !isValidKpp(kpp)) {
     return `КПП «${kpp}» не похож на настоящий: нужно 9 знаков, например 773601001`;

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import { m2Api } from "./m2-api.js";
+import { assertRequisites } from "./requisites.js";
 import {
   formatSitePersonDetails,
   orphanPayers as collectOrphanPayers,
@@ -118,6 +119,11 @@ export function CustomerReferencesPage() {
         const email = String(data.get("email") ?? "").trim();
         const inn = String(data.get("inn") ?? "").trim();
         const kpp = String(data.get("kpp") ?? "").trim();
+        // Проверяем только то, что человек сейчас вписал: база так же пропускает старую
+        // запись с мусором в ИНН, пока реквизиты не меняют (миграция 0036).
+        if (inn !== (editor.person?.inn ?? "") || kpp !== (editor.person?.kpp ?? "")) {
+          assertRequisites({ ...(inn ? { inn } : {}), ...(kpp ? { kpp } : {}) });
+        }
         if (editor.person) {
           await m2Api.updateSitePerson(editor.siteId, {
             contactId: editor.person.contactId,

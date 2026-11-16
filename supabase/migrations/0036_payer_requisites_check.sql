@@ -24,8 +24,27 @@
 -- 1. Что считается верным ИНН и КПП
 -- ---------------------------------------------------------------------------
 
+-- Обрезка реквизита: обычные пробелы, табуляция, переводы строк и неразрывный пробел.
+-- Браузер и 1С присылают их незаметно, а правило должно совпадать с тем, что считает
+-- интерфейс (src/requisites.ts): там это обычный trim() строки JavaScript.
+CREATE OR REPLACE FUNCTION public.trim_requisite(p_value text)
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+SET search_path = pg_catalog
+AS $$
+  SELECT btrim(coalesce(p_value, ''), E' \t\n\r\f\v ')
+$$;
+
+COMMENT ON FUNCTION public.trim_requisite(text) IS
+  'Обрезка реквизита от пробелов, включая неразрывный (0036): то же правило, что в интерфейсе.';
+
+REVOKE EXECUTE ON FUNCTION public.trim_requisite(text) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.trim_requisite(text) TO authenticated, medtech_api;
+
 -- Контрольные цифры ИНН: вес каждой позиции умножается на её цифру, сумма по модулю 11
--- и ещё по модулю 10 даёт контрольную цифру. У 12-значного ИНН таких цифр две.
+-- и ещё по модулю 10 даёт контрольную цифру. У 12-значного ИНН таких цифр две:
+-- одиннадцатая считается по первым десяти, двенадцатая — по первым одиннадцати.
 CREATE OR REPLACE FUNCTION public.is_valid_inn(p_value text)
 RETURNS boolean
 LANGUAGE plpgsql
@@ -33,7 +52,7 @@ IMMUTABLE
 SET search_path = pg_catalog
 AS $$
 DECLARE
-  digits constant text := btrim(coalesce(p_value, ''));
+  digits constant text := public.trim_requisite(p_value);
   weights_10 constant int[] := ARRAY[2, 4, 10, 3, 5, 9, 4, 6, 8];
   weights_11 constant int[] := ARRAY[7, 2, 4, 10, 3, 5, 9, 4, 6, 8];
   weights_12 constant int[] := ARRAY[3, 7, 2, 4, 10, 3, 5, 9, 4, 6, 8];
@@ -72,7 +91,7 @@ LANGUAGE sql
 IMMUTABLE
 SET search_path = pg_catalog
 AS $$
-  SELECT btrim(coalesce(p_value, '')) ~ '^[0-9]{4}([0-9A-Z]{2})[0-9]{3}$'
+  SELECT public.trim_requisite(p_value) ~ '^[0-9]{4}[0-9A-Z]{2}[0-9]{3}$'
 $$;
 
 COMMENT ON FUNCTION public.is_valid_inn(text) IS
@@ -94,8 +113,10 @@ SECURITY DEFINER
 SET search_path = public, pg_temp
 AS $$
 DECLARE
-  inn constant text := nullif(btrim(coalesce(NEW.requisites ->> 'inn', '')), '');
-  kpp constant text := nullif(btrim(coalesce(NEW.requisites ->> 'kpp', '')), '');
+  -- Лишние пробелы (в том числе неразрывный из буфера обмена) убираем, а не просто
+  -- не замечаем: иначе «7736012343 » уехало бы в счёт и в акт вместе с пробелом.
+  inn constant text := nullif(public.trim_requisite(NEW.requisites ->> 'inn'), '');
+  kpp constant text := nullif(public.trim_requisite(NEW.requisites ->> 'kpp'), '');
 BEGIN
   -- Старые записи не трогаем: проверяем только то, что сейчас вписали.
   IF TG_OP = 'UPDATE'
@@ -105,7 +126,7 @@ BEGIN
   END IF;
 
   IF inn IS NOT NULL AND NOT public.is_valid_inn(inn) THEN
-    RAISE EXCEPTION 'ИНН «%» не похож на настоящий: нужно 10 цифр у организации или 12 у предпринимателя, и последняя цифра должна сойтись с остальными. Проверьте номер в реквизитах', inn
+    RAISE EXCEPTION 'ИНН «%» не похож на настоящий: у организации 10 цифр, у предпринимателя 12, и номер должен сойтись с собственной контрольной суммой. Проверьте номер в реквизитах', inn
       USING ERRCODE = '23514', CONSTRAINT = 'payers_inn_invalid';
   END IF;
   IF kpp IS NOT NULL AND NOT public.is_valid_kpp(kpp) THEN
@@ -115,6 +136,18 @@ BEGIN
   IF kpp IS NOT NULL AND inn IS NULL THEN
     RAISE EXCEPTION 'КПП без ИНН не бывает: укажите ИНН или уберите КПП'
       USING ERRCODE = '23514', CONSTRAINT = 'payers_kpp_without_inn';
+  END IF;
+
+  -- Храним уже обрезанное: дальше реквизиты уходят в счёт и в печатный акт как есть.
+  IF (NEW.requisites ->> 'inn') IS DISTINCT FROM inn THEN
+    NEW.requisites := CASE WHEN inn IS NULL
+      THEN NEW.requisites - 'inn'
+      ELSE jsonb_set(NEW.requisites, '{inn}', to_jsonb(inn)) END;
+  END IF;
+  IF (NEW.requisites ->> 'kpp') IS DISTINCT FROM kpp THEN
+    NEW.requisites := CASE WHEN kpp IS NULL
+      THEN NEW.requisites - 'kpp'
+      ELSE jsonb_set(NEW.requisites, '{kpp}', to_jsonb(kpp)) END;
   END IF;
   RETURN NEW;
 END
@@ -140,14 +173,14 @@ DECLARE
   broken text;
 BEGIN
   SELECT string_agg(format('%s (ИНН %s, КПП %s)', payer.name,
-                           coalesce(nullif(btrim(payer.requisites ->> 'inn'), ''), '—'),
-                           coalesce(nullif(btrim(payer.requisites ->> 'kpp'), ''), '—')),
+                           coalesce(nullif(public.trim_requisite(payer.requisites ->> 'inn'), ''), '—'),
+                           coalesce(nullif(public.trim_requisite(payer.requisites ->> 'kpp'), ''), '—')),
                     '; ' ORDER BY payer.name)
     INTO broken
     FROM public.payers AS payer
-   WHERE (nullif(btrim(payer.requisites ->> 'inn'), '') IS NOT NULL
+   WHERE (nullif(public.trim_requisite(payer.requisites ->> 'inn'), '') IS NOT NULL
           AND NOT public.is_valid_inn(payer.requisites ->> 'inn'))
-      OR (nullif(btrim(payer.requisites ->> 'kpp'), '') IS NOT NULL
+      OR (nullif(public.trim_requisite(payer.requisites ->> 'kpp'), '') IS NOT NULL
           AND NOT public.is_valid_kpp(payer.requisites ->> 'kpp'));
   IF broken IS NOT NULL THEN
     RAISE NOTICE 'Проверьте реквизиты плательщиков, они не проходят новую проверку: %', broken;
