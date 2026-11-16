@@ -2094,12 +2094,18 @@ export class M2ApiClient {
   ): Promise<readonly Row[]> {
     const PAGE = 500;
     const rows: Row[] = [];
-    for (let from = 0; ; from += PAGE) {
-      const query = this.db().from(table).select(columns).order(order).range(from, from + PAGE - 1);
+    // Сдвигаемся на столько строк, сколько пришло: сервер может отдать меньше
+    // запрошенного (max_rows), и шаг по размеру страницы тогда пропускал бы записи.
+    // Сортировка с id вторым ключом: у площадок имена повторяются у разных организаций.
+    for (let from = 0; ; ) {
+      const query = this.db().from(table).select(columns).order(order).order("id")
+        .range(from, from + PAGE - 1);
       const { data, error } = await (activeOnly ? query.eq("is_active", true) : query);
       throwIfError(error);
-      for (const item of data ?? []) rows.push(asRow(item));
-      if ((data ?? []).length < PAGE) return rows;
+      const received = data ?? [];
+      for (const item of received) rows.push(asRow(item));
+      if (received.length === 0) return rows;
+      from += received.length;
     }
   }
 
