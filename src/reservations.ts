@@ -267,6 +267,11 @@ export interface ReservationFilters {
 
 export const EMPTY_RESERVATION_FILTERS: ReservationFilters = { search: "", status: "", engineer: "", taskNumber: "", partId: "" };
 
+/** Выбрано ли хоть одно условие: от этого зависит, что писать на пустом месте. */
+export function hasReservationFilters(filters: ReservationFilters): boolean {
+  return Object.values(filters).some((value) => value.trim() !== "");
+}
+
 /** Инженер строки: кому выдали, иначе инженер задачи. Без них резерв ничей. */
 export function reservationEngineerName(reservation: Pick<StockReservationRecord, "issuedToName" | "engineerName">): string | undefined {
   return reservation.issuedToName ?? reservation.engineerName;
@@ -306,8 +311,16 @@ export function reservationFilterOptions(items: readonly StockReservationRecord[
 } {
   const statuses = RESERVATION_STATUSES_IN_ORDER.filter((status) => items.some((item) => item.status === status))
     .map((status) => ({ value: status, label: RESERVATION_STATUS_LABELS[status] }));
-  const unique = (options: readonly ReservationFilterOption[]) => [...new Map(options.map((option) => [option.value, option])).values()]
-    .sort((left, right) => left.label.localeCompare(right.label, "ru"));
+  // Из одинаковых значений оставляем подпись подробнее: у одного резерва название задачи
+  // может быть, а у другого нет, и в списке должно остаться «З-000045 · Замена насоса».
+  const unique = (options: readonly ReservationFilterOption[]) => {
+    const byValue = new Map<string, ReservationFilterOption>();
+    for (const option of options) {
+      const known = byValue.get(option.value);
+      if (!known || option.label.length > known.label.length) byValue.set(option.value, option);
+    }
+    return [...byValue.values()].sort((left, right) => left.label.localeCompare(right.label, "ru"));
+  };
   return {
     statuses,
     engineers: unique(items.map(reservationEngineerName).filter((name): name is string => Boolean(name)).map((name) => ({ value: name, label: name }))),

@@ -4,7 +4,6 @@ import { toast } from "./ui.js";
 import {
   RESERVATION_BOARD_STATUSES,
   RESERVATION_STATUS_LABELS,
-  RESERVATION_STATUS_TONES,
   reservationDropDecision,
   reservationQuantityText,
   reservationTaskNote,
@@ -69,7 +68,8 @@ export function ReservationBoard({ items, canWrite, busyId, loading, onAction }:
       onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; }}
       onDrop={(event) => drop(event, status)}
     >
-      <header><div><span className="task-board__title"><span aria-hidden="true" className={`task-board__dot task-board__dot--${RESERVATION_STATUS_TONES[status]}`} />{RESERVATION_STATUS_LABELS[status]}</span><strong>{cards.length}</strong></div></header>
+      {/* Цвет точки берётся из колонки (--stage-color), отдельного класса по тону не нужно. */}
+      <header><div><span className="task-board__title"><span aria-hidden="true" className="task-board__dot" />{RESERVATION_STATUS_LABELS[status]}</span><strong>{cards.length}</strong></div></header>
       <div className="task-board__cards">
         {loading && cards.length === 0 ? <p className="task-board__empty">Загружаем резервы…</p> : null}
         {cards.map((reservation) => {

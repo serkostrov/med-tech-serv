@@ -14,6 +14,7 @@ import {
   RESERVATION_STATUS_TONES,
   availableReservationActions,
   filterReservations,
+  hasReservationFilters,
   issueBlockReason,
   lastReservationStep,
   reservationFilterOptions,
@@ -88,8 +89,13 @@ export function ReservationsPage() {
     setLoading(true);
     setLoadError(null);
     try {
+      // Два запроса подряд, а не параллельно: в старой базе без истории шагов первый
+      // ответ подсказывает второму, что из запроса убрать. Параллельные запросы отключили
+      // бы истории на два шага сразу и увели имена авторов со всех экранов.
       const next = nextView === "board"
-        ? (await Promise.all([m2Api.stockReservations("active"), m2Api.stockReservations("closed")])).flat()
+        ? [...await m2Api.stockReservations("active"), ...await m2Api.stockReservations("closed")]
+          // Снятого резерва на доске нет: такой колонки нет, и в фильтр по состоянию он не попадёт.
+          .filter((item) => item.status !== "cancelled")
         : await m2Api.stockReservations(nextTab === "closed" ? "closed" : "active");
       if (turn === loadTurn.current) setItems(next);
     } catch (error) {
@@ -157,7 +163,7 @@ export function ReservationsPage() {
   const counting = loading && items.length === 0;
   const options = useMemo(() => reservationFilterOptions(items), [items]);
   const visible = useMemo(() => filterReservations(items, appliedFilters), [items, appliedFilters]);
-  const filtered = visible.length !== items.length;
+  const filtered = hasReservationFilters(appliedFilters);
   const groups = view === "list" && tab === "engineers" ? reservationsByEngineer(visible) : [];
   const issuedCount = groups.reduce((total, group) => total + group.items.length, 0);
 
@@ -209,8 +215,16 @@ export function ReservationsPage() {
     </FilterBar>
     {view === "board" ? <>
       {loadError ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Резервы не загрузились" />
+        : !loading && visible.length === 0 ? <ResourceState
+          description={filtered ? "Измените условия или сбросьте фильтры." : "Когда под задачу зарезервируют запчасть, она появится на доске."}
+          status={filtered ? "filtered-empty" : "empty"}
+          title={filtered ? "Резервов по этим условиям нет" : "Резервов пока нет"}
+        />
         : <>
-          <p className="reservation-board__note">Перенесите карточку в соседнюю колонку, чтобы собрать запчасть, выдать её инженеру или принять обратно. Снятые резервы видно в списке, на вкладке «Закрытые».</p>
+          <p className="reservation-board__note">{canWrite
+            ? "Перенесите карточку в соседнюю колонку, чтобы собрать запчасть, выдать её инженеру или принять обратно."
+            : "Доска только показывает: собирать и выдавать запчасти может кладовщик."
+          } Снятые резервы видно в списке, на вкладке «Закрытые», там же все закрытые, кроме последней сотни.</p>
           <ReservationBoard busyId={busyId} canWrite={canWrite} items={visible} loading={loading} onAction={runFromRow} />
         </>}
     </> : tab === "engineers" ? <DataTableShell

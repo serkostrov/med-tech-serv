@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient, stockReservationRecord } from "./m2-api.js";
-import { EMPTY_RESERVATION_FILTERS, RESERVATION_BOARD_STATUSES, RESERVATION_STATUS_LABELS, availableReservationActions, filterReservations, issueBlockReason, reservationActions, reservationDropDecision, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
+import { EMPTY_RESERVATION_FILTERS, RESERVATION_BOARD_STATUSES, RESERVATION_STATUS_LABELS, availableReservationActions, filterReservations, hasReservationFilters, issueBlockReason, reservationActions, reservationDropDecision, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
 
 /** Поддельный клиент Supabase: запоминает цепочку запроса к таблице и вызовы функций базы. */
 function fakeClient(response: { data?: unknown; error?: { message: string; code?: string } | null }) {
@@ -113,6 +113,12 @@ describe("резервы склада", () => {
     assert.deepEqual(options.statuses, [{ value: "created", label: "Ждёт сборки" }, { value: "issued", label: "У инженера" }]);
     assert.deepEqual(options.engineers.map((item) => item.value), ["Иванов Пётр Алексеевич", "Кузнецова Мария Олеговна"]);
     assert.deepEqual(options.tasks.map((item) => item.label), ["З-1 · Ремонт дозатора", "З-2"]);
+    // У одной задачи резервы пришли и с названием, и без: в списке остаётся подпись подробнее.
+    assert.deepEqual(reservationFilterOptions([...items, { ...items[1]!, id: "r4", taskTitle: "Замена фильтра" }]).tasks.map((item) => item.label),
+      ["З-1 · Ремонт дозатора", "З-2 · Замена фильтра"]);
+    assert.equal(hasReservationFilters(EMPTY_RESERVATION_FILTERS), false);
+    assert.equal(hasReservationFilters({ ...EMPTY_RESERVATION_FILTERS, search: "  " }), false);
+    assert.equal(hasReservationFilters({ ...EMPTY_RESERVATION_FILTERS, status: "issued" }), true);
     assert.deepEqual(options.parts.map((item) => item.label), ["AU-LAMP · Лампа галогеновая", "XN-FILTER · Фильтр крови"]);
   });
 

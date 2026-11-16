@@ -138,7 +138,11 @@ export function WarehousePage() {
   const [editing, setEditing] = useState<InventoryPartRecord | "new" | null>(null);
   const [receiving, setReceiving] = useState<InventoryPartRecord | null>(null);
   const [deactivating, setDeactivating] = useState<InventoryPartRecord | null>(null);
+  // Ответ на прежний запрос не должен затереть свежий: доска и страница списка просят
+  // разные объёмы, и при быстром переключении ответы могут прийти не по порядку.
+  const loadTurn = useRef(0);
   const reload = async (nextFilters = filters, nextPageIndex = pageIndex, nextView = viewRef.current) => {
+    const turn = ++loadTurn.current;
     setLoading(true);
     try {
       const board = nextView === "board";
@@ -147,10 +151,11 @@ export function WarehousePage() {
         limit: board ? INVENTORY_BOARD_LIMIT : pageSizeRef.current,
         offset: board ? 0 : nextPageIndex * pageSizeRef.current
       });
+      if (turn !== loadTurn.current) return;
       setParts(page.items); setTotal(page.total); setSummary(page.summary); setPageIndex(board ? 0 : nextPageIndex);
     }
-    catch (loadError) { toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить склад"); }
-    finally { setLoading(false); }
+    catch (loadError) { if (turn === loadTurn.current) toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить склад"); }
+    finally { if (turn === loadTurn.current) setLoading(false); }
   };
   useEffect(() => { void reload(); }, []);
   const changeView = (next: "board" | "list") => {

@@ -5750,20 +5750,6 @@ td .resource-state {
   gap: 6px;
 }
 
-.new-task-label {
-  display: inline-flex;
-  min-height: 22px;
-  align-items: center;
-  padding: 2px 8px;
-  border-radius: 999px;
-  color: #ffffff;
-  background: var(--color-accent);
-  font-size: 11px;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
 .mobile-task-card__heading {
   display: grid;
   gap: 2px;
@@ -8305,7 +8291,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Карточка в двух начертаниях: жирное только название задачи. Номер, инженер, срок и
    пометка «Срочно» идут обычным текстом, разница между ними — цвет, а не жирность. */
 .task-board-card__open > .task-board-card__top { display: flex; align-items: center; gap: 8px; color: var(--color-accent-dark); font-size: 12.5px; font-weight: 400; font-variant-numeric: tabular-nums; }
-.task-board-card__open > .task-board-card__top i { margin-left: auto; color: var(--color-danger); font-size: 12px; font-style: normal; font-weight: 400; }
+.task-board-card__open > .task-board-card__top i { margin-left: auto; padding: 0; border-radius: 0; color: var(--color-danger); background: none; font-size: 12px; font-style: normal; font-weight: 400; }
 .task-board-card__open > strong { color: var(--color-ink); font-size: 14px; font-weight: 650; line-height: 1.35; }
 .task-board-card__open > small { color: var(--color-muted); font-size: 12.5px; line-height: 1.4; }
 .task-board-card__foot { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 7px; margin-top: 4px; padding-top: 8px; border-top: 1px solid #f0f3f5; min-width: 0; }
@@ -8329,12 +8315,19 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .task-board__column--reservation-returned { --stage-color: #8a9aa3; }
 .reservation-board .task-board-card__open > small { overflow-wrap: break-word; }
 .reservation-board__note { margin: 0 0 8px; color: var(--color-muted); font-size: 13px; }
+/* Над доской резервов стоят карточки сводки, фильтры и подсказка, поэтому высота
+   считается от своего верха, а не от того, где начинается доска задач. */
+.reservation-board { height: clamp(300px, calc(100dvh - 250px), 760px); }
+/* Карточки резервов переносит только кладовщик: иначе «хватайка» обещала бы лишнее. */
+.reservation-board .task-board-card[draggable="false"] { cursor: default; }
 
 /* ===== Доска склада: только смотреть, колонки по тревожности запаса ===== */
 .task-board__column--stock-out { --stage-color: #c23b47; }
 .task-board__column--stock-below { --stage-color: #e07a2e; }
 .task-board__column--stock-low { --stage-color: #d9a400; }
 .task-board__column--stock-normal { --stage-color: #1f8a52; }
+/* Над доской склада ещё и шапка карточки со счётчиком позиций: места меньше, чем у резервов. */
+.inventory-board { height: clamp(300px, calc(100dvh - 330px), 760px); }
 .inventory-board .task-board-card { cursor: default; }
 .inventory-board .task-board-card__open > strong { overflow-wrap: break-word; }
 /* «На складе» и «Доступно» в одну строку: подписи шире, чем у карточки задачи */
