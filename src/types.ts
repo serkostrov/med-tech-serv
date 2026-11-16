@@ -42,6 +42,8 @@ export interface NotificationJournalResponse {
   readonly offset: number;
   readonly hasMore?: boolean;
   readonly nextOffset?: number;
+  /** Журнал отдан не целиком, а только по адресату: инженер видит лишь свои письма (миграция 0034). */
+  readonly ownOnly?: boolean;
 }
 
 export type MailInboxStatus = "pending" | "parsed" | "converted" | "ignored" | "failed";

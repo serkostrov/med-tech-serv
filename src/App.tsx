@@ -2603,6 +2603,9 @@ function NotificationsPage() {
   const [filters, setFilters] = useState({ channel: "", status: "", eventCode: "", recipient: "" });
   const [openId, setOpenId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  // Инженеру и кладовщику журнал отдают только по их адресам: об этом надо сказать прямо,
+  // иначе «3 из 3» читается как «система отправила всего три письма».
+  const [ownOnly, setOwnOnly] = useState(false);
   const reload = async (current = filters, targetPageIndex = pageIndex) => {
     setLoading(true);
     try {
@@ -2613,6 +2616,7 @@ function NotificationsPage() {
       });
       setItems(page.items);
       setTotal(page.total);
+      setOwnOnly(page.ownOnly === true);
     } catch (loadError) {
       toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить уведомления");
     } finally {
@@ -2639,7 +2643,7 @@ function NotificationsPage() {
   const tone = (status: string): StatusTone => status === "failed" ? "danger" : status === "delivered" || status === "sent" ? "success" : "warning";
   const channelLabel: Readonly<Record<string, string>> = { email: "E-mail", telegram: "Telegram", max: "MAX", sms: "СМС" };
   const filtered = Boolean(filters.status || filters.eventCode || filters.recipient || filters.channel);
-  return <><PageIntro title="Уведомления" />
+  return <><PageIntro {...(ownOnly ? { description: "Здесь письма и сообщения, адресованные вам. Переписку с клиентами и сообщения другим сотрудникам ведёт координатор." } : {})} title="Уведомления" />
     <FilterBar loading={loading} onReset={() => { const reset = { channel: "", status: "", eventCode: "", recipient: "" }; setFilters(reset); setPageIndex(0); void reload(reset, 0); }} onSubmit={() => { setPageIndex(0); return reload(filters, 0); }}>
       <label>Канал<Select onChange={(event) => changeFilter("channel", event.target.value)} value={filters.channel}><option value="">Все каналы</option><option value="email">E-mail</option><option value="telegram">Telegram</option></Select></label>
       <label>Событие<Select onChange={(event) => changeFilter("eventCode", event.target.value)} value={filters.eventCode}><option value="">Все события</option>{Object.entries(eventLabel).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</Select></label>

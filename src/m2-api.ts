@@ -6,6 +6,7 @@ import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistory
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
 import { getSupabase, type AppSupabaseClient } from "./lib/supabase.js";
+import { canReadWholeNotificationJournal } from "./notification-journal.js";
 import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import type {
@@ -1600,7 +1601,12 @@ export class M2ApiClient {
   } = {}): Promise<NotificationJournalResponse> {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
+    // Инженеру, кладовщику и инициатору положены только свои уведомления (миграция 0034).
+    // Правило держит база, запрос его повторяет: иначе счётчик «N из N» считал бы чужие строки.
+    const session = await this.cachedSession();
+    const ownOnly = !canReadWholeNotificationJournal(session.permissions);
     let request = this.db().from("notifications").select("id, event_code, recipient_user_id, channel, recipient_address, subject, body, status, scheduled_at, sent_at, delivered_at, attempts, last_error, task_id, created_at", { count: "exact" }).order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+    if (ownOnly) request = request.eq("recipient_user_id", session.id);
     if (query.channel) request = request.eq("channel", query.channel);
     if (query.status) request = request.eq("status", query.status);
     if (query.eventCode) request = request.eq("event_code", query.eventCode);
@@ -1632,7 +1638,8 @@ export class M2ApiClient {
       }),
       total: count ?? 0,
       limit,
-      offset
+      offset,
+      ownOnly
     };
   }
 
