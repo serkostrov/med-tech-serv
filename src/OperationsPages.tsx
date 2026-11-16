@@ -1,8 +1,9 @@
-import React, { useEffect, useState, type FormEvent } from "react";
+import React, { useEffect, useRef, useState, type FormEvent } from "react";
 import { m2Api, type EngineerOverview, type InventoryPartRecord, type OperationsReportRecord } from "./m2-api.js";
+import { InventoryBoard } from "./InventoryBoard.js";
 import { EngineerCompetencyEditor, type CompetencyDraft, type CompetencyReferences } from "./EngineerCompetencyEditor.js";
 import { competenciesToSave, competencyKey, competencyLabel, withManufacturerIds, type EngineerCompetency } from "./engineer-competencies.js";
-import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, toast } from "./ui.js";
+import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, ViewSwitch, toast } from "./ui.js";
 import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate } from "./date-format.js";
 import { companyToday } from "./task-dates.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
@@ -114,6 +115,12 @@ export function EngineersPage() {
 
 const emptyPart = { articleNumber: "", name: "", minimumStock: 0, notes: "", isActive: true };
 
+/**
+ * Сколько позиций читаем на доску склада: доска показывает все колонки сразу, поэтому
+ * страницами её не листают. Столько же читает выбор запчасти в задаче.
+ */
+const INVENTORY_BOARD_LIMIT = 500;
+
 export function WarehousePage() {
   const [parts, setParts] = useState<readonly InventoryPartRecord[]>([]);
   const [loading, setLoading] = useState(true);
@@ -124,19 +131,33 @@ export function WarehousePage() {
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
   const { pageSize, pageSizeRef, setPageSize } = usePageSize("inventory");
+  // Доска или список, как в задачах и резервах. На складе доска только показывает:
+  // остаток меняется приходом и выдачей, а не переносом карточки.
+  const [view, setView] = useState<"board" | "list">("list");
+  const viewRef = useRef<"board" | "list">("list");
   const [editing, setEditing] = useState<InventoryPartRecord | "new" | null>(null);
   const [receiving, setReceiving] = useState<InventoryPartRecord | null>(null);
   const [deactivating, setDeactivating] = useState<InventoryPartRecord | null>(null);
-  const reload = async (nextFilters = filters, nextPageIndex = pageIndex) => {
+  const reload = async (nextFilters = filters, nextPageIndex = pageIndex, nextView = viewRef.current) => {
     setLoading(true);
     try {
-      const page = await m2Api.inventoryPartPage({ ...nextFilters, limit: pageSizeRef.current, offset: nextPageIndex * pageSizeRef.current });
-      setParts(page.items); setTotal(page.total); setSummary(page.summary); setPageIndex(nextPageIndex);
+      const board = nextView === "board";
+      const page = await m2Api.inventoryPartPage({
+        ...nextFilters,
+        limit: board ? INVENTORY_BOARD_LIMIT : pageSizeRef.current,
+        offset: board ? 0 : nextPageIndex * pageSizeRef.current
+      });
+      setParts(page.items); setTotal(page.total); setSummary(page.summary); setPageIndex(board ? 0 : nextPageIndex);
     }
     catch (loadError) { toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить склад"); }
     finally { setLoading(false); }
   };
   useEffect(() => { void reload(); }, []);
+  const changeView = (next: "board" | "list") => {
+    viewRef.current = next;
+    setView(next);
+    void reload(filters, 0, next);
+  };
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
@@ -191,14 +212,23 @@ export function WarehousePage() {
   };
   const draft = editing === "new" ? emptyPart : editing;
   return <>
-    <PageIntro actions={<Button icon="plus" onClick={() => { setFormError(null); setEditing("new"); }}>Добавить запчасть</Button>} description="Новую позицию добавьте кнопкой сверху. Остаток пополняйте кнопкой «Пополнить» в строке таблицы." title="Склад" />
+    <PageIntro
+      actions={<Button icon="plus" onClick={() => { setFormError(null); setEditing("new"); }}>Добавить запчасть</Button>}
+      description="Новую позицию добавьте кнопкой сверху. Остаток пополняйте кнопкой «Пополнить» в строке таблицы."
+      title="Склад"
+      titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать склад" onValueChange={changeView} value={view} />}
+    />
     <div className="metric-grid metric-grid--three">
       <MetricCard icon="inventory" label="Активные" value={String(summary.active)} />
       <MetricCard icon="warehouse" label="Мало на складе" tone="orange" value={String(summary.belowMinimum)} />
       <MetricCard icon="engineers" label="У инженеров" tone="purple" value={String(summary.withEngineers)} />
     </div>
     <FilterBar loading={loading} onReset={() => { const reset = { search: "", state: "active", stock: "", sort: "article_asc" }; setFilters(reset); void reload(reset, 0); }} onSubmit={() => reload(filters, 0)}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Артикул или наименование" type="search" value={filters.search} /></label><label>Состояние<Select onChange={(event) => setFilters((current) => ({ ...current, state: event.target.value }))} value={filters.state}><option value="active">Активные</option><option value="low">Ниже минимума</option><option value="inactive">Неактивные</option><option value="all">Все</option></Select></label><label>Наличие<Select onChange={(event) => setFilters((current) => ({ ...current, stock: event.target.value }))} value={filters.stock}><option value="">Любое</option><option value="available">Есть доступные</option><option value="none">Доступных нет</option><option value="engineers">На руках у инженеров</option></Select></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value }))} value={filters.sort}><option value="article_asc">Артикул А–Я</option><option value="article_desc">Артикул Я–А</option><option value="name_asc">Наименование</option><option value="available_asc">Сначала малый остаток</option><option value="available_desc">Сначала большой остаток</option></Select></label></FilterBar>
-    <DataTableShell meta={`${total} позиций`} title="Запчасти">{loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" /> : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} /> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Артикул</th><th>Наименование</th><th className="numeric">На складе</th><th className="numeric">В резерве</th><th className="numeric">Доступно</th><th className="numeric">Минимум</th><th className="numeric">У инженеров</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{parts.map((part) => <tr className={part.isActive ? "" : "reference-admin-table__inactive"} key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}</td><td className="numeric">{part.onHandQuantity}</td><td className="numeric">{part.reservedQuantity}</td><td className="numeric"><strong>{part.availableQuantity}</strong></td><td className="numeric">{part.minimumStock}</td><td className="numeric">{part.withEngineersQuantity}</td><td><StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge></td><td><div className="table-actions">{part.isActive ? <Button className="button--compact" onClick={() => { setFormError(null); setReceiving(part); }} variant="secondary">Пополнить</Button> : null}<IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(part); }} />{part.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(part)} /> : <IconButton icon="enable" label="Включить" onClick={() => void m2Api.updateInventoryPart(part.id, { isActive: true }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div><RegistryPagination ariaLabel="Страницы склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}</DataTableShell>
+    {view === "board" ? <DataTableShell meta={`${total} позиций${total > parts.length ? `, на доске первые ${parts.length}` : ""}`} title="Запас по позициям">
+      {loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" />
+        : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} />
+        : <InventoryBoard loading={loading} parts={parts} />}
+    </DataTableShell> : <DataTableShell meta={`${total} позиций`} title="Запчасти">{loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" /> : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} /> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Артикул</th><th>Наименование</th><th className="numeric">На складе</th><th className="numeric">В резерве</th><th className="numeric">Доступно</th><th className="numeric">Минимум</th><th className="numeric">У инженеров</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{parts.map((part) => <tr className={part.isActive ? "" : "reference-admin-table__inactive"} key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}</td><td className="numeric">{part.onHandQuantity}</td><td className="numeric">{part.reservedQuantity}</td><td className="numeric"><strong>{part.availableQuantity}</strong></td><td className="numeric">{part.minimumStock}</td><td className="numeric">{part.withEngineersQuantity}</td><td><StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge></td><td><div className="table-actions">{part.isActive ? <Button className="button--compact" onClick={() => { setFormError(null); setReceiving(part); }} variant="secondary">Пополнить</Button> : null}<IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(part); }} />{part.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(part)} /> : <IconButton icon="enable" label="Включить" onClick={() => void m2Api.updateInventoryPart(part.id, { isActive: true }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div><RegistryPagination ariaLabel="Страницы склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}</DataTableShell>}
     <DialogForm busy={saving} description={editing === "new" ? "Можно сразу указать начальный остаток — он попадёт на склад как поступление." : "Изменятся наименование, минимум и примечание. Остаток меняйте через «Пополнить»."} error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(draft)} submitLabel={editing === "new" ? "Добавить запчасть" : "Сохранить изменения"} title={editing === "new" ? "Новая запчасть" : "Изменить запчасть"}><label>Артикул<input autoFocus defaultValue={draft?.articleNumber} name="articleNumber" required /></label><label>Наименование<input defaultValue={draft?.name} name="name" required /></label><label>Минимальный остаток<input defaultValue={draft?.minimumStock} min="0" name="minimumStock" step="0.001" type="number" /></label>{editing === "new" ? <label>Начальный остаток<input defaultValue="0" min="0" name="initialQuantity" step="0.001" type="number" /></label> : null}<label className="field-wide">Примечание<AutoTextarea defaultValue={draft?.notes ?? ""} name="notes" rows={3} /></label></DialogForm>
     <DialogForm
       busy={saving}

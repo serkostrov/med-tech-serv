@@ -8309,6 +8309,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .reservation-board .task-board-card__open > small { overflow-wrap: break-word; }
 .reservation-board__note { margin: 0 0 8px; color: var(--color-muted); font-size: 13px; }
 
+/* ===== Доска склада: только смотреть, колонки по тревожности запаса ===== */
+.task-board__column--stock-out { --stage-color: #c23b47; }
+.task-board__column--stock-below { --stage-color: #e07a2e; }
+.task-board__column--stock-low { --stage-color: #d9a400; }
+.task-board__column--stock-normal { --stage-color: #1f8a52; }
+.inventory-board .task-board-card { cursor: default; }
+.inventory-board .task-board-card__open > strong { overflow-wrap: break-word; }
+/* «На складе» и «Доступно» в одну строку: подписи шире, чем у карточки задачи */
+.inventory-board .task-board-card__open dl div { grid-template-columns: 84px minmax(0, 1fr); }
+
 /* ===== Приборы v2: строка поиска и фильтров, плотная таблица, паспорт в две колонки ===== */
 .registry-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 14px; }
 .registry-toolbar__search { flex: 0 1 340px; min-width: 220px; }
