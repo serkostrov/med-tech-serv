@@ -61,7 +61,10 @@ CREATE INDEX IF NOT EXISTS tasks_created_at_idx ON public.tasks (created_at);
 
 -- Один набор задач периода со всем, что нужно разрезам. Остальные функции отчёта стоят
 -- на нём, чтобы правило «что считается задачей периода» лежало в одном месте.
--- Функция на SQL — планировщик подставляет её тело в запрос, лишнего прохода нет.
+-- Планировщик её не подставляет в запрос (из-за SET search_path функция не инлайнится),
+-- поэтому каждая функция отчёта проходит по задачам периода отдельно. Проходов три
+-- на открытие отчёта, и отбор идёт по индексу tasks_created_at_idx — этого достаточно;
+-- снимать SET search_path ради инлайнинга не будем, это защита от подмены объектов.
 CREATE OR REPLACE FUNCTION public.report_period_tasks(p_from date, p_to date)
 RETURNS TABLE (
   task_id uuid,
@@ -227,7 +230,8 @@ AS $$
       FROM period AS task
     UNION ALL
     SELECT 'reason', coalesce(task.reason_code, 'unset'),
-           coalesce(reason.name, 'Причина не указана'),
+           CASE WHEN task.reason_code IS NULL THEN 'Причина не указана'
+                ELSE coalesce(reason.name, task.reason_code) END,
            task.is_closed, task.is_overdue
       FROM period AS task
       LEFT JOIN public.task_reasons AS reason ON reason.code = task.reason_code

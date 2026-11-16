@@ -132,6 +132,17 @@ BEGIN
   VALUES (uid, 'Наблюдатель отчётов', 'supervisor', 'cuts-viewer@test.local', true, 'report_viewer');
   INSERT INTO ids VALUES ('viewer', uid);
 
+  -- Роль «деньги вижу, приборы нет»: в app_can_read_equipment права finance.read нет,
+  -- и обычное соединение с приборами выкинуло бы из затрат все строки.
+  INSERT INTO access_roles (key, name, base_role) VALUES ('money_only', 'Только деньги', 'supervisor');
+  INSERT INTO access_role_permissions (role_key, permission_code)
+  VALUES ('money_only', 'finance.read'), ('money_only', 'reports.read'), ('money_only', 'tasks.read');
+  uid := gen_random_uuid();
+  INSERT INTO auth.users (id, email, aud, role) VALUES (uid, 'cuts-money@test.local', 'authenticated', 'authenticated');
+  INSERT INTO public.users (id, full_name, role, email, is_active, access_role_key)
+  VALUES (uid, 'Только деньги', 'supervisor', 'cuts-money@test.local', true, 'money_only');
+  INSERT INTO ids VALUES ('money', uid);
+
   INSERT INTO organizations (name) VALUES ('Разрезы: организация') RETURNING id INTO org;
   INSERT INTO sites (name, organization_id) VALUES ('Разрезы: первая площадка', org) RETURNING id INTO site1;
   INSERT INTO sites (name, organization_id) VALUES ('Разрезы: вторая площадка', org) RETURNING id INTO site2;
@@ -426,6 +437,21 @@ SELECT pg_temp.check(
   (SELECT count(*) FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0
   AND (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0,
   'кладовщик затрат не видит');
+
+-- Роль «деньги без приборов»: затраты по приборам считаются, просто без названия
+-- прибора. Молча терять деньги из-за прав на справочник нельзя.
+SELECT pg_temp.act_as(pg_temp.uid('money'));
+SELECT pg_temp.check(
+  (SELECT count(*) FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))) = 2,
+  'затраты по приборам считаются и без права на приборы');
+SELECT pg_temp.check(
+  (SELECT trim_scale(total_amount) FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))
+    WHERE equipment_id = pg_temp.uid('eq1')) = 2000,
+  'суммы те же, хотя названия прибора не видно');
+SELECT pg_temp.check(
+  (SELECT serial_number FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))
+    WHERE equipment_id = pg_temp.uid('eq1')) = '',
+  'название прибора пустое, а не выдуманное');
 
 -- Роль «отчёты без денег»: разрезы по задачам отдаются, затраты — нет.
 SELECT pg_temp.act_as(pg_temp.uid('viewer'));

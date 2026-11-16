@@ -42,12 +42,16 @@ STABLE
 SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
+  -- Прибор и его справочники присоединяем слева, а группируем по ссылке из задачи.
+  -- Иначе строка затрат исчезала бы у роли, которой деньги видны, а приборы нет:
+  -- в app_can_read_equipment нет finance.read, и обычное соединение отбросило бы счёт
+  -- целиком. Потерять деньги молча хуже, чем показать строку без названия прибора.
   SELECT
-    equipment.id,
-    equipment.serial_number,
-    nullif(concat_ws(' ', maker.name, model.name), ''),
-    site.name,
-    payer.name,
+    task.equipment_id,
+    coalesce(max(equipment.serial_number), ''),
+    nullif(concat_ws(' ', max(maker.name), max(model.name)), ''),
+    max(site.name),
+    max(payer.name),
     count(DISTINCT task.id)::integer,
     count(DISTINCT invoice.id)::integer,
     coalesce(sum(item.line_total) FILTER (WHERE item.item_type = 'work'), 0)::numeric(14, 2),
@@ -56,23 +60,24 @@ AS $$
     FROM public.invoice_items AS item
     JOIN public.invoices AS invoice ON invoice.id = item.invoice_id
     JOIN public.tasks AS task ON task.id = item.task_id
-    JOIN public.equipment AS equipment ON equipment.id = task.equipment_id
+    LEFT JOIN public.equipment AS equipment ON equipment.id = task.equipment_id
     LEFT JOIN public.equipment_models AS model ON model.id = equipment.model_id
     LEFT JOIN public.manufacturers AS maker ON maker.id = equipment.manufacturer_id
     LEFT JOIN public.sites AS site ON site.id = equipment.current_site_id
     LEFT JOIN public.payers AS payer ON payer.id = equipment.current_payer_id
    WHERE public.app_has_permission('finance.read')
+     AND task.equipment_id IS NOT NULL
      AND invoice.status <> 'cancelled'
      AND (p_from IS NULL
           OR (coalesce(invoice.issued_at, invoice.created_at) AT TIME ZONE 'Europe/Moscow')::date >= p_from)
      AND (p_to IS NULL
           OR (coalesce(invoice.issued_at, invoice.created_at) AT TIME ZONE 'Europe/Moscow')::date <= p_to)
-   GROUP BY equipment.id, equipment.serial_number, maker.name, model.name, site.name, payer.name
-   ORDER BY coalesce(sum(item.line_total), 0) DESC, equipment.serial_number
+   GROUP BY task.equipment_id
+   ORDER BY coalesce(sum(item.line_total), 0) DESC, coalesce(max(equipment.serial_number), '')
 $$;
 
 COMMENT ON FUNCTION public.report_equipment_spend(date, date) IS
-  'Затраты по приборам за период (0045): суммы позиций неотменённых счетов по задачам прибора, отдельно работы и запчасти. Период по дню счёта (выставлен, у черновика создан) в московских сутках, границы включительно. Без finance.read возвращает пустой набор.';
+  'Затраты по приборам за период (0045): суммы позиций неотменённых счетов по задачам прибора, отдельно работы и запчасти. Итог здесь — сумма позиций, привязанных к задачам с прибором, поэтому он меньше итога по плательщикам, куда входят и позиции без задачи, и ручная корректировка. Период по дню счёта (выставлен, у черновика создан) в московских сутках, границы включительно; пустая граница — без ограничения. Без finance.read возвращает пустой набор.';
 
 REVOKE ALL ON FUNCTION public.report_equipment_spend(date, date) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.report_equipment_spend(date, date) TO authenticated;
@@ -102,7 +107,7 @@ SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
   WITH allowed AS (
-    SELECT invoice.id, invoice.payer_id, invoice.adjustment_amount, invoice.total_amount
+    SELECT invoice.id, invoice.payer_id, invoice.payer_name, invoice.adjustment_amount, invoice.total_amount
       FROM public.invoices AS invoice
      WHERE public.app_has_permission('finance.read')
        AND invoice.status <> 'cancelled'
@@ -123,6 +128,7 @@ AS $$
     SELECT
       allowed.payer_id,
       count(*)::integer AS invoice_count,
+      max(allowed.payer_name) AS payer_name_snapshot,
       sum(allowed.adjustment_amount) AS adjustment_amount,
       sum(allowed.total_amount) AS total_amount
       FROM allowed
@@ -130,7 +136,9 @@ AS $$
   )
   SELECT
     totals.payer_id,
-    coalesce(payer.name, 'Плательщик удалён'),
+    -- Живое имя из справочника, а снимок из счёта — запасной: его видно и тогда,
+    -- когда строку плательщика не отдали правила строк.
+    coalesce(payer.name, totals.payer_name_snapshot, 'Плательщик'),
     totals.invoice_count,
     coalesce(lines.task_count, 0),
     coalesce(lines.work_amount, 0)::numeric(14, 2),
@@ -140,11 +148,11 @@ AS $$
     FROM totals
     LEFT JOIN lines ON lines.payer_id = totals.payer_id
     LEFT JOIN public.payers AS payer ON payer.id = totals.payer_id
-   ORDER BY coalesce(totals.total_amount, 0) DESC, coalesce(payer.name, 'Плательщик удалён')
+   ORDER BY coalesce(totals.total_amount, 0) DESC, coalesce(payer.name, totals.payer_name_snapshot, 'Плательщик')
 $$;
 
 COMMENT ON FUNCTION public.report_payer_spend(date, date) IS
-  'Затраты по плательщикам за период (0045): по строке на плательщика — счетов, задач, суммы работ и запчастей, ручная корректировка и итог неотменённых счетов. Период по дню счёта в московских сутках. Без finance.read возвращает пустой набор.';
+  'Затраты по плательщикам за период (0045): по строке на плательщика — счетов, задач, суммы работ и запчастей, ручная корректировка и итог неотменённых счетов. Итог здесь — сумма итогов счетов, то есть с корректировкой и со всеми позициями, поэтому он не сходится с итогом по приборам. Период по дню счёта в московских сутках, границы включительно; пустая граница — без ограничения. Без finance.read возвращает пустой набор.';
 
 REVOKE ALL ON FUNCTION public.report_payer_spend(date, date) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.report_payer_spend(date, date) TO authenticated;
