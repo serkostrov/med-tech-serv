@@ -25,12 +25,15 @@ import {
   filterPriceLines,
   formatMoney,
   guaranteeWorkLabel,
+  nextPriceAfter,
   parseAmount,
   parseSignedNumber,
   previewBulkPrices,
+  priceLineAmountText,
   priceLineNextText,
   priceLineStartText,
   priceLines,
+  priceRowActiveOn,
   priceRowPeriodText,
   type BulkPriceMode,
   type PriceGuaranteeCategory,
@@ -77,7 +80,7 @@ function PriceHistory({ line, today, canWrite, onDelete }: {
   return <ul className="price-history__list">
     {line.history.map((row) => {
       const future = row.validFrom > today;
-      const active = !future && (row.validTo === null || today < row.validTo);
+      const active = priceRowActiveOn(row, today);
       return <li key={row.id}>
         <strong>{formatMoney(row.amount)}</strong>
         <span>{priceRowPeriodText(row)}</span>
@@ -153,7 +156,11 @@ export function PricePage() {
     setSelected((current) => current.size === 0 || [...current].every((key) => keys.has(key)) ? current : new Set([...current].filter((key) => keys.has(key))));
   }, [lines]);
 
-  const selectedLines = lines.filter((line) => selected.has(line.key));
+  // Процент и прибавку считаем от цены, действующей на выбранную дату начала: именно её
+  // закроет база. На сегодняшнюю цену смотреть нельзя — на ту дату может действовать другая.
+  const bulkOn = bulkFrom || today;
+  const bulkLines = useMemo(() => priceLines({ workTypes, rows, categories, on: bulkOn }), [workTypes, rows, categories, bulkOn]);
+  const selectedLines = bulkLines.filter((line) => selected.has(line.key));
   const bulkNumber = bulkMode === "fixed" ? parseAmount(bulkValue) : parseSignedNumber(bulkValue);
   const changes = bulkNumber === null ? [] : previewBulkPrices(selectedLines, { mode: bulkMode, value: bulkNumber });
   const items = bulkPriceItems(changes);
@@ -257,6 +264,8 @@ export function PricePage() {
     }
   };
 
+  // Позже выбранной даты уже есть цена: новая будет закрыта её началом и действующей не станет.
+  const laterPrice = editing && validFromDraft ? nextPriceAfter(editing.history, validFromDraft) : undefined;
   const columns = canWrite ? 7 : 5;
   const editorTitle = editing ? `Цена · ${editing.workTypeName}` : "Цена вида работ";
 
@@ -326,7 +335,9 @@ export function PricePage() {
                         type="checkbox"
                       /></td> : null}
                       <td><strong>{line.workTypeName}</strong><small>{line.guaranteeCategoryName} · {line.workTypeCode}</small></td>
-                      <td className="numeric">{line.current ? <strong>{formatMoney(line.current.amount)}</strong> : <span className="is-empty">{PRICE_NOT_SET_LABEL}</span>}</td>
+                      <td className="numeric">{line.current
+                        ? <strong>{priceLineAmountText(line)}</strong>
+                        : <span className="is-empty">{priceLineAmountText(line)}</span>}</td>
                       <td>{priceLineStartText(line)}{nextText ? <small>{nextText}</small> : null}</td>
                       <td>{line.current
                         ? <StatusBadge tone={line.current.includeGuaranteeWork ? "info" : "neutral"}>{guaranteeWorkLabel(line.current.includeGuaranteeWork)}</StatusBadge>
@@ -373,7 +384,9 @@ export function PricePage() {
           required
           value={amountDraft}
         /></label>
-        <label>Действует с *<DatePicker aria-label="Дата начала действия цены" onChange={setValidFromDraft} required value={validFromDraft} /></label>
+        <label>Действует с *<DatePicker aria-label="Дата начала действия цены" onChange={setValidFromDraft} required value={validFromDraft} />
+          {laterPrice ? <span className="form-hint">Позже уже есть цена {formatMoney(laterPrice.amount)} с {formatIsoCalendarDate(laterPrice.validFrom)}: новая будет действовать только до неё.</span> : null}
+        </label>
         <label className="dialog-form-grid__wide">Категория гарантии
           <Select onChange={(event) => setCategoryDraft(event.target.value)} value={categoryDraft}>
             <option value="">{ALL_CATEGORIES_LABEL}</option>
@@ -415,7 +428,10 @@ export function PricePage() {
           value={bulkValue}
         /></label>
         <label>Действует с *<DatePicker aria-label="Дата начала новых цен" onChange={setBulkFrom} required value={bulkFrom} /></label>
-        <p className="form-hint dialog-form-grid__wide">{BULK_MODES.find((mode) => mode.value === bulkMode)?.hint}</p>
+        <p className="form-hint dialog-form-grid__wide">
+          {BULK_MODES.find((mode) => mode.value === bulkMode)?.hint}
+          {bulkMode === "fixed" ? null : " Считаем от цены, которая действует на выбранную дату."}
+        </p>
       </div>
       <div className="price-preview">
         <span className="price-preview__label">Что получится</span>

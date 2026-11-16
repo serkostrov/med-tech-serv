@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import { describe, it } from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { M2ApiClient, M2ApiError } from "./m2-api.js";
+import { PricePage } from "./PricePage.js";
 import {
   ALL_CATEGORIES_LABEL,
   PRICE_NOT_SET_LABEL,
@@ -10,6 +14,7 @@ import {
   filterPriceLines,
   formatMoney,
   guaranteeWorkLabel,
+  nextPriceAfter,
   nextPriceAmount,
   parseAmount,
   parseSignedNumber,
@@ -133,11 +138,16 @@ describe("прайс: история по виду работ", () => {
   it("ближайшей будущей ценой считает самую раннюю из будущих", () => {
     const rows = [
       row({ id: "f2", validFrom: "2028-01-01", amount: 3000 }),
-      row({ id: "f1", validFrom: "2027-01-01", amount: 2000 })
+      row({ id: "f1", validFrom: "2027-01-01", validTo: "2028-01-01", amount: 2000 })
     ];
     const [line] = priceLines({ workTypes: [WORK_TYPES[0]], rows, on: "2026-11-16" });
     assert.equal(line?.next?.id, "f1");
     assert.equal(priceLineNextText({ next: line?.next }), "с 01.01.2027 — 2 000,00 ₽");
+  });
+
+  it("пустой справочник и пустой прайс дают пустой список, а не падение", () => {
+    assert.deepEqual(priceLines({ workTypes: [], rows: [], on: "2026-11-16" }), []);
+    assert.deepEqual(filterPriceLines([], "ремонт"), []);
   });
 
   it("не теряет цены вида работ, которого нет в справочнике", () => {
@@ -188,6 +198,19 @@ describe("прайс: пока цены нет", () => {
   });
 });
 
+describe("прайс: куда попадёт цена с выбранной даты", () => {
+  it("находит цену, которая начинается позже, — новая будет действовать только до неё", () => {
+    const history = priceRowHistory(ROWS, { workTypeCode: "diagnostics" });
+    // Дата в прошлом: впереди и действующая цена, и будущая — ближайшая из них 2026-03-01.
+    assert.equal(nextPriceAfter(history, "2025-06-01")?.validFrom, "2026-03-01");
+    // Правка той же датой трогает саму строку, а не ту, что за ней.
+    assert.equal(nextPriceAfter(history, "2026-03-01")?.validFrom, "2027-01-01");
+    // Позже всех цен ничего нет: цена станет действующей.
+    assert.equal(nextPriceAfter(history, "2027-06-01"), undefined);
+    assert.equal(nextPriceAfter([], "2026-11-16"), undefined);
+  });
+});
+
 describe("прайс: пересчёт процентом и суммой", () => {
   it("округляет до копеек, а не до рублей", () => {
     assert.equal(roundToKopecks(1.005), 1.01);
@@ -196,6 +219,9 @@ describe("прайс: пересчёт процентом и суммой", () =
     assert.equal(roundToKopecks(0.1 + 0.2), 0.3);
     assert.equal(roundToKopecks(-1.005), -1.01);
     assert.throws(() => roundToKopecks(Number.NaN), /число/u);
+    // Самая большая сумма, какую примет numeric(14,2), не должна разъехаться при округлении.
+    assert.equal(roundToKopecks(999999999999.99), 999999999999.99);
+    assert.equal(parseAmount("999999999999,99"), 999999999999.99);
   });
 
   it("процентом считает от действующей цены с копейками", () => {
@@ -234,6 +260,19 @@ describe("прайс: пересчёт процентом и суммой", () =
       { workTypeCode: "repair", guaranteeCategoryId: null, amount: 2200, includeGuaranteeWork: false },
       { workTypeCode: "repair", guaranteeCategoryId: "cat-gold", amount: 550, includeGuaranteeWork: false }
     ]);
+  });
+
+  it("считает от цены, действующей на дату начала, а не на сегодня", () => {
+    // С 2027-01-01 действует уже 1800, и +10% база посчитает от неё: иначе показанное
+    // «1 650,00 ₽» оказалось бы снижением цены.
+    const onNewYear = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2027-01-01" });
+    const changes = previewBulkPrices(onNewYear.slice(0, 1), { mode: "percent", value: 10 });
+    assert.deepEqual(changes.map((change) => [change.before, change.after]), [[1800, 1980]]);
+    // Флаг гарантии берём у той же строки: её база и будет править.
+    assert.equal(changes[0]?.includeGuaranteeWork, false);
+    // На дату, когда цены ещё не было, считать не из чего.
+    const onStart = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2024-01-01" });
+    assert.equal(previewBulkPrices(onStart.slice(0, 1), { mode: "percent", value: 10 })[0]?.after, undefined);
   });
 
   it("не отправляет в базу строки, где цена не меняется", () => {
@@ -345,6 +384,8 @@ describe("прайс: запросы к базе", () => {
       p_valid_from: "2026-12-01",
       p_include_guarantee_work: false
     }]);
+    // Запись только через функцию базы: в price_list напрямую не ходим, там страж.
+    assert.deepEqual(fake.requests.map((request) => request.target), ["rpc:set_work_price"]);
   });
 
   it("массовое изменение уходит одним вызовом и возвращает число изменённых позиций", async () => {
@@ -361,6 +402,7 @@ describe("прайс: запросы к базе", () => {
       ],
       p_valid_from: "2026-12-01"
     }]);
+    assert.deepEqual(fake.requests.map((request) => request.target), ["rpc:bulk_update_work_prices"]);
   });
 
   it("удаляет будущую цену функцией базы, а не записью в таблицу", async () => {
@@ -385,5 +427,35 @@ describe("прайс: запросы к базе", () => {
       workTypeCode: "diagnostics", guaranteeCategoryId: null, amount: -1, validFrom: "2026-12-01", includeGuaranteeWork: false
     }), /цену/u);
     assert.deepEqual(fake.requests, []);
+  });
+});
+
+describe("прайс: экран и его место в приложении", () => {
+  it("раздел открывается по price.read или finance.read, правка — только по price.write", async () => {
+    const [app, navigation, page] = await Promise.all([
+      readFile(new URL("./App.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./navigation.ts", import.meta.url), "utf8"),
+      readFile(new URL("./PricePage.tsx", import.meta.url), "utf8")
+    ]);
+    assert.match(app, /case "price": return <PricePage \/>/u);
+    assert.match(app, /permission === "price\.read" \|\| permission === "finance\.read"/u);
+    assert.match(navigation, /id: "price", label: "Прайс"/u);
+    assert.match(page, /m2Api\.hasPermission\("price\.write"\)\.then\(setCanWrite\)/u);
+    // Сегодня по Москве, а не по поясу устройства.
+    assert.match(page, /companyToday\(\)/u);
+    // Общие окна и выпадающие списки, как на соседних экранах.
+    assert.match(page, /DialogForm/u);
+    assert.match(page, /ConfirmationDialog/u);
+    assert.doesNotMatch(page, /<select[\s>]/u);
+    assert.doesNotMatch(page, /window\.(?:alert|confirm|prompt)\s*\(/u);
+  });
+
+  it("рисуется до загрузки данных: заголовок, сводка и «идёт загрузка»", () => {
+    const html = renderToStaticMarkup(createElement(PricePage));
+    assert.match(html, /Прайс/u);
+    assert.match(html, /Загружаем прайс/u);
+    assert.match(html, /Цены заданы/u);
+    // Права ещё не прочитаны: кнопок правки на экране нет.
+    assert.doesNotMatch(html, /Изменить выбранные/u);
   });
 });

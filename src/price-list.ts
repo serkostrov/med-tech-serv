@@ -38,7 +38,8 @@ const UNKNOWN_CATEGORY_LABEL = "Категория не из справочни�
 
 /** Ключ области действия цены, как `scope_key` в базе: категория гарантии или «*». */
 export function priceScopeKey(guaranteeCategoryId: string | null | undefined): string {
-  return guaranteeCategoryId ?? "*";
+  // Пустую строку из поля выбора считаем «категория не выбрана», иначе получилась бы своя область действия.
+  return guaranteeCategoryId || "*";
 }
 
 /** Ключ строки списка: вид работ и область действия цены. */
@@ -72,8 +73,9 @@ export function priceRowActiveOn(row: PriceListRow, on: string): boolean {
 
 /**
  * Цена, действовавшая на дату: сначала по точной категории гарантии, а если такой строки
- * нет — цена «для всех» (`guaranteeCategoryId = null`). Так же выбирает цену функция базы
- * `work_price_on`.
+ * нет — цена «для всех» (`guaranteeCategoryId = null`). Это зеркало функции базы
+ * `work_price_on`: по нему берут цену работы для прибора с его категорией гарантии (счёт,
+ * акт). В списке прайса подстановки нет намеренно — там у каждой области действия своя строка.
  */
 export function effectivePriceRow(
   rows: readonly PriceListRow[],
@@ -132,8 +134,7 @@ export function priceLines(input: {
       // Своя цена категории, без подстановки «для всех»: иначе в строке категории
       // показалась бы чужая цена, а правка завела бы ей новую.
       const current = history.find((row) => priceRowActiveOn(row, input.on));
-      // История идёт от новых к старым, поэтому ближайшая будущая цена — последняя из будущих.
-      const next = history.filter((row) => row.validFrom > input.on).at(-1);
+      const next = nextPriceAfter(history, input.on);
       return {
         key: priceLineKey(workType.code, guaranteeCategoryId),
         workTypeCode: workType.code,
@@ -158,11 +159,12 @@ export function filterPriceLines(lines: readonly PriceLine[], search: string): r
 
 /**
  * Копейки: 1,005 превращается в 1,01. Умножение на 100 в double даёт 100.49999999999999,
- * поэтому лишний хвост убираем до округления.
+ * поэтому лишний хвост убираем до округления. Пятнадцати значащих цифр хватает и на
+ * копейки самой большой суммы, какую примет база (numeric(14,2)).
  */
 export function roundToKopecks(value: number): number {
   if (!Number.isFinite(value)) throw new Error("Сумма должна быть числом");
-  const scaled = Number((value * 100).toPrecision(12));
+  const scaled = Number((value * 100).toPrecision(15));
   return (scaled < 0 ? -Math.round(-scaled) : Math.round(scaled)) / 100;
 }
 
@@ -297,6 +299,16 @@ export function priceRowPeriodText(row: Pick<PriceListRow, "validFrom" | "validT
 /** Будущая цена, о которой стоит предупредить в строке: «с 01.01.2027 — 1 200,00 ₽». */
 export function priceLineNextText(line: Pick<PriceLine, "next">): string | undefined {
   return line.next ? `с ${formatIsoCalendarDate(line.next.validFrom)} — ${formatMoney(line.next.amount)}` : undefined;
+}
+
+/**
+ * Ближайшая цена, которая начинается позже даты. Если такая есть, новая цена с этой даты
+ * будет закрыта её началом (так делает `set_work_price`) и действующей не станет.
+ */
+export function nextPriceAfter(history: readonly PriceListRow[], validFrom: string): PriceListRow | undefined {
+  // История идёт от новых к старым, поэтому ближайшая из поздних цен — последняя из них.
+  return [...history].sort((left, right) => right.validFrom.localeCompare(left.validFrom))
+    .filter((row) => row.validFrom > validFrom).at(-1);
 }
 
 /** Удалить можно только ещё не начавшуюся цену: историю база не отдаёт (`delete_future_work_price`). */

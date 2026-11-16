@@ -8699,7 +8699,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* ===== Прайс: цены по видам работ ===== */
 .price-table td.numeric strong { white-space: nowrap; }
 .price-history-row td { padding: 0 14px 12px; background: #f8fafb; }
-.price-history-row:hover td { background: #f8fafb; }
+.data-table tbody tr.price-history-row:hover td { background: #f8fafb; }
 .price-history__empty { margin: 10px 0 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
 .price-history__list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
 .price-history__list li {
