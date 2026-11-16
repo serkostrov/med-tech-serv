@@ -337,6 +337,19 @@ SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM site_payers WHERE
 -- проверяет invoice_items.sql.
 SELECT pg_temp.expect_forbidden(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 500 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
   (SELECT id FROM ids WHERE k = 'del_draft'), 'work', 'Строка черновика'), 'строку в черновик счёта напрямую не дописать');
+-- Страж 0040 срабатывает раньше правил строк, поэтому правило 0024 «строки меняются
+-- только в черновике» проверяем из-под флага цепочки: тогда последней линией остаются
+-- именно правила строк, и видно, что они на месте.
+SELECT set_config('app.invoice_chain', 'on', true);
+SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 500 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
+  (SELECT id FROM ids WHERE k = 'del_draft'), 'work', 'Строка черновика')) = 1,
+  'изнутри сборки строка в черновик счёта добавляется');
+SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_items WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_draft'))) = 1,
+  'изнутри сборки строка из черновика счёта убирается');
+SELECT pg_temp.expect_forbidden(format('INSERT INTO invoice_items (invoice_id, item_type, work_type_code, description, quantity, unit_price) SELECT %L, %L, code, %L, 1, 1 FROM work_types WHERE is_active ORDER BY code LIMIT 1',
+  (SELECT id FROM ids WHERE k = 'del_issued'), 'work', 'Дописать в выставленный'),
+  'в выставленный счёт строку не дописать и изнутри сборки: правила строк держат черновик');
+SELECT set_config('app.invoice_chain', 'off', true);
 SELECT pg_temp.check(pg_temp.rows_affected(format('INSERT INTO invoice_tasks (invoice_id, task_id) VALUES (%L, %L)',
   (SELECT id FROM ids WHERE k = 'del_draft'), (SELECT id FROM ids WHERE k = 't1'))) = 1, 'координатор добавляет задачу в черновик счёта');
 SELECT pg_temp.check(pg_temp.rows_affected(format('DELETE FROM invoice_tasks WHERE invoice_id = %L', (SELECT id FROM ids WHERE k = 'del_draft'))) = 1,

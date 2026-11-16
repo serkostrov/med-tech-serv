@@ -96,7 +96,7 @@ CREATE FUNCTION pg_temp.items(p_invoice uuid) RETURNS text LANGUAGE sql STABLE A
              trim_scale(item.quantity), trim_scale(item.unit_price), trim_scale(item.line_total),
              CASE WHEN item.modifier IS NULL THEN '' ELSE '/' || item.modifier::text END,
              CASE WHEN item.excluded_from_total THEN '/вне суммы' ELSE '' END),
-           ' | ' ORDER BY item.item_type, item.description), '')
+           ' | ' ORDER BY item.item_type, item.description, item.unit_price, item.quantity), '')
     FROM public.invoice_items AS item
    WHERE item.invoice_id = p_invoice
 $$;
@@ -186,9 +186,12 @@ BEGIN
   INSERT INTO parts (article_number, name) VALUES ('ART-A', 'Клапан') RETURNING id INTO part_a;
   INSERT INTO parts (article_number, name) VALUES ('ART-B', 'Шланг') RETURNING id INTO part_b;
   -- Две партии одной запчасти: в счёт идёт цена последнего прихода (350, не 300).
+  -- У ART-B цена есть только в состоянии «новая», а в счёт идёт «бывшая в употреблении»:
+  -- цену другого состояния подставлять нельзя, Б и Н стоят по-разному.
   INSERT INTO stock_lots (part_id, part_condition, lot_code, receipt_unit_price, created_at)
   VALUES (part_a, 'N', 'L1', 300, now() - interval '10 days'),
          (part_a, 'N', 'L2', 350, now() - interval '1 day'),
+         (part_b, 'N', 'L1', 500, now() - interval '1 day'),
          (part_b, 'B', 'L1', NULL, now() - interval '1 day');
 
   INSERT INTO ids VALUES ('org', org), ('site', site), ('payer', payer),
@@ -330,16 +333,29 @@ SELECT pg_temp.check((SELECT format('%s|%s', trim_scale(unit_price), description
     JOIN parts AS part ON part.id = item.part_id
    WHERE item.invoice_id = pg_temp.uid('inv_parts') AND part.article_number = 'ART-B')
   = '0|ART-B — Шланг (Б), цены прихода нет',
-  'запчасть без цены прихода идёт нулём и с пометкой');
+  'запчасть без цены прихода в своём состоянии идёт нулём и с пометкой, а не ценой другого состояния');
 SELECT pg_temp.check((SELECT bool_and(modifier IS NULL AND NOT excluded_from_total) FROM invoice_items
    WHERE invoice_id = pg_temp.uid('inv_parts') AND item_type = 'part'),
   'у строк запчастей нет отметки Г/Н работ и они идут в сумму');
 SELECT pg_temp.check(pg_temp.sums(pg_temp.uid('inv_parts')) = '2200+0=2200',
   'итог счёта с запчастями: работа 1500 плюс запчасти 700');
 
--- Цена прихода партии закрыта от ролей API: её видно только через счёт.
+-- Цена прихода партии закрыта от ролей API: её видно только через счёт. Колонку закрыли,
+-- сняв табличный SELECT и выдав его по колонкам, поэтому SELECT * по партиям тоже отказывает:
+-- запрос без списка колонок (а PostgREST без параметра select шлёт именно такой) получит 403.
 SELECT pg_temp.expect_forbidden('SELECT receipt_unit_price FROM public.stock_lots LIMIT 1',
   'цену прихода партии не прочитать даже координатору');
+SELECT pg_temp.expect_forbidden('SELECT * FROM public.stock_lots LIMIT 1',
+  'партии нельзя прочитать запросом без списка колонок');
+SELECT pg_temp.check((SELECT count(*) FROM public.stock_lots WHERE part_condition = 'N') = 3,
+  'остальные колонки партий читаются по-прежнему');
+-- Функция цены запчасти не выдана ролям API: иначе цену прихода можно было бы спросить
+-- вызовом. Без снятого EXECUTE проверка падает: по умолчанию функции открыты всем.
+SELECT pg_temp.check(NOT has_function_privilege('authenticated', 'public.invoice_part_unit_price(uuid, public.part_condition)', 'EXECUTE')
+  AND NOT has_function_privilege('anon', 'public.invoice_part_unit_price(uuid, public.part_condition)', 'EXECUTE'),
+  'функция цены запчасти ролям API не выдана');
+SELECT pg_temp.expect_forbidden(format('SELECT public.invoice_part_unit_price(%L, %L)', pg_temp.uid('part_a'), 'N'),
+  'цену запчасти нельзя спросить вызовом функции');
 
 -- ---------------------------------------------------------------- Пересчёт сумм
 -- Правило 6: subtotal — сумма строк, total_amount — subtotal плюс корректировка.
@@ -368,6 +384,12 @@ SELECT pg_temp.expect_message(format('SELECT public.correct_invoice(%L, -400, %L
   'вторая корректировка с прежней причиной отклоняется');
 SELECT pg_temp.expect_message(format('SELECT public.correct_invoice(%L, -300, %L)', pg_temp.uid('inv_parts'), 'Та же сумма'),
   'Корректировка уже равна -300 : менять нечего', 'корректировка без изменения суммы отклоняется');
+-- Итог счёта в базе не бывает отрицательным, и молча обрезать его до нуля нельзя:
+-- в карточке стояло бы «2550 − 9000 = 0». Отказываем вслух.
+SELECT pg_temp.expect_message(format('SELECT public.correct_invoice(%L, -9000, %L)', pg_temp.uid('inv_parts'), 'Скидка больше счёта'),
+  'Корректировка -9000 больше суммы счёта 2550 : итог не может быть отрицательным',
+  'скидка больше суммы счёта отклоняется, а не обрезает итог до нуля');
+SELECT pg_temp.check(pg_temp.sums(pg_temp.uid('inv_parts')) = '2550-300=2250', 'после отказа корректировка осталась прежней');
 
 -- Правило 8: пересборка черновика подхватывает новую цену прайса.
 SELECT pg_temp.act_as_nobody();
@@ -389,7 +411,7 @@ SELECT pg_temp.expect_message(format('UPDATE invoice_items SET unit_price = 1 WH
   'Позиции счёта собираются сами: править строку напрямую нельзя. Поправьте задачу или прайс и пересоберите черновик, а сумму измените корректировкой с причиной.',
   'прямой UPDATE цены в позиции счёта запрещён');
 SELECT pg_temp.expect_message(format('DELETE FROM invoice_items WHERE invoice_id = %L', pg_temp.uid('inv_cat')),
-  'Позиции счёта собираются сами: удалить строку напрямую нельзя. Уберите задачу из счёта и пересоберите черновик.',
+  'Позиции счёта собираются сами: удалить строку напрямую нельзя. Пересоберите черновик по прайсу, а если в счёт попала лишняя задача — отмените счёт и выставьте новый.',
   'прямой DELETE позиции счёта запрещён');
 SELECT pg_temp.check(pg_temp.items(pg_temp.uid('inv_cat')) = '1×1700=1700/N', 'после отказов строки счёта на месте');
 
@@ -439,10 +461,14 @@ SELECT pg_temp.expect_message(format('UPDATE invoices SET status = %L WHERE id =
   'Счёт в состоянии «передан в 1С» нельзя перевести в «отменён». Отсюда счёт уже не меняется: если нужно исправить, выставьте новый.',
   'переданный в 1С счёт не отменить');
 
--- История статусов пишется сама и помнит, кто менял.
-SELECT pg_temp.check((SELECT string_agg(to_status::text, '>' ORDER BY changed_at, to_status)
-    FROM invoice_status_history WHERE invoice_id = pg_temp.uid('inv_cat')) = 'draft>issued>transferred_to_1c',
-  'история статусов счёта записана по порядку');
+-- История статусов пишется сама и помнит, кто менял. Сравниваем набор переходов, а не их
+-- порядок: внутри одной транзакции changed_at у всех записей один и тот же, и проверка
+-- на порядок прошла бы при любом.
+SELECT pg_temp.check((SELECT count(*) FROM invoice_status_history WHERE invoice_id = pg_temp.uid('inv_cat')) = 3
+  AND (SELECT string_agg(format('%s>%s', coalesce(from_status::text, 'нет'), to_status), ',' ORDER BY from_status NULLS FIRST)
+         FROM invoice_status_history WHERE invoice_id = pg_temp.uid('inv_cat'))
+      = 'нет>draft,draft>issued,issued>transferred_to_1c',
+  'в истории статусов счёта записана вся цепочка переходов');
 SELECT pg_temp.check((SELECT bool_and(changed_by = pg_temp.uid('coordinator'))
     FROM invoice_status_history WHERE invoice_id = pg_temp.uid('inv_cat')),
   'в истории статусов записан тот, кто менял');

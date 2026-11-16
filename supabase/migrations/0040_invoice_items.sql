@@ -44,7 +44,7 @@ COMMENT ON COLUMN public.stock_lots.receipt_unit_price IS
 -- читать её обратно — нет: это уже финансовые данные.
 REVOKE SELECT ON TABLE public.stock_lots FROM anon, authenticated;
 GRANT SELECT (id, part_id, part_condition, lot_code, source_document, created_at)
-  ON TABLE public.stock_lots TO anon, authenticated;
+  ON TABLE public.stock_lots TO authenticated;
 
 -- ---------------------------------------------------------------------------
 -- 2. Два правила, которые ждут бухгалтерию
@@ -111,21 +111,22 @@ STABLE
 SECURITY INVOKER
 SET search_path = public, pg_temp
 AS $$
-  -- Партию того же состояния берём в первую очередь: Б и Н стоят по-разному. Если
-  -- в этом состоянии цены не записали ни разу — берём последнюю цену по самой запчасти,
-  -- это ближе к правде, чем ноль. Порядок задан целиком, результат не зависит от плана.
+  -- Состояние учитываем строго: Б и Н стоят по-разному, и подставить в счёт цену
+  -- запчасти в другом состоянии хуже, чем отдать ноль с пометкой — ноль видно,
+  -- а чужую цену нет. Порядок задан целиком, результат не зависит от плана.
   SELECT lot.receipt_unit_price
     FROM public.stock_lots AS lot
    WHERE lot.part_id = p_part_id
+     AND lot.part_condition = p_condition
      AND lot.receipt_unit_price IS NOT NULL
-   ORDER BY (lot.part_condition = p_condition) DESC, lot.created_at DESC, lot.id DESC
+   ORDER BY lot.created_at DESC, lot.id DESC
    LIMIT 1
 $$;
 
 REVOKE ALL ON FUNCTION public.invoice_part_unit_price(uuid, public.part_condition) FROM PUBLIC, anon, authenticated;
 
 COMMENT ON FUNCTION public.invoice_part_unit_price(uuid, public.part_condition) IS
-  'ПРЕДПОЛОЖЕНИЕ (0040, ждёт созвона с бухгалтерией): цена запчасти в счёте — последняя цена прихода партии (сначала в том же состоянии, затем любая по этой запчасти). Пусто — цены прихода нет: строка счёта создаётся с нулём и пометкой. Правило живёт здесь одно на всю базу. Вызывается только сборкой позиций счёта, ролям API закрыта: цена прихода — финансовые данные.';
+  'ПРЕДПОЛОЖЕНИЕ (0040, ждёт созвона с бухгалтерией): цена запчасти в счёте — последняя цена прихода партии этой запчасти в этом же состоянии. Пусто — цены прихода нет: строка счёта создаётся с нулём и пометкой. Правило живёт здесь одно на всю базу. Вызывается только сборкой позиций счёта, ролям API закрыта: цена прихода — финансовые данные.';
 
 -- ---------------------------------------------------------------------------
 -- 3. Страж: позиции счёта пишет только счёт
@@ -144,6 +145,8 @@ BEGIN
   -- Без вошедшего пользователя идут миграции и перенос данных: им страж не мешает.
   -- Флаг app.invoice_chain ставит на время записи только сборка позиций; из браузера
   -- его не задать — PostgREST пускает к select и rpc, а set_config в public не лежит.
+  -- Страж держит интерфейс, а не владельца соединения: у кого есть psql, тот поднимет
+  -- флаг сам. Так же устроены стражи склада (0028) и прайса (0031).
   IF auth.uid() IS NULL
      OR coalesce(current_setting('app.invoice_chain', true), 'off') = 'on' THEN
     IF TG_OP = 'DELETE' THEN
@@ -156,7 +159,10 @@ BEGIN
     CASE TG_OP
       WHEN 'INSERT' THEN 'Позиции счёта собираются сами: дописать строку напрямую нельзя. Поправьте задачу или прайс и пересоберите черновик.'
       WHEN 'UPDATE' THEN 'Позиции счёта собираются сами: править строку напрямую нельзя. Поправьте задачу или прайс и пересоберите черновик, а сумму измените корректировкой с причиной.'
-      ELSE 'Позиции счёта собираются сами: удалить строку напрямую нельзя. Уберите задачу из счёта и пересоберите черновик.'
+      -- Про «уберите задачу из счёта» здесь не пишем: по задаче всегда есть строка
+      -- работы, а задачу со строками из счёта не убрать (страж 0024). Пока отдельной
+      -- функции на это нет, лишнюю задачу лечит отмена счёта и новый счёт.
+      ELSE 'Позиции счёта собираются сами: удалить строку напрямую нельзя. Пересоберите черновик по прайсу, а если в счёт попала лишняя задача — отмените счёт и выставьте новый.'
     END
     USING ERRCODE = '42501';
 END
@@ -303,6 +309,7 @@ CREATE OR REPLACE FUNCTION public.invoice_status_label(p_status public.invoice_s
 RETURNS text
 LANGUAGE sql
 IMMUTABLE
+SET search_path = public, pg_temp
 AS $$
   SELECT CASE p_status
     WHEN 'draft' THEN 'черновик'
@@ -487,6 +494,14 @@ BEGIN
   -- invoices_aa_amount_frozen, чтобы его нельзя было обойти прямым запросом.
   IF invoice_row.adjustment_amount IS NOT DISTINCT FROM amount THEN
     RAISE EXCEPTION 'Корректировка уже равна % : менять нечего', trim_scale(amount)
+      USING ERRCODE = '23514';
+  END IF;
+  -- Итог счёта по контракту — сумма строк плюс корректировка, а в базе он не бывает
+  -- отрицательным (ограничение на invoices). Поэтому скидку больше суммы счёта
+  -- отклоняем вслух: молча обрезать итог до нуля — это разойтись с тем, что в карточке.
+  IF invoice_row.subtotal + amount < 0 THEN
+    RAISE EXCEPTION 'Корректировка % больше суммы счёта % : итог не может быть отрицательным',
+      trim_scale(amount), trim_scale(invoice_row.subtotal)
       USING ERRCODE = '23514';
   END IF;
   -- Ограничение 0001 требует новую причину на каждую корректировку: иначе в журнале
