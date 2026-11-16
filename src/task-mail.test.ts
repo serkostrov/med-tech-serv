@@ -59,6 +59,11 @@ describe("переписка с клиентом в карточке задач�
     assert.equal(taskMailReplyStatus(reply("sending")), "Отправляется");
     assert.equal(taskMailReplyStatus(reply("sent")), "Отправлено клиенту");
     assert.equal(taskMailReplyStatus(reply("failed", "smtp_recipient_rejected")), "Не отправлено: smtp_recipient_rejected");
+    // Код ошибки переводит словарь экрана: координатор читает причину по-русски.
+    assert.equal(
+      taskMailReplyStatus(reply("failed", "smtp_recipient_rejected"), () => "почтовый сервер не знает такого адреса"),
+      "Не отправлено: почтовый сервер не знает такого адреса"
+    );
     assert.equal(taskMailReplyStatus(reply("failed")), "Не отправлено");
     assert.equal(taskMailReplyPending(reply("sent")), false);
     assert.equal(taskMailReplyPending(reply("queued")), true);

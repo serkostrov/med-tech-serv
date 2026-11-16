@@ -682,7 +682,8 @@ function TaskMailThread({ messages, canReply, loading, error, onReload, onReply 
     <ol className="task-mail__list">
       {messages.map((message) => {
         const author = taskMailAuthor(message.author);
-        const status = taskMailReplyStatus(message);
+        // Код ошибки отправки показываем по-русски, тем же словарём, что и журнал уведомлений.
+        const status = taskMailReplyStatus(message, notificationErrorText);
         const files = message.attachments.map((attachment) => taskMailAttachmentFile(message, attachment));
         return <li className={`task-mail__item task-mail__item--${message.direction}`} key={message.id}>
           <header className="task-mail__head">

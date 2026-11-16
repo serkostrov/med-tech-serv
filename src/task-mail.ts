@@ -26,13 +26,17 @@ export function taskMailAuthor(value: string): { readonly name: string; readonly
   return { name: raw || "Неизвестный отправитель" };
 }
 
-/** Что стало с ответом координатора: словами, рядом с самим ответом. */
-export function taskMailReplyStatus(message: TaskMailMessage): string | undefined {
+/**
+ * Что стало с ответом координатора: словами, рядом с самим ответом.
+ * Причину неудачи служба сохраняет кодом (в тексте SMTP бывает адрес клиента),
+ * поэтому код переводит на русский тот же словарь, что и в журнале уведомлений.
+ */
+export function taskMailReplyStatus(message: TaskMailMessage, errorText: (code: string) => string = (code) => code): string | undefined {
   if (message.direction !== "outgoing") return undefined;
   if (message.status === "sent") return "Отправлено клиенту";
   if (message.status === "sending") return "Отправляется";
   if (message.status === "queued") return "В очереди на отправку";
-  return message.error ? `Не отправлено: ${message.error}` : "Не отправлено";
+  return message.error ? `Не отправлено: ${errorText(message.error)}` : "Не отправлено";
 }
 
 /** Ответ ещё не ушёл или не ушёл совсем: карточка подсвечивает такой ответ. */
