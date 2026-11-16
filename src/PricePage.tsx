@@ -29,6 +29,7 @@ import {
   nextPriceAfter,
   parseAmount,
   parseSignedNumber,
+  zeroPriceCount,
   previewBulkPrices,
   priceLineAmountText,
   priceLineNextText,
@@ -166,6 +167,8 @@ export function PricePage() {
   const bulkNumber = bulkMode === "fixed" ? parseAmount(bulkValue) : parseSignedNumber(bulkValue);
   const changes = bulkNumber === null ? [] : previewBulkPrices(selectedLines, { mode: bulkMode, value: bulkNumber });
   const items = bulkPriceItems(changes);
+  // Ноль разрешён, но пачкой он должен быть осознанным: про него говорим отдельно.
+  const zeroCount = zeroPriceCount(changes);
   const withPrice = lines.filter((line) => line.current).length;
   const withoutPrice = lines.length - withPrice;
   const planned = lines.filter((line) => line.next).length;
@@ -406,7 +409,9 @@ export function PricePage() {
           placeholder="1 500,50"
           required
           value={amountDraft}
-        /></label>
+        />
+          {parseAmount(amountDraft) === 0 ? <span className="form-hint form-hint--warning">Ноль — работа бесплатная: в счёт такая работа не попадёт. Если это не так, укажите цену.</span> : null}
+        </label>
         <label>Действует с *<DatePicker aria-label="Дата начала действия цены" onChange={setValidFromDraft} required value={validFromDraft} />
           {laterPrice ? <span className="form-hint">Позже уже есть цена {formatMoney(laterPrice.amount)} с {formatIsoCalendarDate(laterPrice.validFrom)}: новая будет действовать только до неё.</span> : null}
         </label>
@@ -470,6 +475,9 @@ export function PricePage() {
               </span>
               {change.skipReason ? <small className="price-preview__skip">{change.skipReason}</small> : null}
             </li>)}</ul>}
+        {zeroCount === 0 ? null : <p className="form-hint form-hint--warning">
+          {`${russianCountForm(zeroCount, ["Станет", "Станут", "Станут"])} бесплатными ${formatRussianCount(zeroCount, ["строка", "строки", "строк"])}: в счёт такие работы не попадут.`}
+        </p>}
         {bulkNumber === null ? null : <p className="form-hint">
           {items.length === 0
             ? "Ни одна строка не изменится."

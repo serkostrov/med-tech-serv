@@ -6787,6 +6787,8 @@ td .resource-state {
 .dialog-form > .invoice-form,
 .dialog-form > .maintenance-plan-form { grid-column: 1 / -1; }
 .form-hint { margin: 0; color: var(--color-muted); font-size: 13px; line-height: 1.45; }
+/* Подсказка, которую нужно прочитать до нажатия: не серая, а предупреждающая. */
+.form-hint--warning { color: var(--color-warning); font-weight: 600; }
 .dialog-form > .form-hint { grid-column: 1 / -1; }
 
 .invoice-form {

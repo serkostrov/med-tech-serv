@@ -29,6 +29,7 @@ import {
   priceRowHistory,
   priceRowPeriodText,
   previewBulkPrices,
+  zeroPriceCount,
   roundToKopecks,
   type PriceListRow
 } from "./price-list.js";
@@ -230,13 +231,18 @@ describe("прайс: пересчёт процентом и суммой", () =
     assert.equal(nextPriceAmount(1234.56, { mode: "percent", value: 7.5 }), 1327.15);
     assert.equal(nextPriceAmount(1000.01, { mode: "percent", value: 3 }), 1030.01);
     assert.equal(nextPriceAmount(1500, { mode: "percent", value: -20 }), 1200);
-    // Ниже нуля цена не уходит: база такую не примет.
-    assert.equal(nextPriceAmount(1500, { mode: "percent", value: -150 }), 0);
+    // Ниже нуля результат не прижимается к нулю: так ошибку в проценте видно, а не молча
+    // применяется 0,00 ₽. Строку с таким результатом предпросмотр пропустит с причиной.
+    assert.equal(nextPriceAmount(1500, { mode: "percent", value: -150 }), -750);
+    assert.equal(nextPriceAmount(1500, { mode: "percent", value: -200 }), -1500);
+    // Ровно −100 % — это ноль, он разрешён.
+    assert.equal(nextPriceAmount(1500, { mode: "percent", value: -100 }), 0);
   });
 
   it("прибавляет и задаёт фиксированную сумму", () => {
     assert.equal(nextPriceAmount(1500, { mode: "delta", value: 250.5 }), 1750.5);
-    assert.equal(nextPriceAmount(1500, { mode: "delta", value: -1600 }), 0);
+    assert.equal(nextPriceAmount(1500, { mode: "delta", value: -1600 }), -100);
+    assert.equal(nextPriceAmount(1500, { mode: "delta", value: -1500 }), 0);
     assert.equal(nextPriceAmount(1500, { mode: "fixed", value: 999.999 }), 1000);
     // Задать сумму можно и там, где цены ещё нет, а процент считать не из чего.
     assert.equal(nextPriceAmount(undefined, { mode: "fixed", value: 700 }), 700);
@@ -286,6 +292,45 @@ describe("прайс: пересчёт процентом и суммой", () =
       ["maintenance", null, 1500]
     ]);
     assert.deepEqual(bulkPriceItems(previewBulkPrices(lines, { mode: "percent", value: 0 })), []);
+  });
+
+  it("минус 200 процентов не обнуляет цены, а объясняет ошибку (находка 40)", () => {
+    const lines = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2026-11-16" });
+    const changes = previewBulkPrices(lines, { mode: "percent", value: -200 });
+    assert.deepEqual(changes.map((change) => [change.before, change.after, change.skipReason]), [
+      [1500, -1500, "Цена ушла ниже нуля: снизить больше чем на 100 % нельзя"],
+      [2000, -2000, "Цена ушла ниже нуля: снизить больше чем на 100 % нельзя"],
+      [500, -500, "Цена ушла ниже нуля: снизить больше чем на 100 % нельзя"],
+      [undefined, undefined, "Цены ещё нет: процентом и прибавкой считать не из чего"]
+    ]);
+    // Главное: в базу не уходит ни одной нулевой цены.
+    assert.deepEqual(bulkPriceItems(changes), []);
+    assert.equal(zeroPriceCount(changes), 0);
+  });
+
+  it("у прибавки и у суммы своя причина про минус", () => {
+    const lines = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2026-11-16" });
+    assert.equal(previewBulkPrices(lines, { mode: "delta", value: -5000 })[0]?.skipReason, "Цена ушла ниже нуля: проверьте прибавку");
+    assert.equal(previewBulkPrices(lines, { mode: "fixed", value: -10 })[0]?.skipReason, "Цена ниже нуля: укажите сумму от нуля");
+    assert.deepEqual(bulkPriceItems(previewBulkPrices(lines, { mode: "fixed", value: -10 })), []);
+  });
+
+  it("ноль разрешён, но его видно отдельно (находка 39)", () => {
+    const lines = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2026-11-16" });
+    const zeroed = previewBulkPrices(lines, { mode: "fixed", value: 0 });
+    // Ноль применяется: бывает работа, которая в счёт не попадает.
+    assert.deepEqual(zeroed.map((change) => [change.after, change.skipReason]), [
+      [0, undefined],
+      [0, undefined],
+      [0, undefined],
+      [0, undefined]
+    ]);
+    assert.equal(zeroPriceCount(zeroed), 4);
+    assert.equal(bulkPriceItems(zeroed).length, 4);
+    // Минус 100 процентов — тот же ноль, и предупреждение такое же.
+    assert.equal(zeroPriceCount(previewBulkPrices(lines, { mode: "percent", value: -100 })), 3);
+    // Там, где нулей нет, предупреждать не о чем.
+    assert.equal(zeroPriceCount(previewBulkPrices(lines, { mode: "percent", value: 10 })), 0);
   });
 });
 
@@ -458,6 +503,22 @@ describe("прайс: экран и его место в приложении", 
     assert.match(html, /Цены заданы/u);
     // Права ещё не прочитаны: кнопок правки на экране нет.
     assert.doesNotMatch(html, /Изменить выбранные/u);
+  });
+});
+
+describe("прайс: ноль говорит о себе сам", () => {
+  it("в окне правки объясняет, что значит нулевая цена (находка 39)", async () => {
+    const page = await readFile(new URL("./PricePage.tsx", import.meta.url), "utf8");
+    assert.match(page, /parseAmount\(amountDraft\) === 0 \?/u);
+    assert.match(page, /в счёт такая работа не попадёт/u);
+  });
+
+  it("в массовом изменении предупреждает про нули отдельной строкой (находка 40)", async () => {
+    const page = await readFile(new URL("./PricePage.tsx", import.meta.url), "utf8");
+    assert.match(page, /const zeroCount = zeroPriceCount\(changes\);/u);
+    assert.match(page, /zeroCount === 0 \? null :/u);
+    assert.match(page, /в счёт такие работы не попадут/u);
+    assert.match(page, /form-hint form-hint--warning/u);
   });
 });
 
