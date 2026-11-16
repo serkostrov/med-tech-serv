@@ -370,8 +370,9 @@ export function CustomerReferencesPage() {
         <label>Телефон<input defaultValue={editedPerson?.phone ?? ""} name="phone" /></label>
         <label>E-mail<input defaultValue={editedPerson?.email ?? ""} name="email" type="email" /></label>
         {/* Проверку держит база (миграция 0036); здесь подсказка и формат, чтобы не вводить мусор. */}
-        <label>ИНН<input defaultValue={editedPerson?.inn ?? ""} inputMode="numeric" maxLength={12} name="inn" pattern="[0-9]{10}|[0-9]{12}" placeholder="10 цифр, у предпринимателя 12" title="ИНН: 10 цифр у организации или 12 цифр у предпринимателя" /></label>
-        <label>КПП<input defaultValue={editedPerson?.kpp ?? ""} maxLength={9} name="kpp" pattern="[0-9]{4}[0-9A-Z]{2}[0-9]{3}" placeholder="9 знаков, например 773601001" title="КПП: 9 знаков, например 773601001" /></label>
+        {/* Без pattern: отказ браузера пишется на его языке, а наш — всегда по-русски и целой фразой. */}
+        <label>ИНН<input defaultValue={editedPerson?.inn ?? ""} inputMode="numeric" maxLength={12} name="inn" placeholder="10 цифр, у предпринимателя 12" title="ИНН: 10 цифр у организации или 12 цифр у предпринимателя" /></label>
+        <label>КПП<input defaultValue={editedPerson?.kpp ?? ""} maxLength={9} name="kpp" placeholder="9 знаков, например 773601001" title="КПП: 9 знаков, например 773601001" /></label>
       </div>
     </DialogForm>
 
