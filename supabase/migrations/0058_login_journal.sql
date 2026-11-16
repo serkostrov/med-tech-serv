@@ -315,7 +315,7 @@ BEGIN
                 OR person_email ILIKE '%%' || $3 || '%%'
                 OR coalesce(host(ip_address), '') ILIKE '%%' || $3 || '%%')
            AND ($4 IS NULL OR occurred_at >= $4)
-           AND ($5 IS NULL OR occurred_at < $5)
+           AND ($5 IS NULL OR occurred_at <= $5)
       )
       SELECT jsonb_build_object(
         'items', coalesce((
@@ -396,7 +396,7 @@ AS $$
             OR person_email ILIKE '%' || p_search || '%'
             OR coalesce(host(ip_address), '') ILIKE '%' || p_search || '%')
        AND (p_from IS NULL OR occurred_at >= p_from)
-       AND (p_to IS NULL OR occurred_at < p_to)
+       AND (p_to IS NULL OR occurred_at <= p_to)
   )
   SELECT jsonb_build_object(
     'items', coalesce((
