@@ -89,7 +89,7 @@ export function StockDocumentDialog({ document, onClose }: {
       </dl>
       {error ? <ResourceState description={error} status="error" title="Строки не загрузились" />
         : !lines ? <ResourceState description="Подождите, строки документа сейчас появятся." status="loading" title="Загружаем строки" />
-        : <div className="table-scroll"><table className="data-table">
+        : <div className="table-scroll table-cards"><table className="data-table">
           <thead><tr>
             <th scope="col">Артикул</th>
             <th scope="col">Наименование</th>
@@ -98,11 +98,11 @@ export function StockDocumentDialog({ document, onClose }: {
             <th scope="col">{withoutTask ? "Причина" : "Резерв"}</th>
           </tr></thead>
           <tbody>{lines.map((line) => <tr key={line.movementId}>
-            <td><strong>{line.articleNumber}</strong></td>
-            <td>{line.partName}</td>
-            <td>{STOCK_DOCUMENT_CONDITION_LABELS[line.condition]}</td>
-            <td className="numeric">{line.quantity}</td>
-            <td>{withoutTask ? line.comment ?? "" : line.reservationNumber ?? ""}</td>
+            <td data-label="Артикул"><strong>{line.articleNumber}</strong></td>
+            <td className="cell-wide" data-label="Наименование">{line.partName}</td>
+            <td data-label="Состояние">{STOCK_DOCUMENT_CONDITION_LABELS[line.condition]}</td>
+            <td className="numeric" data-label="Количество">{line.quantity}</td>
+            <td data-label={withoutTask ? "Причина" : "Резерв"}>{withoutTask ? line.comment ?? "" : line.reservationNumber ?? ""}</td>
           </tr>)}</tbody>
         </table></div>}
     </div> : null}
@@ -175,7 +175,7 @@ export function StockDocumentsView() {
           status={filtered ? "filtered-empty" : "empty"}
           title={filtered ? "Документов по этим условиям нет" : "Документов пока нет"}
         />
-        : <><div className="table-scroll"><table className="data-table stock-documents-table">
+        : <><div className="table-scroll table-cards"><table className="data-table stock-documents-table">
           <thead><tr>
             <th scope="col">Номер</th>
             <th scope="col">Документ</th>
@@ -186,13 +186,13 @@ export function StockDocumentsView() {
             <th scope="col">Состав</th>
           </tr></thead>
           <tbody>{documents.map((document) => <tr className="stock-documents-table__row" key={document.id} onClick={() => setOpened(document)}>
-            <td><button className="link-button" onClick={(event) => { event.stopPropagation(); setOpened(document); }} type="button"><strong>{document.number}</strong></button></td>
-            <td><KindBadge kind={document.kind} /></td>
-            <td>{formatDisplayDate(document.date)}</td>
-            <td>{document.taskNumber ? <>{document.taskNumber}{document.taskTitle ? <small>{document.taskTitle}</small> : null}</> : <span className="muted">{document.kind === "writeoff" ? "Списание со склада, без задачи" : "Без задачи"}</span>}</td>
-            <td>{document.equipmentSerialNumber ? <>S/N {document.equipmentSerialNumber}{document.equipmentName ? <small>{document.equipmentName}</small> : null}</> : null}</td>
-            <td>{document.engineerName ?? ""}</td>
-            <td className="stock-documents-table__totals">{stockDocumentTotalsText(document)}</td>
+            <td data-label="Номер"><button className="link-button" onClick={(event) => { event.stopPropagation(); setOpened(document); }} type="button"><strong>{document.number}</strong></button></td>
+            <td data-label="Документ"><KindBadge kind={document.kind} /></td>
+            <td data-label="Дата">{formatDisplayDate(document.date)}</td>
+            <td className="cell-wide" data-label="Основание">{document.taskNumber ? <>{document.taskNumber}{document.taskTitle ? <small>{document.taskTitle}</small> : null}</> : <span className="muted">{document.kind === "writeoff" ? "Списание со склада, без задачи" : "Без задачи"}</span>}</td>
+            <td className="cell-wide" data-label="Прибор">{document.equipmentSerialNumber ? <>S/N {document.equipmentSerialNumber}{document.equipmentName ? <small>{document.equipmentName}</small> : null}</> : "—"}</td>
+            <td data-label="Инженер">{document.engineerName ?? "—"}</td>
+            <td className="stock-documents-table__totals" data-label="Состав">{stockDocumentTotalsText(document)}</td>
           </tr>)}</tbody>
         </table></div>
         <RegistryPagination ariaLabel="Страницы документов склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}

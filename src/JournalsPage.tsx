@@ -126,7 +126,7 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
               description={filtered ? "Измените условия или сбросьте фильтры." : "Как только в системе что-то изменят, событие появится здесь."}
               status={filtered ? "filtered-empty" : "empty"}
               title={filtered ? "Событий по этим условиям нет" : "Событий пока нет"} />
-            : <div className="table-scroll"><table className="data-table journal-table">
+            : <div className="table-scroll table-cards"><table className="data-table journal-table">
               <thead><tr>
                 <th scope="col">Когда</th>
                 <th scope="col">Кто</th>
@@ -140,16 +140,16 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
                   const lines = auditChangeLines(event);
                   return <React.Fragment key={event.id}>
                     <tr className="data-table__selectable" onClick={() => setOpenId(open ? null : event.id)}>
-                      <td className="journal-table__when">{whenText(event.occurredAt)}</td>
-                      <td>{auditActorLabel(event)}</td>
-                      <td>
+                      <td className="journal-table__when" data-label="Когда">{whenText(event.occurredAt)}</td>
+                      <td data-label="Кто">{auditActorLabel(event)}</td>
+                      <td data-label="Что сделал">
                         <button aria-controls={`journal-event-${event.id}`} aria-expanded={open} className="journal-table__toggle" onClick={(clickEvent) => { clickEvent.stopPropagation(); setOpenId(open ? null : event.id); }} type="button">
                           <strong>{auditActionLabel(event.action)}</strong>
                         </button>
                         <small>{auditEntityLabel(event.entityType)}{event.outcome === "denied" ? " · отказано" : ""}</small>
                       </td>
-                      <td>{auditPlaceLabel(event)}{auditEntityTitle(event) ? <small>{auditEntityTitle(event)}</small> : null}</td>
-                      <td>{auditChangeSummary(event) || "—"}</td>
+                      <td data-label="Где">{auditPlaceLabel(event)}{auditEntityTitle(event) ? <small>{auditEntityTitle(event)}</small> : null}</td>
+                      <td className="cell-wide" data-label="Что изменилось">{auditChangeSummary(event) || "—"}</td>
                     </tr>
                     {open ? <tr className="journal-table__detail" id={`journal-event-${event.id}`}><td colSpan={5}>
                       {lines.length === 0

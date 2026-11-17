@@ -104,6 +104,35 @@ function TaskChip({ placement, onOpen }: {
  * Сама сетка: дни в шапке, строка на инженера, клетка на день. Вынесена отдельно, чтобы
  * раскладку можно было отрисовать и проверить без запросов к базе.
  */
+/**
+ * Свой календарь инженера на телефоне — списком по дням (аудит 17.11, № 91): в широкой
+ * сетке на узком экране видно два с половиной дня и колонку с собственным именем.
+ * На широком экране список прячется, остаётся сетка.
+ */
+function OwnDayList({ calendar, onOpenTask }: {
+  readonly calendar: CalendarLayout;
+  readonly onOpenTask: (taskId: string) => void;
+}) {
+  const row = calendar.rows[0];
+  const busy = row ? row.cells.filter((cell) => cell.placements.length > 0) : [];
+  return <div className="own-day-list">
+    {busy.length === 0
+      ? <p className="own-day-list__empty">В этом периоде задач нет.</p>
+      : <ol>{busy.map((cell) => {
+        const day = calendar.days.find((item) => item.date === cell.date);
+        return <li className={cell.isToday ? "is-today" : undefined} key={cell.date}>
+          <h4>{day?.weekdayLabel ?? ""} {calendarDayTitle(cell.date)}{cell.isToday ? " · сегодня" : ""}</h4>
+          <ul>{cell.placements.map((placement) => <li key={placement.task.id}>
+            <button className={`own-day-list__task${placement.task.isOverdue ? " is-overdue" : ""}`} onClick={() => onOpenTask(placement.task.id)} type="button">
+              <strong>{placement.task.number}</strong> {placement.task.title}
+              <small>{[placement.task.siteName, placement.dayCount > 1 ? `день ${placement.dayIndex} из ${placement.dayCount}` : "", placement.task.isOverdue ? "срок прошёл" : ""].filter(Boolean).join(" · ")}</small>
+            </button>
+          </li>)}</ul>
+        </li>;
+      })}</ol>}
+  </div>;
+}
+
 export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
   readonly calendar: CalendarLayout;
   readonly title: string;
@@ -466,7 +495,10 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
             : <div aria-busy={loading} className={loading ? "engineer-calendar__pending" : undefined}>
               {/* Пока летит запрос нового периода, показываем прежний и помечаем ожидание:
                   раскладывать старые задачи по новым дням нельзя. */}
-              <EngineerCalendarGrid calendar={calendar} onOpenTask={openTask} title={calendarRangeTitle(calendar.range, mode)} />
+              <div className={ownOnly ? "own-calendar-grid" : undefined}>
+                <EngineerCalendarGrid calendar={calendar} onOpenTask={openTask} title={calendarRangeTitle(calendar.range, mode)} />
+              </div>
+              {ownOnly ? <OwnDayList calendar={calendar} onOpenTask={openTask} /> : null}
             </div>}
       {!ownOnly && calendar.totals.unassignedTaskCount > 0 ? <div className="engineer-calendar__unassigned">
         <h3>Ещё не назначены · {calendar.totals.unassignedTaskCount}</h3>

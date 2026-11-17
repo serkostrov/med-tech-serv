@@ -50,7 +50,7 @@ function quantityText(quantity: number): string {
 
 /** Таблица строк счёта. Гарантийные показываем так же, но их сумма — справочная. */
 function InvoiceItemsTable({ items, guarantee = false }: { readonly items: readonly InvoiceItemApiRecord[]; readonly guarantee?: boolean }) {
-  return <div className="table-scroll"><table className="data-table">
+  return <div className="table-scroll table-cards"><table className="data-table">
     <thead><tr>
       <th scope="col">Задача</th>
       <th scope="col">Позиция</th>
@@ -61,17 +61,17 @@ function InvoiceItemsTable({ items, guarantee = false }: { readonly items: reado
     <tbody>{invoiceItemsInOrder(items).map((item) => {
       const modifier = invoiceModifierLabel(item.modifier);
       return <tr key={item.id}>
-        <td>{item.taskNumber ?? <span className="is-empty">Без задачи</span>}</td>
-        <td>
+        <td data-label="Задача">{item.taskNumber ?? <span className="is-empty">Без задачи</span>}</td>
+        <td className="cell-wide" data-label="Позиция">
           <strong>{item.description}</strong>
           <small>{invoiceItemTypeLabel(item.itemType)}{modifier ? ` · ${modifier}` : ""}</small>
         </td>
-        <td className="numeric">{quantityText(item.quantity)}</td>
-        <td className="numeric">{item.unitPrice === 0
+        <td className="numeric" data-label="Количество">{quantityText(item.quantity)}</td>
+        <td className="numeric" data-label="Цена">{item.unitPrice === 0
           ? <span className="is-empty">Нет цены</span>
           : formatMoney(item.unitPrice)}
           <small className="invoice-line__source">{invoiceLineSource(item)}</small></td>
-        <td className="numeric">{guarantee
+        <td className="numeric" data-label={guarantee ? "Сумма справочно" : "Сумма"}>{guarantee
           ? <span className="muted">{formatMoney(invoiceLineAmount(item))}</span>
           : <strong>{formatMoney(invoiceLineAmount(item))}</strong>}</td>
       </tr>;
