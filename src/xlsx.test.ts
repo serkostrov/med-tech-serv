@@ -83,7 +83,7 @@ describe("Excel file", () => {
 
 /** Отчёт без новых разрезов: такой приходит, пока в базе нет миграций 0044 и 0045. */
 const NO_CUTS = {
-  tasksByReason: [], worksByModifier: [], tasksByEquipment: [], tasksBySite: [], tasksByEngineer: [],
+  tasksByReason: [], worksByModifier: [], tasksBySource: [], tasksByEquipment: [], tasksBySite: [], tasksByEngineer: [],
   partsByCondition: [], engineerLoad: [], equipmentSpend: [], payerSpend: [],
   canSeeFinance: false, databaseCuts: false, databaseSpend: false
 } as const;

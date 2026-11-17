@@ -1563,16 +1563,18 @@ interface TaskRegistryFilters {
   readonly periodFrom: string;
   readonly periodTo: string;
   readonly overdue: boolean;
+  /** Переход из разреза «Откуда задача»: из плана ТО или разовая заявка. */
+  readonly maintenancePlan: "" | "plan" | "single";
   readonly sort: "deadline_asc" | "deadline_desc" | "updated_asc" | "updated_desc";
 }
 
-const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", guarantee: "", drillTitle: "", createdFrom: "", createdTo: "", openOnly: false, reasonCode: "", equipmentId: "", periodFrom: "", periodTo: "", overdue: false, sort: "updated_desc" };
+const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", guarantee: "", drillTitle: "", createdFrom: "", createdTo: "", openOnly: false, reasonCode: "", equipmentId: "", periodFrom: "", periodTo: "", overdue: false, maintenancePlan: "", sort: "updated_desc" };
 
 /** Отборы, кроме этапа, просрочки и сортировки: с ними счётчик плашки не подсвечивается. */
 function hasOtherTaskFilters(filters: TaskRegistryFilters): boolean {
   return Boolean(filters.search || filters.engineerId || filters.siteId || filters.workTypeCode || filters.priority
     || filters.guarantee || filters.periodFrom || filters.periodTo || filters.drillTitle || filters.createdFrom
-    || filters.createdTo || filters.openOnly || filters.reasonCode || filters.equipmentId);
+    || filters.createdTo || filters.openOnly || filters.reasonCode || filters.equipmentId || filters.maintenancePlan);
 }
 
 /**
@@ -1626,6 +1628,7 @@ function taskPageQuery(filters: TaskRegistryFilters) {
     ...(filters.periodFrom ? { periodFrom: filters.periodFrom } : {}),
     ...(filters.periodTo ? { periodTo: filters.periodTo } : {}),
     ...(filters.overdue ? { overdue: true } : {}),
+    ...(filters.maintenancePlan ? { maintenancePlan: filters.maintenancePlan === "plan" } : {}),
     sort: filters.sort
   };
 }
@@ -1645,7 +1648,8 @@ function drillFilters(drill: TaskDrillDown): TaskRegistryFilters {
     reasonCode: drill.reasonCode ?? "",
     equipmentId: drill.equipmentId ?? "",
     siteId: drill.siteId ?? "",
-    engineerId: drill.engineerId ?? ""
+    engineerId: drill.engineerId ?? "",
+    maintenancePlan: drill.maintenancePlan === undefined ? "" : drill.maintenancePlan ? "plan" : "single"
   };
 }
 
@@ -2093,7 +2097,7 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
           <CardHeader headingId="tasks-table-title" meta={`${tasks.length} из ${total}`} title="Все задачи" />
           {(loading || !listLoaded) && tasks.length === 0
             ? <ResourceState description="Подождите, список сейчас появится." status="loading" title="Загружаем задачи" />
-            : <TaskTable engineers={engineers} equipment={equipment} filtered={Boolean(appliedFilters.search || appliedFilters.status || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue)} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} onToggle={toggleTask} onToggleAll={(selected) => setSelectedTaskIds((current) => { const next = new Set(current); for (const task of tasks) { if (selected) next.add(task.id); else next.delete(task.id); } return next; })} selectedTaskIds={selectedTaskIds} tasks={tasks} />}
+            : <TaskTable engineers={engineers} equipment={equipment} filtered={Boolean(appliedFilters.search || appliedFilters.status || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue || appliedFilters.maintenancePlan)} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} onToggle={toggleTask} onToggleAll={(selected) => setSelectedTaskIds((current) => { const next = new Set(current); for (const task of tasks) { if (selected) next.add(task.id); else next.delete(task.id); } return next; })} selectedTaskIds={selectedTaskIds} tasks={tasks} />}
           <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={(next) => void changePage(next)} onPageSizeChange={(size) => { setPageSize(size); void changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
         </section>
 

@@ -27,11 +27,13 @@ export interface TaskDrillDown {
   readonly siteId?: string;
   /** «none» — инженер не назначен. */
   readonly engineerId?: string;
+  /** Из плана ТО (true) или разовая заявка (false). */
+  readonly maintenancePlan?: boolean;
 }
 
 export type ReportMetricKind = "all" | "closed" | "overdue" | "open";
 
-export type ReportCutKind = "status" | "work_type" | "month" | "reason" | "modifier" | "equipment" | "site" | "engineer";
+export type ReportCutKind = "status" | "work_type" | "month" | "source" | "reason" | "modifier" | "equipment" | "site" | "engineer";
 
 const METRIC_TITLES: Readonly<Record<ReportMetricKind, string>> = {
   all: "Все заявки",
@@ -44,6 +46,7 @@ const CUT_TITLES: Readonly<Record<ReportCutKind, string>> = {
   status: "Этап",
   work_type: "Вид работ",
   month: "Месяц",
+  source: "Откуда задача",
   reason: "Причина обращения",
   modifier: "Гарантия",
   equipment: "Прибор",
@@ -100,6 +103,7 @@ export function cutDrillDown(
       const to = bounds.to < period.to ? bounds.to : period.to;
       return { ...base, title: `${CUT_TITLES.month}: ${item.name}`, createdFrom: from, createdTo: to };
     }
+    case "source": return unset ? null : { ...base, maintenancePlan: item.code === "plan" };
     case "reason": return { ...base, reasonCode: unset ? "none" : item.code };
     case "modifier": return { ...base, guarantee: unset ? "none" : item.code === "G" ? "G" : item.code === "N" ? "N" : "none" };
     case "equipment": return unset ? null : { ...base, equipmentId: item.code };

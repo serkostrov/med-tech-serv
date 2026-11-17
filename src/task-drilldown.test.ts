@@ -28,6 +28,10 @@ describe("переход из отчёта в задачи", () => {
   it("«не указано» у причины и инженера находится, у прибора и площадки перехода нет", () => {
     assert.equal(cutDrillDown("reason", { code: "unset", name: "Причина не указана" }, period)?.reasonCode, "none");
     assert.equal(cutDrillDown("engineer", { code: "unset", name: "Инженер не назначен" }, period)?.engineerId, "none");
+    // Откуда задача (0070): план ТО и разовая заявка ведут в список с этим признаком.
+    assert.equal(cutDrillDown("source", { code: "plan", name: "Из плана ТО" }, period)?.maintenancePlan, true);
+    assert.equal(cutDrillDown("source", { code: "single", name: "Разовая заявка" }, period)?.maintenancePlan, false);
+    assert.equal(cutDrillDown("source", { code: "single", name: "Разовая заявка" }, period)?.title, "Откуда задача: Разовая заявка");
     assert.equal(cutDrillDown("equipment", { code: "unset", name: "Прибор не указан" }, period), null);
     assert.equal(cutDrillDown("site", { code: "unset", name: "Площадка не указана" }, period), null);
   });

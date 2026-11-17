@@ -582,6 +582,8 @@ export interface OperationsReportRecord {
   readonly tasksByReason: readonly ReportCutItem[];
   /** Гарантийность работ: Г, Н и «не отмечено». */
   readonly worksByModifier: readonly ReportCutItem[];
+  /** Откуда задача: из плана ТО (plan) или разовая заявка (single), 0070. */
+  readonly tasksBySource: readonly ReportCutItem[];
   readonly tasksByEquipment: readonly ReportCutItem[];
   readonly tasksBySite: readonly ReportCutItem[];
   readonly tasksByEngineer: readonly ReportCutItem[];
@@ -3084,6 +3086,8 @@ export class M2ApiClient {
     readonly periodFrom?: string;
     readonly periodTo?: string;
     readonly overdue?: boolean;
+    /** Из плана ТО (true) или разовая заявка (false): переход из разреза отчёта «Откуда задача». */
+    readonly maintenancePlan?: boolean;
     readonly sort?: "deadline_asc" | "deadline_desc" | "updated_asc" | "updated_desc";
     /** Колонка доски: сначала карточки, расставленные вручную, затем остальные по сортировке. */
     readonly boardOrder?: boolean;
@@ -3125,6 +3129,7 @@ export class M2ApiClient {
       // Вид работ — основной или дополнительный (0060).
       if (query.workTypeCode) next = next.or(`work_type_code.eq.${query.workTypeCode},extra_work_type_codes.cs.{${query.workTypeCode}}`);
       if (query.priority) next = next.eq("priority", query.priority);
+      if (query.maintenancePlan !== undefined) next = next.eq("is_maintenance_plan", query.maintenancePlan ? "true" : "false");
       if (query.guarantee === "none") next = next.is("work_modifier", null);
       else if (query.guarantee) next = next.eq("work_modifier", query.guarantee);
       if (query.reasonCode === "none") next = next.is("reason_code", null);
@@ -4822,6 +4827,7 @@ export class M2ApiClient {
       })),
       tasksByReason: cuts("reason"),
       worksByModifier: cuts("modifier"),
+      tasksBySource: cuts("source"),
       tasksByEquipment: cuts("equipment"),
       tasksBySite: cuts("site"),
       tasksByEngineer: cuts("engineer"),
@@ -4952,6 +4958,7 @@ export class M2ApiClient {
       })),
       tasksByReason: [],
       worksByModifier: [],
+      tasksBySource: [],
       tasksByEquipment: [],
       tasksBySite: [],
       tasksByEngineer: [],

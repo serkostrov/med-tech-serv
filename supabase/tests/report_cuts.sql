@@ -327,8 +327,30 @@ SELECT pg_temp.check(
   'месяцы: все задачи периода разложены по месяцам создания, код месяца — ГГГГ-ММ');
 SELECT pg_temp.check(
   (SELECT count(*) FROM public.report_task_breakdown(pg_temp.d('from'), pg_temp.d('today'))
-    WHERE section NOT IN ('status', 'work_type', 'month', 'reason', 'modifier', 'equipment', 'site', 'engineer')) = 0,
+    WHERE section NOT IN ('status', 'work_type', 'month', 'source', 'reason', 'modifier', 'equipment', 'site', 'engineer')) = 0,
   'других разрезов функция не придумывает');
+
+-- Откуда задача (0070): пока плановых нет, все заявки разовые.
+SELECT pg_temp.check(pg_temp.cut('source') = 'single=7/3/1',
+  'разрез «откуда задача»: без плана ТО все семь заявок разовые');
+-- Задачу ТО переводим в задачу из плана: привязка к плану того же прибора.
+-- Подготовка данных — без роли пользователя, проверка дальше снова под руководителем.
+SELECT pg_temp.act_as_nobody();
+DO $$
+DECLARE plan uuid;
+BEGIN
+  PERFORM set_config('session_replication_role', 'replica', true);
+  INSERT INTO public.maintenance_plans (equipment_id, plan_year, period_no, period_from, period_to, work_type_code)
+  VALUES (pg_temp.uid('eq2'), extract(year FROM current_date)::integer, 1, current_date - 30, current_date + 30, 'maintenance')
+  RETURNING id INTO plan;
+  UPDATE public.tasks SET is_maintenance_plan = true, maintenance_plan_id = plan WHERE id = pg_temp.uid('t_overdue');
+  PERFORM set_config('session_replication_role', 'origin', true);
+END $$;
+SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
+SELECT pg_temp.check(pg_temp.cut('source') = 'plan=1/0/1 | single=6/3/0',
+  'разрез «откуда задача»: задача из плана ТО отдельно, у неё своя просрочка');
+SELECT pg_temp.check(pg_temp.cut_name('source', 'plan') = 'Из плана ТО' AND pg_temp.cut_name('source', 'single') = 'Разовая заявка',
+  'разрез «откуда задача» подписан словами');
 
 -- ---------------------------------------------------------------- Гарантийность замен
 SELECT pg_temp.check(

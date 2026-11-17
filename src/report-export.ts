@@ -42,6 +42,7 @@ function reportCutsSheet(report: OperationsReportRecord, share: (value: number) 
     ["Период", `${dayLabel(report.period.from)} – ${dayLabel(report.period.to)}`],
     ...cutBlock("Причины обращений", report.tasksByReason, share),
     ...cutBlock("Гарантийность работ", report.worksByModifier, share),
+    ...cutBlock("Откуда задачи", report.tasksBySource, share),
     ...(report.partsByCondition.length
       ? [
           [],

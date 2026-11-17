@@ -644,6 +644,7 @@ export function ReportsPage({ onOpenTasks }: {
               </section>
               <CutCard colored items={report.tasksByReason} meta="отметка инженера в акте" {...openCut("reason")} title="Причины обращений" total={report.metrics.taskCount} />
               <CutCard colored items={report.worksByModifier} meta="отметка координатора в задаче" {...openCut("modifier")} title="Гарантийность работ" total={report.metrics.taskCount} />
+              <CutCard items={report.tasksBySource} meta="план ТО или разовая заявка" {...openCut("source")} title="Откуда задачи" total={report.metrics.taskCount} />
               {/* «шт.» не склоняем: количество бывает дробным (0,5 литра реагента). */}
               <CutCard items={report.partsByCondition.map((item) => ({ code: item.code, name: item.name, value: item.positionCount, closed: 0, overdue: 0 }))} meta="Г, Н и Б по позициям запчастей" title="Гарантийность замен запчастей" total={partPositions}>
                 {report.partsByCondition.length
