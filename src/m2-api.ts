@@ -4260,6 +4260,8 @@ export class M2ApiClient {
   /**
    * Документы склада (0062): перемещение на склад инженера, возврат и списание.
    * Создаёт их база при движении запчасти; здесь только список с отбором.
+   * Запрос POST, а не GET: в адресе пустой отбор ушёл бы строкой «null», и база
+   * не разобрала бы её как номер задачи (на стенде 17.11.2026 — ответ 400).
    */
   public async stockDocumentPage(input: {
     readonly kind?: StockDocumentKind | "";
@@ -4278,7 +4280,7 @@ export class M2ApiClient {
       p_task_id: input.taskId || null,
       p_limit: input.limit ?? 50,
       p_offset: input.offset ?? 0
-    }, { get: true });
+    });
     throwIfError(error, "Не получилось загрузить документы склада");
     const rows = Array.isArray(data) ? data.map((item) => asRow(item)) : [];
     return {
