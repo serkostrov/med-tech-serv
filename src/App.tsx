@@ -3222,6 +3222,19 @@ function NotificationTemplatesPage() {
   return <><DataTableShell meta={formatRussianCount(templates.length, ["шаблон", "шаблона", "шаблонов"])} title="Письма по событиям">{loading ? <ResourceState description="Подождите, шаблоны сейчас появятся." status="loading" title="Загружаем шаблоны" /> : templates.length === 0 ? <ResourceState description="Шаблоны появятся, когда администратор настроит письма по событиям." status="empty" title="Шаблонов писем пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Событие</th><th>Тема</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{templates.map((template) => <tr key={template.code}><td><strong>{template.name}</strong></td><td>{template.subjectTemplate || "—"}</td><td><StatusBadge tone={template.isActive ? "success" : "neutral"}>{template.isActive ? "Активен" : "Неактивен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить шаблон" onClick={() => { setFormError(null); setEditing(template); }} />{template.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(template)} /> : <IconButton icon="enable" label="Включить" onClick={() => void setActive(template, true)} />}</div></td></tr>)}</tbody></table></div>}</DataTableShell><DialogForm busy={saving} description="Тема и текст уйдут получателю при этом событии. Можно вставить поля из списка ниже." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} size="lg" submitLabel="Сохранить шаблон" title={editing?.name ?? "Шаблон письма"}><label className="field-wide">Тема *<input autoFocus defaultValue={editing?.subjectTemplate} maxLength={300} name="subjectTemplate" required /></label><label className="field-wide">Текст<AutoTextarea defaultValue={editing?.bodyTemplate} maxLength={10000} name="bodyTemplate" required rows={8} /></label>{editing && editing.allowedVariables.length > 0 ? <p className="field-wide notification-template__variables">Можно вставить в письмо: {editing.allowedVariables.map((variable) => `{{${variable}}}`).join(", ")}</p> : null}</DialogForm><ConfirmationDialog confirmLabel="Отключить" description={deactivating ? <>Шаблон «{deactivating.name}» перестанет создавать новые письма для этого события.</> : null} onConfirm={async () => { if (deactivating) await setActive(deactivating, false); }} onOpenChange={(open) => { if (!open) setDeactivating(null); }} open={Boolean(deactivating)} title="Отключить шаблон?" /></>;
 }
 
+/** Справочники, которые больше нигде не используются и не показываются. */
+const HIDDEN_REFERENCE_CATALOGS: ReadonlySet<string> = new Set(["guarantee-categories"]);
+
+/** Где справочник используется — подсказка над его таблицей (17.11: «что это такое, не понимаю»). */
+export const REFERENCE_CATALOG_USAGE: Readonly<Record<string, string>> = {
+  "work-types": "Выбирают в задаче. По виду работ берётся цена из «Прайса» и строка в счёте.",
+  manufacturers: "Выбирают в паспорте прибора. По производителю строится «Дерево приборов».",
+  "equipment-models": "Модель в паспорте прибора. У каждой модели свой производитель.",
+  "equipment-statuses": "Статус в паспорте прибора. По статусам — колонки доски «Приборы».",
+  "task-statuses": "Этапы заявки — колонки доски «Задачи», слева направо в этом порядке.",
+  "task-reasons": "Причина неисправности, которую инженер указывает при закрытии. По ней разрез в «Отчётах»."
+};
+
 function AdminReferencesPage() {
   const [catalogs, setCatalogs] = useState<readonly ReferenceCatalogDescriptor[]>([]);
   const [records, setRecords] = useState<readonly ReferenceCatalogValue[]>([]);
@@ -3244,7 +3257,9 @@ function AdminReferencesPage() {
   };
 
   useEffect(() => {
-    m2Api.listCatalogs().then((items) => {
+    m2Api.listCatalogs().then((loaded) => {
+      // Категорию гарантии убрали из паспорта на встрече 16.11: справочник больше нигде не нужен.
+      const items = loaded.filter((catalog) => !HIDDEN_REFERENCE_CATALOGS.has(catalog.key));
       setCatalogs(items);
       const first = items[0]?.key ?? "";
       setSelectedKey(first);
@@ -3335,6 +3350,8 @@ function AdminReferencesPage() {
     }
   };
 
+  // Столбец «Параметры» нужен, только если строки в нём различаются: «Требуются часы: нет» у всех — шум.
+  const showParams = selected ? new Set(records.map((record) => referenceAttributesSummary(selected.fields, record.attributes, relatedValues))).size > 1 : false;
   return <>
     <div className="reference-admin-layout">
       <aside className="card reference-admin-nav" aria-label="Доступные справочники">
@@ -3343,10 +3360,14 @@ function AdminReferencesPage() {
       </aside>
       {selected ? <section className="card reference-admin-editor" aria-labelledby="reference-admin-title">
         <CardHeader action={<Button icon="plus" onClick={beginCreate}>Добавить запись</Button>} headingId="reference-admin-title" meta={`${formatRussianCount(records.filter((record) => record.isActive).length, ["активная запись", "активные записи", "активных записей"])} · ${formatRussianCount(records.filter((record) => !record.isActive).length, ["неактивная", "неактивные", "неактивных"])}`} title={selected.label} />
-        <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th><th scope="col">Параметры</th><th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
+        <div className="reference-admin-hint">
+          {REFERENCE_CATALOG_USAGE[selected.key] ? <p><strong>Где используется.</strong> {REFERENCE_CATALOG_USAGE[selected.key]}</p> : null}
+          <p className="muted">Стрелки меняют порядок в выпадающих списках, карандаш — изменить название, перечёркнутый глаз — скрыть из новых заявок (история остаётся).</p>
+        </div>
+        <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th>{showParams ? <th scope="col">Параметры</th> : null}<th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
           return <tr className={!record.isActive ? "reference-admin-table__inactive" : ""} key={record.id}>
             <td><strong>{record.name}</strong>{record.isBuiltin ? <small>встроенное значение</small> : null}</td>
-            <td className="muted">{referenceAttributesSummary(selected.fields, record.attributes, relatedValues)}</td>
+            {showParams ? <td className="muted">{referenceAttributesSummary(selected.fields, record.attributes, relatedValues)}</td> : null}
             <td><StatusBadge tone={record.isActive ? "success" : "neutral"}>{record.isActive ? "Активно" : "Неактивно"}</StatusBadge></td>
             <td><div className="reference-admin-actions">
               <IconButton disabled={index === 0} icon="moveUp" label="Выше" onClick={() => void moveRecord(record, "up")} />
@@ -3356,7 +3377,7 @@ function AdminReferencesPage() {
               {!canHideReferenceValue(record) ? null : record.isActive ? <IconButton icon="hide" label="Скрыть" onClick={() => setDeactivating(record)} /> : <IconButton icon="show" label="Показать" onClick={() => void reactivateRecord(record)} />}
             </div></td>
           </tr>;
-        })}{records.length === 0 ? <tr><td colSpan={4}><ResourceState description="Нажмите «Добавить запись», чтобы значение появилось в заявках." status="empty" title={`В списке «${selected.label}» пока нет записей`} /></td></tr> : null}</tbody></table></div>
+        })}{records.length === 0 ? <tr><td colSpan={showParams ? 4 : 3}><ResourceState description="Нажмите «Добавить запись», чтобы значение появилось в заявках." status="empty" title={`В списке «${selected.label}» пока нет записей`} /></td></tr> : null}</tbody></table></div>
       </section> : null}
     </div>
     <DialogForm busy={saving} description="Запись появится в списке и будет доступна в заявках." error={formError} key={`${selected?.key ?? "catalog"}-${editingId ?? "closed"}`} onOpenChange={(open) => { if (!open) setEditingId(null); }} onSubmit={saveRecord} open={editingId !== null} submitLabel={editingId === "new" ? "Добавить запись" : "Сохранить изменения"} title={editingId === "new" ? `Добавить: ${selected?.label ?? "запись"}` : `Изменить: ${selected?.label ?? "запись"}`}><label className="field-wide">Наименование<input autoFocus onChange={(event) => setEditingName(event.target.value)} required value={editingName} /></label>{selected?.fields.filter((field) => !field.readOnly).map((field) => <label key={field.key}>{field.label}{field.type === "reference" && field.referenceCatalog ? <Select onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.value || null }))} required={field.required} value={String(editingAttributes[field.key] ?? "")}><option value="">Не выбрано</option>{(relatedValues[field.referenceCatalog] ?? []).filter((value) => value.isActive || isSelectedReference(value, editingAttributes[field.key])).map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select> : field.type === "boolean" ? <span className="field-check"><input checked={editingAttributes[field.key] === true} onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.checked }))} type="checkbox" /> Включено</span> : <input onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: field.type === "integer" || field.type === "number" ? (event.target.value === "" ? null : Number(event.target.value)) : event.target.value || null }))} required={field.required} type={field.type === "integer" || field.type === "number" ? "number" : "text"} value={String(editingAttributes[field.key] ?? "")} />}</label>)}</DialogForm>

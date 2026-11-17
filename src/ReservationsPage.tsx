@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { m2Api, type StockReservationRecord } from "./m2-api.js";
+import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { Button, ConfirmationDialog, DataTableShell, FilterBar, MetricCard, PageIntro, PageTabs, ResourceState, Select, StatusBadge, ViewSwitch, toast } from "./ui.js";
 import { ReservationBoard } from "./ReservationBoard.js";
 import { formatDisplayDate } from "./date-format.js";
@@ -189,6 +190,11 @@ export function ReservationsPage() {
   const counting = loading && items.length === 0;
   const options = useMemo(() => reservationFilterOptions(items), [items]);
   const visible = useMemo(() => filterReservations(items, appliedFilters), [items, appliedFilters]);
+  // Постранично, как задачи и приборы (просьба 17.11): «показывать по 25 / 50 / 100».
+  const { pageSize, setPageSize } = usePageSize("reservations");
+  const [pageIndex, setPageIndex] = useState(0);
+  useEffect(() => { setPageIndex(0); }, [appliedFilters, tab, view]);
+  const pageRows = useMemo(() => visible.slice(registryPageOffset(pageIndex, pageSize), registryPageOffset(pageIndex + 1, pageSize)), [visible, pageIndex, pageSize]);
   const filtered = hasReservationFilters(appliedFilters);
   const groups = view === "list" && tab === "engineers" ? reservationsByEngineer(visible) : [];
   const issuedCount = groups.reduce((total, group) => total + group.items.length, 0);
@@ -317,7 +323,7 @@ export function ReservationsPage() {
             <th>Резерв</th><th>Запчасть</th><th>Количество</th><th>Задача</th><th>Инженер</th><th>Состояние</th>
             {showActions ? <th><span className="sr-only">Действия</span></th> : null}
           </tr></thead>
-          <tbody>{visible.map((reservation) => {
+          <tbody>{pageRows.map((reservation) => {
             const actions = availableReservationActions(reservation);
             const busy = busyId === reservation.id;
             const blocked = issueBlockReason(reservation);
@@ -341,7 +347,7 @@ export function ReservationsPage() {
               >{ACTION_LABELS[action]}</Button>)}</div></td> : null}
             </tr>;
           })}</tbody>
-        </table></div></div>}
+        </table></div><RegistryPagination ariaLabel="Страницы списка резервов" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={visible.length} /></div>}
     </DataTableShell>}
     <ConfirmationDialog
       confirmLabel={shown ? CONFIRM_TEXT[shown.action].confirm : ""}

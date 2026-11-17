@@ -9448,3 +9448,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .reservation-return-quantity { display: grid; gap: 4px; margin-top: 12px; color: var(--color-ink); font-size: 13px; font-weight: 600; }
 .reservation-return-quantity input { max-width: 140px; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 8px; font: inherit; font-weight: 400; }
 .reservation-return-quantity small { color: var(--color-muted); font-size: 12px; font-weight: 400; }
+
+/* Справочники: где используется и что значат кнопки (17.11) */
+.reference-admin-hint { display: grid; gap: 4px; padding: 10px 16px 12px; border-bottom: 1px solid var(--color-border-soft); font-size: 13px; }
+.reference-admin-hint p { margin: 0; }
