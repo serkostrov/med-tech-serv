@@ -125,7 +125,7 @@ function OwnDayList({ calendar, onOpenTask }: {
           <ul>{cell.placements.map((placement) => <li key={placement.task.id}>
             <button className={`own-day-list__task${placement.task.isOverdue ? " is-overdue" : ""}`} onClick={() => onOpenTask(placement.task.id)} type="button">
               <strong>{placement.task.number}</strong> {placement.task.title}
-              <small>{[placement.task.siteName, placement.dayCount > 1 ? `день ${placement.dayIndex} из ${placement.dayCount}` : "", placement.task.isOverdue ? "срок прошёл" : ""].filter(Boolean).join(" · ")}</small>
+              <small>{[placement.task.siteName, placement.task.isOverdue ? "срок прошёл" : placement.dayCount > 1 ? `день ${placement.dayIndex} из ${placement.dayCount}` : ""].filter(Boolean).join(" · ")}</small>
             </button>
           </li>)}</ul>
         </li>;

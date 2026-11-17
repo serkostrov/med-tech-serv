@@ -163,6 +163,15 @@ export function WarehousePage() {
   const [view, setView] = useState<"board" | "list" | "documents">("list");
   const viewRef = useRef<"board" | "list" | "documents">("list");
   const [editing, setEditing] = useState<InventoryPartRecord | "new" | null>(null);
+  // «Считается штуками» (0065): у штучной запчасти количество целое, база дробь не примет.
+  const [countable, setCountable] = useState(true);
+  useEffect(() => {
+    if (!editing) return;
+    if (editing === "new") { setCountable(true); return; }
+    let alive = true;
+    void m2Api.partIsCountable(editing.id).then((value) => { if (alive) setCountable(value); });
+    return () => { alive = false; };
+  }, [editing]);
   const [receiving, setReceiving] = useState<InventoryPartRecord | null>(null);
   const [deactivating, setDeactivating] = useState<InventoryPartRecord | null>(null);
   // Открытая карточка позиции — по id, а не копией строки: после прихода или списания
@@ -213,8 +222,13 @@ export function WarehousePage() {
       name: String(form.get("name") ?? "").trim(),
       minimumStock: Number(form.get("minimumStock") ?? 0),
       notes: String(form.get("notes") ?? "").trim(),
+      isCountable: countable,
       ...(editing === "new" ? { initialQuantity: Number(form.get("initialQuantity") ?? 0) } : {})
     };
+    if (countable && "initialQuantity" in input && !Number.isInteger(input.initialQuantity)) {
+      setFormError("Запчасть считается штуками: начальный остаток — целым числом. Если её меряют метрами, снимите галочку «Считается штуками»");
+      return;
+    }
     setSaving(true); setFormError(null);
     try {
       if (editing === "new") await m2Api.createInventoryPart({ ...input, isActive: true });
@@ -317,7 +331,7 @@ export function WarehousePage() {
         : <InventoryBoard loading={loading} onOpen={(part) => setOpenedId(part.id)} parts={parts} />}
     </DataTableShell> : <DataTableShell meta={formatRussianCount(total, ["позиция", "позиции", "позиций"])} title="Запчасти">{loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" /> : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} /> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Артикул</th><th>Наименование</th><th className="numeric">На складе</th><th>Г · Н · Б</th><th className="numeric">В резерве</th><th className="numeric">Доступно</th><th className="numeric">Минимум</th><th className="numeric">У инженеров</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{parts.map((part) => <tr className={part.isActive ? "" : "reference-admin-table__inactive"} key={part.id}><td><strong>{part.articleNumber}</strong>{part.aliases ? <small className="inventory-table__aliases" title={`Артикулы поставщиков: ${part.aliases}`}>{part.aliases}</small> : null}</td><td>{part.name}</td><td className="numeric">{part.onHandQuantity}</td><td className="inventory-table__conditions" title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</td><td className="numeric">{part.reservedQuantity}</td><td className="numeric"><strong>{part.availableQuantity}</strong></td><td className="numeric">{part.minimumStock}</td><td className="numeric">{part.withEngineersQuantity}</td><td><StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge></td><td><div className="table-actions"><Button className="button--compact" onClick={() => setOpenedId(part.id)} variant="ghost">История</Button>{part.isActive ? <Button className="button--compact" onClick={() => { setFormError(null); setReceiving(part); }} variant="secondary">Пополнить</Button> : null}<IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(part); }} />{part.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(part)} /> : <IconButton icon="enable" label="Включить" onClick={() => void m2Api.updateInventoryPart(part.id, { isActive: true }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div><RegistryPagination ariaLabel="Страницы склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}</DataTableShell>}
     </>}
-    <DialogForm busy={saving} description={editing === "new" ? "Можно сразу указать начальный остаток — он попадёт на склад как поступление." : "Изменятся наименование, минимум и примечание. Остаток меняйте через «Пополнить»."} error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(draft)} submitLabel={editing === "new" ? "Добавить запчасть" : "Сохранить изменения"} title={editing === "new" ? "Новая запчасть" : "Изменить запчасть"}><label>Артикул<input autoFocus defaultValue={draft?.articleNumber} name="articleNumber" required /></label><label>Наименование<input defaultValue={draft?.name} name="name" required /></label><label>Минимальный остаток<input defaultValue={draft?.minimumStock} min="0" name="minimumStock" step="0.001" type="number" /></label>{editing === "new" ? <label>Начальный остаток<input defaultValue="0" min="0" name="initialQuantity" step="0.001" type="number" /></label> : null}<label className="field-wide">Примечание<AutoTextarea defaultValue={draft?.notes ?? ""} name="notes" rows={3} /></label></DialogForm>
+    <DialogForm busy={saving} description={editing === "new" ? "Можно сразу указать начальный остаток — он попадёт на склад как поступление." : "Изменятся наименование, минимум и примечание. Остаток меняйте через «Пополнить»."} error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(draft)} submitLabel={editing === "new" ? "Добавить запчасть" : "Сохранить изменения"} title={editing === "new" ? "Новая запчасть" : "Изменить запчасть"}><label>Артикул<input autoFocus defaultValue={draft?.articleNumber} name="articleNumber" required /></label><label>Наименование<input defaultValue={draft?.name} name="name" required /></label><label>Минимальный остаток<input defaultValue={draft?.minimumStock} min="0" name="minimumStock" step="0.001" type="number" /></label>{editing === "new" ? <label>Начальный остаток<input defaultValue="0" min="0" name="initialQuantity" step="0.001" type="number" /></label> : null}<label className="field-check field-wide"><input checked={countable} onChange={(event) => setCountable(event.target.checked)} type="checkbox" /><span>Считается штуками<small className="form-hint">Количество только целое. Снимите для трубок, жидкостей и всего, что меряют метрами или литрами.</small></span></label><label className="field-wide">Примечание<AutoTextarea defaultValue={draft?.notes ?? ""} name="notes" rows={3} /></label></DialogForm>
     <DialogForm
       busy={saving}
       description={receiving ? `Сейчас на складе ${receiving.onHandQuantity} шт. · минимум ${receiving.minimumStock}.` : undefined}

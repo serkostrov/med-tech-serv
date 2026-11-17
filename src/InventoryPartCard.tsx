@@ -141,8 +141,8 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
     const reason = String(data.get("reason") ?? "").trim();
     if (quantity === null) {
       setFormError(form === "adjustment"
-        ? "Укажите, сколько насчитали: число, например 6 или 2,5"
-        : "Укажите количество числом больше нуля, например 2 или 2,5");
+        ? "Укажите, сколько насчитали: целое число, например 6 (дробь — только у запчастей, которые меряют метрами)"
+        : "Укажите количество числом больше нуля, например 2 (дробь — только у запчастей, которые меряют метрами)");
       return;
     }
     if (form !== "adjustment" && quantity <= 0) {

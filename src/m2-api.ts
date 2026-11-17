@@ -4149,7 +4149,8 @@ export class M2ApiClient {
       article_number: input.articleNumber,
       name: input.name,
       minimum_stock: input.minimumStock ?? 0,
-      notes: input.notes ?? null
+      notes: input.notes ?? null,
+      ...(input.isCountable === false ? { is_countable: false } : {})
     }).select("id").single();
     throwIfError(error);
     const created = await this.loadInventoryPart(text(asRow(data), "id"));
@@ -4165,6 +4166,13 @@ export class M2ApiClient {
     return created;
   }
 
+  /** Считается ли запчасть штуками (0065). До миграции признака нет — тогда штуками. */
+  public async partIsCountable(id: string): Promise<boolean> {
+    const { data, error } = await this.db().from("parts").select("is_countable").eq("id", id).maybeSingle();
+    if (error) return true;
+    return asRow(data).is_countable !== false;
+  }
+
   public async updateInventoryPart(id: string, input: Readonly<Record<string, unknown>>): Promise<InventoryPartRecord> {
     const patch: Row = {};
     if (input.articleNumber !== undefined) patch.article_number = input.articleNumber;
@@ -4172,6 +4180,7 @@ export class M2ApiClient {
     if (input.minimumStock !== undefined) patch.minimum_stock = input.minimumStock;
     if (input.notes !== undefined) patch.notes = input.notes;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
+    if (input.isCountable !== undefined) patch.is_countable = input.isCountable;
     const { error } = await this.db().from("parts").update(patch).eq("id", id);
     throwIfError(error);
     return this.loadInventoryPart(id);
