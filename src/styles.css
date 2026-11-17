@@ -9263,3 +9263,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .task-board-card__open > .task-board-card__top .task-guarantee-mark { margin-left: auto; }
 .task-board-card__open > .task-board-card__top .task-guarantee-mark + i { margin-left: 0; }
 .task-registry-row__flag--guarantee { color: #8a5a00; background: #fff4d6; }
+
+/* Полоса отчёта, по которой можно перейти к задачам */
+.report-bar > .report-bar__track { display: block; height: 8px; overflow: hidden; border-radius: 999px; background: var(--color-border-soft); }
+.report-bar--action { width: 100%; margin: 0 -6px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; box-sizing: content-box; }
+.report-bar--action:hover, .report-bar--action:focus-visible { background: var(--color-accent-soft); outline: none; }
+.report-bar--action:hover > span:first-child { color: var(--color-accent-dark); text-decoration: underline; }

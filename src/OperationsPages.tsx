@@ -14,6 +14,7 @@ import { formatMoney, parseAmount } from "./price-list.js";
 import { companyToday } from "./task-dates.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { CUT_ROWS_ON_SCREEN, cutRows, reportBarsTotal } from "./report-cuts.js";
+import { cutDrillDown, metricDrillDown, type ReportCutKind, type ReportMetricKind, type TaskDrillDown } from "./task-drilldown.js";
 import { reportFileName, reportWorkbook } from "./report-export.js";
 import { allRegistryRows, downloadWorkbook, inventoryRegistrySheets, registryExportNote, registryFileName } from "./registry-export.js";
 import { XLSX_MIME } from "./xlsx.js";
@@ -363,11 +364,14 @@ function ReportBars({
   items,
   empty,
   keepOrder = false,
-  total: wholeTotal
+  total: wholeTotal,
+  onSelect
 }: {
   readonly items: readonly { readonly code?: string; readonly key?: string; readonly name: string; readonly value: number }[];
   readonly empty: string;
   readonly keepOrder?: boolean;
+  /** Нажатие на полосу открывает эти задачи в списке (встреча 16.11). */
+  readonly onSelect?: (item: { readonly code?: string; readonly key?: string; readonly name: string }) => void;
   /** Сколько всего в разрезе, если на экране показана только часть строк: иначе доли
    *  сложились бы в сто процентов по видимым строкам и разошлись с выгрузкой. */
   readonly total?: number;
@@ -380,13 +384,15 @@ function ReportBars({
     <div className="report-bars">
       {rows.map((item) => {
         const share = Math.round((item.value / total) * 100);
-        return (
-          <div className={`report-bar${item.code ? ` report-bar--${item.code}` : ""}`} key={item.code ?? item.key ?? item.name}>
-            <span title={item.name}>{item.name}</span>
-            <div><i style={{ width: `${Math.round((item.value / max) * 100)}%` }} /></div>
-            <strong>{item.value}<small>{share}%</small></strong>
-          </div>
-        );
+        const className = `report-bar${item.code ? ` report-bar--${item.code}` : ""}`;
+        const inner = <>
+          <span title={item.name}>{item.name}</span>
+          <span className="report-bar__track"><i style={{ width: `${Math.round((item.value / max) * 100)}%` }} /></span>
+          <strong>{item.value}<small>{share}%</small></strong>
+        </>;
+        return onSelect
+          ? <button aria-label={`${item.name}: ${item.value} — открыть эти задачи`} className={`${className} report-bar--action`} key={item.code ?? item.key ?? item.name} onClick={() => onSelect(item)} type="button">{inner}</button>
+          : <div className={className} key={item.code ?? item.key ?? item.name}>{inner}</div>;
       })}
     </div>
   );
@@ -411,11 +417,12 @@ function loadPercent(item: ReportEngineerLoadItem): string {
  * Карточка разреза: полосы, подпись о числе строк и доли от всех заявок периода —
  * те же, что в выгрузке, даже когда на экране видно не весь разрез.
  */
-function CutCard({ title, meta, items, total, colored = false, children, wide = false }: {
+function CutCard({ title, meta, items, total, colored = false, children, wide = false, onSelect }: {
   readonly title: string;
   readonly meta: string;
   readonly items: readonly ReportCutItem[];
   readonly total: number;
+  readonly onSelect?: (item: { readonly code?: string; readonly key?: string; readonly name: string }) => void;
   /** Коды разреза из справочника: по ним полосе достаётся цвет. */
   readonly colored?: boolean;
   readonly children?: React.ReactNode;
@@ -426,7 +433,7 @@ function CutCard({ title, meta, items, total, colored = false, children, wide = 
   return (
     <section className={`card${wide ? " analytics-grid__wide" : ""}`}>
       <CardHeader meta={hidden ? `${meta} · на экране первые ${CUT_ROWS_ON_SCREEN}, в выгрузке все ${items.length}` : meta} title={title} />
-      {children ?? <ReportBars empty="Нет данных за период." items={cutRows(items, colored)} keepOrder total={total} />}
+      {children ?? <ReportBars empty="Нет данных за период." items={cutRows(items, colored)} keepOrder {...(onSelect ? { onSelect } : {})} total={total} />}
     </section>
   );
 }
@@ -473,13 +480,27 @@ function SpendTable({ title, meta, nameColumn, items }: {
   );
 }
 
-export function ReportsPage() {
+export function ReportsPage({ onOpenTasks }: {
+  /** Переход в «Задачи» с отбором: цифра или полоса отчёта открывает эти задачи. */
+  readonly onOpenTasks?: (drill: TaskDrillDown) => void;
+} = {}) {
   const initial = periodForPreset("half");
   const [period, setPeriod] = useState(initial);
   const [preset, setPreset] = useState<ReportPreset | null>("half");
   const [report, setReport] = useState<OperationsReportRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
+  // Цифра шапки и полоса разреза ведут в «Задачи» с тем же отбором (встреча 16.11).
+  // Период — тот, что посчитан в отчёте на экране, а не то, что набрано в полях.
+  const openMetric = (kind: ReportMetricKind): { readonly onClick?: () => void } =>
+    onOpenTasks && report ? { onClick: () => onOpenTasks(metricDrillDown(kind, report.period)) } : {};
+  const openCut = (kind: ReportCutKind): { readonly onSelect?: (item: { readonly code?: string; readonly key?: string; readonly name: string }) => void } =>
+    onOpenTasks && report ? {
+      onSelect: (item) => {
+        const drill = cutDrillDown(kind, { code: item.code ?? item.key ?? "", name: item.name }, report.period);
+        if (drill) onOpenTasks(drill);
+      }
+    } : {};
   // Выгрузка за тот период, что сейчас на экране: сводка и все заявки периода в файл Excel.
   const exportExcel = async () => {
     if (!report) return;
@@ -551,11 +572,12 @@ export function ReportsPage() {
       {loading && !report ? <ResourceState description="Подождите, сводка сейчас появится." status="loading" title="Собираем отчёт" /> : null}
       {report ? <>
         <div className="metric-grid metric-grid--four">
-          <MetricCard detail={periodLabel} icon="tasks" label="Всего заявок" value={String(report.metrics.taskCount)} />
+          <MetricCard detail={periodLabel} icon="tasks" label="Всего заявок" {...openMetric("all")} value={String(report.metrics.taskCount)} />
           <MetricCard
             detail={report.metrics.closedCount === 0 ? "ещё нет закрытых" : `${report.metrics.closedOnTimePercent}% вовремя`}
             icon="check"
             label="Закрыто"
+            {...openMetric("closed")}
             tone="green"
             value={String(report.metrics.closedCount)}
           />
@@ -563,6 +585,7 @@ export function ReportsPage() {
             detail={report.metrics.taskCount === 0 ? "нет открытых заявок" : report.metrics.overdueCount === 0 ? "все в сроке" : "срок уже вышел"}
             icon="clock"
             label="Просрочено"
+            {...openMetric("overdue")}
             tone="orange"
             value={String(report.metrics.overdueCount)}
           />
@@ -570,6 +593,7 @@ export function ReportsPage() {
             detail={report.metrics.taskCount === 0 ? "нет заявок за период" : openCount === 0 ? "все закрыты или отменены" : "ещё в работе"}
             icon="engineers"
             label="Открытые"
+            {...openMetric("open")}
             tone="green"
             value={String(openCount)}
           />
@@ -587,18 +611,18 @@ export function ReportsPage() {
           : <div className="analytics-grid">
               <section className="card">
                 <CardHeader meta={formatRussianCount(report.metrics.taskCount, ["заявка", "заявки", "заявок"])} title="По статусам" />
-                <ReportBars empty="Нет разбивки по статусам." items={report.tasksByStatus} />
+                <ReportBars empty="Нет разбивки по статусам." items={report.tasksByStatus} {...openCut("status")} />
               </section>
               <section className="card">
                 <CardHeader meta="что делали" title="Виды работ" />
-                <ReportBars empty="Виды работ за период не указаны." items={report.tasksByWorkType} />
+                <ReportBars empty="Виды работ за период не указаны." items={report.tasksByWorkType} {...openCut("work_type")} />
               </section>
               <section className="card analytics-grid__wide">
                 <CardHeader meta={periodLabel} title="По месяцам" />
-                <ReportBars empty="Нет заявок по месяцам." items={report.tasksByMonth} keepOrder />
+                <ReportBars empty="Нет заявок по месяцам." items={report.tasksByMonth} keepOrder {...openCut("month")} />
               </section>
-              <CutCard colored items={report.tasksByReason} meta="отметка инженера в акте" title="Причины обращений" total={report.metrics.taskCount} />
-              <CutCard colored items={report.worksByModifier} meta="Г и Н из результата работ" title="Гарантийность работ" total={report.metrics.taskCount} />
+              <CutCard colored items={report.tasksByReason} meta="отметка инженера в акте" {...openCut("reason")} title="Причины обращений" total={report.metrics.taskCount} />
+              <CutCard colored items={report.worksByModifier} meta="отметка координатора в задаче" {...openCut("modifier")} title="Гарантийность работ" total={report.metrics.taskCount} />
               {/* «шт.» не склоняем: количество бывает дробным (0,5 литра реагента). */}
               <CutCard items={report.partsByCondition.map((item) => ({ code: item.code, name: item.name, value: item.positionCount, closed: 0, overdue: 0 }))} meta="Г, Н и Б по позициям запчастей" title="Гарантийность замен запчастей" total={partPositions}>
                 {report.partsByCondition.length
@@ -610,9 +634,9 @@ export function ReportsPage() {
                     />
                   : <p className="report-bars__empty">Запчасти за период не меняли.</p>}
               </CutCard>
-              <CutCard items={report.tasksByEquipment} meta="выезды по приборам" title="Приборы" total={report.metrics.taskCount} />
-              <CutCard items={report.tasksBySite} meta="выезды по площадкам" title="Площадки" total={report.metrics.taskCount} />
-              <CutCard items={report.tasksByEngineer} meta="выезды по инженерам" title="Инженеры" total={report.metrics.taskCount} wide />
+              <CutCard items={report.tasksByEquipment} meta="выезды по приборам" {...openCut("equipment")} title="Приборы" total={report.metrics.taskCount} />
+              <CutCard items={report.tasksBySite} meta="выезды по площадкам" {...openCut("site")} title="Площадки" total={report.metrics.taskCount} />
+              <CutCard items={report.tasksByEngineer} meta="выезды по инженерам" {...openCut("engineer")} title="Инженеры" total={report.metrics.taskCount} wide />
             </div>}
         {report.engineerLoad.length
           ? <DataTableShell meta={`${periodLabel} · считаются задачи, чьи сроки попадают в период, поэтому число отличается от выездов в разрезе «Инженеры»`} title="Загрузка инженеров">

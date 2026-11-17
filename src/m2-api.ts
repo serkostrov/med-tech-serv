@@ -2976,6 +2976,14 @@ export class M2ApiClient {
     readonly priority?: "urgent" | "planned";
     /** Гарантия: «G» гарантийные, «N» вина клиента, «none» без отметки. */
     readonly guarantee?: "G" | "N" | "none";
+    /**
+     * По дню создания по Москве, включительно — так заявки отбирает отчёт (0044).
+     * Нужен переходу из отчёта: фильтр «Период» смотрит на срок, а не на создание.
+     */
+    readonly createdFrom?: string;
+    readonly createdTo?: string;
+    /** Причина обращения; «none» — причина не указана. */
+    readonly reasonCode?: string;
     readonly periodFrom?: string;
     readonly periodTo?: string;
     readonly overdue?: boolean;
@@ -3012,7 +3020,8 @@ export class M2ApiClient {
         next = next.lt("deadline_to", companyToday()).not("status_code", "in", "(closed,cancelled)");
       }
       if (query.status) next = next.eq("status_code", query.status);
-      if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
+      if (query.engineerId === "none") next = next.is("engineer_id", null);
+      else if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
       if (query.equipmentId) next = next.eq("equipment_id", query.equipmentId);
       if (query.openOnly) next = next.not("status_code", "in", "(closed,cancelled)");
       if (query.siteId) next = next.eq("site_id", query.siteId);
@@ -3020,6 +3029,12 @@ export class M2ApiClient {
       if (query.priority) next = next.eq("priority", query.priority);
       if (query.guarantee === "none") next = next.is("work_modifier", null);
       else if (query.guarantee) next = next.eq("work_modifier", query.guarantee);
+      if (query.reasonCode === "none") next = next.is("reason_code", null);
+      else if (query.reasonCode) next = next.eq("reason_code", query.reasonCode);
+      const createdFrom = query.createdFrom ? companyDayStart(query.createdFrom) : undefined;
+      const createdTo = query.createdTo ? companyDayEnd(query.createdTo) : undefined;
+      if (createdFrom) next = next.gte("created_at", createdFrom);
+      if (createdTo) next = next.lte("created_at", createdTo);
       if (query.search?.trim()) next = next.or(`number.ilike.%${query.search.trim()}%,title.ilike.%${query.search.trim()}%`);
       return next;
     };

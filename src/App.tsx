@@ -114,6 +114,7 @@ import {
   toast
 } from "./ui.js";
 import { formatDisplayDate, parseDisplayTime, todayIsoDate } from "./date-format.js";
+import { drillPeriodText, type TaskDrillDown } from "./task-drilldown.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { toTechnicalCode } from "./slug.js";
 import { AppShell } from "./components/app-shell.js";
@@ -1498,13 +1499,64 @@ interface TaskRegistryFilters {
   readonly priority: string;
   /** «G» гарантийные, «N» вина клиента, «none» не гарантия, пусто — все. */
   readonly guarantee: string;
+  /**
+   * Отбор из отчёта — его нет в панели фильтров, поэтому над списком пишется, откуда
+   * он и как сбросить. День создания, а не срок: так заявки считает отчёт.
+   */
+  readonly drillTitle: string;
+  readonly createdFrom: string;
+  readonly createdTo: string;
+  readonly openOnly: boolean;
+  readonly reasonCode: string;
+  readonly equipmentId: string;
   readonly periodFrom: string;
   readonly periodTo: string;
   readonly overdue: boolean;
   readonly sort: "deadline_asc" | "deadline_desc" | "updated_asc" | "updated_desc";
 }
 
-const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", guarantee: "", periodFrom: "", periodTo: "", overdue: false, sort: "updated_desc" };
+const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", guarantee: "", drillTitle: "", createdFrom: "", createdTo: "", openOnly: false, reasonCode: "", equipmentId: "", periodFrom: "", periodTo: "", overdue: false, sort: "updated_desc" };
+
+/** Отбор задач для запроса: одно место на список, доску и выгрузку, чтобы они не расходились. */
+function taskPageQuery(filters: TaskRegistryFilters) {
+  return {
+    ...(filters.search ? { search: filters.search } : {}),
+    ...(filters.status ? { status: filters.status } : {}),
+    ...(filters.engineerId ? { engineerId: filters.engineerId } : {}),
+    ...(filters.siteId ? { siteId: filters.siteId } : {}),
+    ...(filters.equipmentId ? { equipmentId: filters.equipmentId } : {}),
+    ...(filters.workTypeCode ? { workTypeCode: filters.workTypeCode } : {}),
+    ...(filters.priority ? { priority: filters.priority as "urgent" | "planned" } : {}),
+    ...(filters.guarantee ? { guarantee: filters.guarantee as "G" | "N" | "none" } : {}),
+    ...(filters.reasonCode ? { reasonCode: filters.reasonCode } : {}),
+    ...(filters.createdFrom ? { createdFrom: filters.createdFrom } : {}),
+    ...(filters.createdTo ? { createdTo: filters.createdTo } : {}),
+    ...(filters.openOnly ? { openOnly: true } : {}),
+    ...(filters.periodFrom ? { periodFrom: filters.periodFrom } : {}),
+    ...(filters.periodTo ? { periodTo: filters.periodTo } : {}),
+    ...(filters.overdue ? { overdue: true } : {}),
+    sort: filters.sort
+  };
+}
+
+/** Переход из отчёта превращается в обычный отбор списка задач. */
+function drillFilters(drill: TaskDrillDown): TaskRegistryFilters {
+  return {
+    ...EMPTY_TASK_FILTERS,
+    drillTitle: drill.title,
+    createdFrom: drill.createdFrom,
+    createdTo: drill.createdTo,
+    status: drill.status ?? "",
+    overdue: drill.overdue === true,
+    openOnly: drill.openOnly === true,
+    workTypeCode: drill.workTypeCode ?? "",
+    guarantee: drill.guarantee ?? "",
+    reasonCode: drill.reasonCode ?? "",
+    equipmentId: drill.equipmentId ?? "",
+    siteId: drill.siteId ?? "",
+    engineerId: drill.engineerId ?? ""
+  };
+}
 
 const mailStatusLabels: Readonly<Record<MailInboxRecord["status"], string>> = {
   pending: "Новое", parsed: "Распознано", converted: "Создана задача", ignored: "Не требует работы",
@@ -1623,7 +1675,9 @@ async function moveTaskOnBoard(id: string, status: string): Promise<void> {
   await m2Api.transitionTask(id, status);
 }
 
-function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipment }: {
+function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onReturnToEquipment }: {
+  /** Пришли из отчёта по цифре или полосе разреза: список сразу с этим отбором. */
+  readonly initialDrill?: TaskDrillDown | undefined;
   /** Задачу открыли из паспорта прибора: «назад» возвращает в паспорт. */
   readonly onReturnToEquipment?: () => void;
   readonly initialTaskId: string | undefined;
@@ -1644,13 +1698,13 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   const [workTypes, setWorkTypes] = useState<readonly ReferenceCatalogValue[]>([]);
   const [taskStatuses, setTaskStatuses] = useState<readonly ReferenceCatalogValue[]>([]);
   const [engineers, setEngineers] = useState<readonly { readonly id: string; readonly fullName: string }[]>([]);
-  const [registryView, setRegistryView] = useState<"board" | "list" | "mail">("board");
+  const [registryView, setRegistryView] = useState<"board" | "list" | "mail">(initialDrill ? "list" : "board");
   const [showCompletedBoard, setShowCompletedBoard] = useState(false);
   const [loading, setLoading] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
-  const [filters, setFilters] = useState<TaskRegistryFilters>(EMPTY_TASK_FILTERS);
-  const [appliedFilters, setAppliedFilters] = useState<TaskRegistryFilters>(EMPTY_TASK_FILTERS);
+  const [filters, setFilters] = useState<TaskRegistryFilters>(() => initialDrill ? drillFilters(initialDrill) : EMPTY_TASK_FILTERS);
+  const [appliedFilters, setAppliedFilters] = useState<TaskRegistryFilters>(() => initialDrill ? drillFilters(initialDrill) : EMPTY_TASK_FILTERS);
   const [selectedTaskIds, setSelectedTaskIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkEngineerId, setBulkEngineerId] = useState("");
   const [bulkPeriodFrom, setBulkPeriodFrom] = useState("");
@@ -1672,13 +1726,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
     setLoading(true);
     try {
       const page = await m2Api.tasksPage({
-        ...(currentFilters.search ? { search: currentFilters.search } : {}), ...(currentFilters.status ? { status: currentFilters.status } : {}),
-        ...(currentFilters.engineerId ? { engineerId: currentFilters.engineerId } : {}), ...(currentFilters.siteId ? { siteId: currentFilters.siteId } : {}),
-        ...(currentFilters.workTypeCode ? { workTypeCode: currentFilters.workTypeCode } : {}),
-        ...(currentFilters.priority ? { priority: currentFilters.priority as "urgent" | "planned" } : {}),
-        ...(currentFilters.guarantee ? { guarantee: currentFilters.guarantee as "G" | "N" | "none" } : {}),
-        ...(currentFilters.periodFrom ? { periodFrom: currentFilters.periodFrom } : {}), ...(currentFilters.periodTo ? { periodTo: currentFilters.periodTo } : {}),
-        ...(currentFilters.overdue ? { overdue: true } : {}), sort: currentFilters.sort,
+        ...taskPageQuery(currentFilters),
         limit: pageSizeRef.current, offset: registryPageOffset(targetPageIndex, pageSizeRef.current)
       });
       // Задач стало меньше, а мы на странице за концом списка: открываем последнюю настоящую.
@@ -1810,20 +1858,12 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
   // С фильтром видна только часть колонки: место среди видимых карточек сбило бы общий порядок,
   // поэтому расставлять карточки можно на доске без фильтров (сортировка и этап не мешают).
   const boardFiltered = Boolean(appliedFilters.search || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode
-    || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue);
+    || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue
+    || appliedFilters.drillTitle);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
     const page = await m2Api.tasksPage({
-      ...(appliedFilters.search ? { search: appliedFilters.search } : {}),
+      ...taskPageQuery(appliedFilters),
       status,
-      ...(appliedFilters.engineerId ? { engineerId: appliedFilters.engineerId } : {}),
-      ...(appliedFilters.siteId ? { siteId: appliedFilters.siteId } : {}),
-      ...(appliedFilters.workTypeCode ? { workTypeCode: appliedFilters.workTypeCode } : {}),
-      ...(appliedFilters.priority ? { priority: appliedFilters.priority as "urgent" | "planned" } : {}),
-      ...(appliedFilters.guarantee ? { guarantee: appliedFilters.guarantee as "G" | "N" | "none" } : {}),
-      ...(appliedFilters.periodFrom ? { periodFrom: appliedFilters.periodFrom } : {}),
-      ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
-      ...(appliedFilters.overdue ? { overdue: true } : {}),
-      sort: appliedFilters.sort,
       boardOrder: boardOrderFor(status),
       limit,
       offset,
@@ -1876,13 +1916,7 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
     setExporting(true);
     try {
       const { rows, truncated } = await allRegistryRows<TaskApiRecord>((limit, offset) => m2Api.tasksPage({
-        ...(appliedFilters.search ? { search: appliedFilters.search } : {}), ...(appliedFilters.status ? { status: appliedFilters.status } : {}),
-        ...(appliedFilters.engineerId ? { engineerId: appliedFilters.engineerId } : {}), ...(appliedFilters.siteId ? { siteId: appliedFilters.siteId } : {}),
-        ...(appliedFilters.workTypeCode ? { workTypeCode: appliedFilters.workTypeCode } : {}),
-        ...(appliedFilters.priority ? { priority: appliedFilters.priority as "urgent" | "planned" } : {}),
-        ...(appliedFilters.guarantee ? { guarantee: appliedFilters.guarantee as "G" | "N" | "none" } : {}),
-        ...(appliedFilters.periodFrom ? { periodFrom: appliedFilters.periodFrom } : {}), ...(appliedFilters.periodTo ? { periodTo: appliedFilters.periodTo } : {}),
-        ...(appliedFilters.overdue ? { overdue: true } : {}), sort: appliedFilters.sort, limit, offset
+        ...taskPageQuery(appliedFilters), limit, offset
       }));
       // Пустой файл с одной шапкой человеку не нужен: говорим, что по отбору ничего нет.
       if (rows.length === 0) {
@@ -1936,6 +1970,15 @@ function CoordinatorTasks({ initialTaskId, onTaskRouteChange, onReturnToEquipmen
         await refreshTasks(); await openTask(task.id);
       }} open={formOpen} workTypes={workTypes} />
 
+      {registryView !== "mail" && appliedFilters.drillTitle ? <section aria-label="Отбор из отчёта" className="task-next-step task-drill">
+        <div className="task-next-step__text">
+          <strong>Из отчёта: {appliedFilters.drillTitle}</strong>
+          <span>{drillPeriodText(appliedFilters)} · {formatRussianCount(total, ["задача", "задачи", "задач"])}</span>
+        </div>
+        <div className="task-next-step__actions">
+          <Button onClick={() => void applyFilters(EMPTY_TASK_FILTERS)} variant="secondary">Показать все задачи</Button>
+        </div>
+      </section> : null}
       {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{siteNames.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Гарантия<Select onChange={(event) => setFilters((current) => ({ ...current, guarantee: event.target.value }))} value={filters.guarantee}><option value="">Все</option><option value="G">Гарантийные</option><option value="none">Не гарантия</option><option value="N">Вина клиента</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
@@ -3284,15 +3327,18 @@ function FinancePage() {
     <ConfirmationDialog cancelLabel="Не отменять" confirmLabel="Отменить счёт" description={cancelling ? <>Счёт {cancelling.number} останется в списке со статусом «Отменён», его задачи можно будет выставить в новый счёт. Вернуть отменённый счёт в работу нельзя.</> : null} onConfirm={async () => { if (!cancelling) return; await m2Api.cancelInvoice(cancelling.id); toast.success(`Счёт ${cancelling.number} отменён`); void reloadInvoiceTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Счёт отменён, но список не обновился. Обновите страницу.")); }} onOpenChange={(open) => { if (!open) setCancelling(null); }} open={Boolean(cancelling)} title={cancelling ? `Отменить счёт ${cancelling.number}?` : "Отменить счёт?"} /></>;
 }
 
-function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
+function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange, taskDrill, onOpenTasks }: {
   readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
   readonly equipmentRouteId?: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
+  /** Отбор, с которым пришли в задачи из отчёта. */
+  readonly taskDrill?: TaskDrillDown | undefined;
+  readonly onOpenTasks?: (drill: TaskDrillDown) => void;
 }) {
   switch (view) {
-    case "tasks": return <CoordinatorTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
+    case "tasks": return <CoordinatorTasks initialDrill={taskDrill} initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
     case "maintenance": return <MaintenancePlanPage />;
     case "equipment": return <EquipmentPage initialEquipmentId={equipmentRouteId} />;
     case "engineers": return <OperationsEngineersPage />;
@@ -3300,26 +3346,28 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
     case "reservations": return <ReservationsPage />;
     case "notifications": return <NotificationsPage />;
     case "journals": return <JournalsPage />;
-    case "reports": return <OperationsReportsPage />;
+    case "reports": return <OperationsReportsPage {...(onOpenTasks ? { onOpenTasks } : {})} />;
     case "customers": return <CustomersPage />;
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
     case "price": return <PricePage />;
     case "import": return <ImportPage />;
-    default: return <CoordinatorTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
+    default: return <CoordinatorTasks initialDrill={taskDrill} initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
   }
 }
 
-function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
+function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange, taskDrill, onOpenTasks }: {
   readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
   readonly equipmentRouteId?: string | undefined;
   readonly onTaskRouteChange: (taskId?: string, replace?: boolean) => void;
+  readonly taskDrill?: TaskDrillDown | undefined;
+  readonly onOpenTasks?: (drill: TaskDrillDown) => void;
 }) {
   if (view === "access") return <AccessAdminPage />;
   if (view === "references") return <ReferencesWorkspace notificationTemplates />;
-  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} taskRouteId={taskRouteId} view={view} />;
+  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} {...(onOpenTasks ? { onOpenTasks } : {})} onTaskRouteChange={onTaskRouteChange} taskDrill={taskDrill} taskRouteId={taskRouteId} view={view} />;
 }
 
 function engineerDate(value: string | undefined): string {
@@ -3732,8 +3780,11 @@ function App() {
     return () => window.removeEventListener("popstate", restoreRoute);
   }, []);
 
+  // Отбор, с которым открыли задачи из отчёта. Живёт до следующего перехода по меню.
+  const [taskDrill, setTaskDrill] = useState<TaskDrillDown | undefined>(undefined);
   const navigate = (id: NavigationId) => {
     setActiveView(id);
+    setTaskDrill(undefined);
     setEquipmentRouteId(undefined);
     setNavigationKey((value) => value + 1);
     setTaskRouteId(undefined);
@@ -3745,6 +3796,11 @@ function App() {
     const shownView = state?.view ?? routeContext.current.defaultView;
     if (window.location.pathname === "/" && shownView === id && !state?.equipmentId) return;
     window.history.pushState({ view: id }, "", "/");
+  };
+
+  const openTasksFromReport = (drill: TaskDrillDown) => {
+    navigate("tasks");
+    setTaskDrill(drill);
   };
 
   // «К прибору»: открываем паспорт новым шагом истории, не полагаясь на прошлые шаги браузера.
@@ -3822,10 +3878,10 @@ function App() {
     >
       <ProfileDialog fullName={sessionUser.fullName} onOpenChange={setProfileOpen} open={profileOpen} roleName={sessionUser.accessRoleName ?? roleLabels[role]} />
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
-      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
       {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
       {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace key={navigationKey} view={activeView} /> : null}
-      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
     </AppShell>
   );
 }
