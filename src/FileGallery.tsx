@@ -10,9 +10,19 @@ export const FILE_KIND_LABELS: Readonly<Record<string, string>> = {
   mail_attachment: "Из письма клиента"
 };
 
+/**
+ * Размер файла для подписи. Пусто, если размер неизвестен: исходник письма клиента
+ * переносится в задачу без размера (в базе 1 байт), и «1 КБ» вводило бы в заблуждение.
+ */
 export function fileSizeLabel(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 1) return "";
   if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} МБ`;
   return `${Math.max(1, Math.round(bytes / 1024))} КБ`;
+}
+
+/** Подпись под файлом в галерее: вид файла и размер, что из них известно. */
+export function fileCaption(kindLabel: string | undefined, bytes: number): string {
+  return [kindLabel, fileSizeLabel(bytes)].filter((part) => part).join(" · ");
 }
 
 function fileType(file: Pick<EquipmentFileResponse, "contentType" | "originalName">): "image" | "video" | "other" {
@@ -78,7 +88,7 @@ export function FileGallery({ files: incoming, emptyText = "Файлов пок�
           </span>
           <span className="file-gallery__caption">
             <strong>{file.originalName}</strong>
-            <small>{showKind ? `${label} · ` : ""}{fileSizeLabel(file.byteSize)}</small>
+            {fileCaption(showKind ? label : undefined, file.byteSize) ? <small>{fileCaption(showKind ? label : undefined, file.byteSize)}</small> : null}
           </span>
         </a>
       </li>;
