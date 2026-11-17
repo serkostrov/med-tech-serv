@@ -169,6 +169,11 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   transferred_at: "Передан в 1С",
   amount: "Сумма",
   closure_verified: "Закрытие принято",
+  event_code: "Событие",
+  channel: "Канал",
+  recipient: "Кому",
+  subject: "Тема",
+  part_condition: "Состояние",
   closureVerified: "Закрытие принято",
   verificationComment: "Комментарий проверки"
 };
@@ -189,7 +194,7 @@ const STATUS_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> 
     delivered: "Доставлено", failed: "Ошибка", cancelled: "Отменено"
   },
   warehouse: {
-    created: "Создан", warehouse_notified: "Склад уведомлён", issued: "Выдан",
+    requested: "Заказан", created: "Создан", warehouse_notified: "Склад уведомлён", issued: "Выдан",
     installed: "Установлен", returned: "Возвращён", cancelled: "Отменён"
   }
 };
@@ -288,19 +293,81 @@ export function auditActorLabel(event: Pick<AuditJournalEvent, "actorName" | "ac
   return "Сотрудник удалён из CRM";
 }
 
+/** Поля с деньгами: в журнале «125 000,00 ₽», а не «125000». */
+const MONEY_FIELDS: readonly string[] = [
+  "total_amount", "labor_amount", "parts_amount", "adjustment_amount", "unit_price", "amount",
+  "subtotal", "line_total", "receipt_unit_price"
+];
+
+/** Коды, которые лежат в полях как есть, а читать их надо словами (аудит 17.11, № 74). */
+const VALUE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  priority: { urgent: "Срочная", planned: "Плановая" },
+  part_condition: { G: "Г · гарантийная", N: "Н · новая", B: "Б · б/у" },
+  condition: { G: "Г · гарантийная", N: "Н · новая", B: "Б · б/у" },
+  work_modifier: { G: "Гарантийный случай", N: "Вина клиента" },
+  modifier: { G: "Гарантийный случай", N: "Вина клиента" },
+  channel: { email: "Почта", telegram: "Telegram" },
+  item_type: { work: "Работа", part: "Запчасть" },
+  event_code: {
+    task_application_accepted: "Заявка принята", task_engineer_assigned: "Инженер назначен",
+    task_engineer_accepted: "Инженер принял", task_work_completed: "Работы завершены",
+    task_rework_requested: "Возврат на доработку", task_overdue: "Просрочка",
+    stock_reservation_created: "Новый резерв запчастей", stock_reservation_ready: "Запчасти можно забрать"
+  }
+};
+
+function moneyText(amount: number): string {
+  const [rubles = "0", kopecks = "00"] = Math.abs(amount).toFixed(2).split(".");
+  return `${amount < 0 ? "−" : ""}${rubles.replace(/\B(?=(\d{3})+(?!\d))/gu, "\u00a0")},${kopecks}\u00a0₽`;
+}
+
+/** «2026-11-18» → «18.11.2026», «2026-11-18T09:30:00+03:00» → «18.11.2026 09:30» по Москве. */
+function dateText(value: string): string | undefined {
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value);
+  if (day) return `${day[3]}.${day[2]}.${day[1]}`;
+  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/u.test(value)) return undefined;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return undefined;
+  const parts = new Intl.DateTimeFormat("ru-RU", {
+    timeZone: "Europe/Moscow", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit"
+  }).formatToParts(date);
+  const part = (type: string) => parts.find((item) => item.type === type)?.value ?? "";
+  return `${part("day")}.${part("month")}.${part("year")} ${part("hour")}:${part("minute")}`;
+}
+
 /** Значение поля в журнале одной строкой. Статусы показываем словами того объекта, у которого они стоят. */
 export function auditValueText(value: unknown, field?: string, entityType?: string): string {
   if (value === null || value === undefined || value === "") return "не задано";
   if (typeof value === "boolean") return value ? "да" : "нет";
-  if (typeof value === "number") return String(value);
+  const numeric = typeof value === "number" ? value : typeof value === "string" && /^-?\d+(?:\.\d+)?$/u.test(value) ? Number(value) : undefined;
+  if (field && MONEY_FIELDS.includes(field) && numeric !== undefined) return moneyText(numeric);
+  if (typeof value === "number") return String(value).replace(".", ",");
   if (typeof value === "string") {
     if (field && entityType && STATUS_FIELDS.includes(field)) {
       const label = STATUS_LABELS[entityType]?.[value];
       if (label) return label;
     }
+    const known = field ? VALUE_LABELS[field]?.[value] : undefined;
+    if (known) return known;
+    const date = dateText(value);
+    if (date) return date;
     return value.length > 200 ? `${value.slice(0, 200)}…` : value;
   }
+  if (Array.isArray(value)) return value.length === 0 ? "не задано" : value.map((item) => auditValueText(item, field, entityType)).join(", ");
   return JSON.stringify(value);
+}
+
+/**
+ * Что именно поменяли — номер или название из снимка записи. Внутренний код записи
+ * («u-eng4», «n9», длинный идентификатор) человеку ничего не говорит, его не показываем.
+ */
+export function auditEntityTitle(event: Pick<AuditJournalEvent, "beforeData" | "afterData">): string {
+  const snapshot = { ...(event.beforeData ?? {}), ...(event.afterData ?? {}) };
+  for (const key of ["number", "full_name", "serial_number", "article_number", "name", "title"]) {
+    const value = snapshot[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
 }
 
 export interface AuditChangeLine {

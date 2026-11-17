@@ -837,6 +837,9 @@ export function publicApiErrorMessage(message: string | undefined, fallback = "�
   if (/permission denied|row-level security|PGRST301|42501/iu.test(text)) {
     return "Недостаточно прав для этого действия.";
   }
+  if (/equipment_serial_number_normalized_uq/iu.test(text)) {
+    return "Прибор с таким S/N уже есть в реестре. Регистр и пробелы при проверке не учитываются.";
+  }
   if (/duplicate key|already exists|23505/iu.test(text)) {
     return "Такая запись уже есть.";
   }

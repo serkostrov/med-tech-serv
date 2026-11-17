@@ -125,3 +125,24 @@ export function taskCalendarDate(value: string): string {
   }
   return normalized;
 }
+
+/**
+ * Что не так со сроком задачи — одно правило для создания и для «Изменить»
+ * (аудит 17.11, № 77, 78). Начало «с» может быть раньше даты вызова: задача из плана ТО
+ * заводится уже внутри своего периода. А конец «по» раньше вызова — опечатка: работа
+ * не могла закончиться раньше, чем поступила заявка. Пусто — срок в порядке.
+ */
+export function taskPeriodProblem(input: { readonly periodFrom: string; readonly periodTo: string; readonly callDate?: string }): string {
+  if (!input.periodFrom || !input.periodTo) return "Укажите период выполнения: даты «с» и «по»";
+  if (input.periodFrom > input.periodTo) return "Начало периода не может быть позже конца";
+  if (input.callDate && input.periodTo < input.callDate) {
+    return `Срок «по» ${companyDateTextFromIso(input.periodTo)} раньше даты вызова ${companyDateTextFromIso(input.callDate)}: работа не могла закончиться раньше, чем поступила заявка`;
+  }
+  return "";
+}
+
+function companyDateTextFromIso(date: string): string {
+  const [year, month, day] = date.slice(0, 10).split("-");
+  return year && month && day ? `${day}.${month}.${year}` : date;
+}
+

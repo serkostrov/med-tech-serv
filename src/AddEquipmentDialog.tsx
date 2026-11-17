@@ -53,7 +53,9 @@ export function AddEquipmentDialog({
       setSiteId("");
       return;
     }
-    setSiteId((current) => current || activeSites[0]?.id || "");
+    // Площадку не подставляем первой по списку: прибор уехал бы не туда, а человек
+    // этого не заметил бы (аудит 17.11, № 1 и 64). Подставляем, только если выбора нет.
+    setSiteId((current) => current || (activeSites.length === 1 ? activeSites[0]?.id ?? "" : ""));
   }, [open, activeSites]);
 
   const openDraft = (kind: Exclude<DraftKind, null>) => {
@@ -230,19 +232,21 @@ export function AddEquipmentDialog({
           required
           value={siteId}
         >
-          {activeSites.length === 0 ? <option value="">Нет площадок</option> : null}
+          {activeSites.length === 0 ? <option value="">Нет площадок</option> : <option disabled value="">Выберите площадку</option>}
           {activeSites.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </Select>
       </label>
       <label>
         Плательщик *
         <Select
-          defaultValue={sitePayers[0]?.id ?? ""}
+          defaultValue={sitePayers.length === 1 ? sitePayers[0]?.id ?? "" : ""}
           key={`payer-${siteId}-${sitePayers[0]?.id ?? "none"}`}
           name="payerId"
           required
         >
-          {sitePayers.length === 0 ? <option value="">Нет плательщиков на площадке</option> : null}
+          {!siteId ? <option value="">Сначала выберите площадку</option>
+            : sitePayers.length === 0 ? <option value="">Нет плательщиков на площадке</option>
+              : <option disabled value="">Выберите плательщика</option>}
           {sitePayers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
         </Select>
       </label>

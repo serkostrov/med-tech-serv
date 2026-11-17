@@ -54,7 +54,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
-import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate } from "./task-dates.js";
+import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate, taskPeriodProblem } from "./task-dates.js";
 import { clearClosureDraft, closureDraftChecked, closureDraftValue, closureDraftValues, readClosureDraft, saveClosureDraft } from "./closure-draft.js";
 import { pendingAfterRetry, pendingUploadNames, pendingUploadsText, type PendingUpload } from "./upload-retry.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
@@ -543,8 +543,8 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
     if (!selectedEquipment.siteId || !selectedEquipment.payerId) {
       return fail("Выберите клиента или инициатора — так задаются площадка и плательщик прибора");
     }
-    if (!periodFrom || !periodTo) return fail("Укажите период выполнения: даты «с» и «по»");
-    if (periodFrom > periodTo) return fail("Начало периода не может быть позже конца");
+    const periodProblem = taskPeriodProblem({ periodFrom, periodTo, ...(callDate ? { callDate } : {}) });
+    if (periodProblem) return fail(periodProblem);
     if (callDate && isFutureCompanyDate(callDate)) return fail("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
     const comment = String(data.get("comment") ?? "").trim();
     const workModifier = String(data.get("workModifier") ?? "");
@@ -1007,6 +1007,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       const visitValue = String(data.get("visitDate") ?? "").trim();
       const visitDate = visitValue ? taskCalendarDate(visitValue) : undefined;
       if (isFutureCompanyDate(callDate)) throw new Error("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
+      const periodProblem = taskPeriodProblem({ periodFrom, periodTo, callDate });
+      if (periodProblem) throw new Error(periodProblem);
       if (visitDate && visitDate < callDate) throw new Error("Дата выезда не может быть раньше даты вызова");
       // Время работ из акта относится к дню выезда: при смене даты переносим его на новый день.
       const hasActTimes = Boolean(task.workStartedAt || task.workFinishedAt);
@@ -2180,7 +2182,12 @@ function EquipmentPassportForm({
     event.preventDefault();
     const data = new FormData(event.currentTarget);
     const serial = String(data.get("serialNumber") ?? "").trim();
-    if (hasEquipmentSerialConflict(records, serial, record?.id)) {
+    // Открытая страница реестра — не весь реестр: S/N сверяем и с поиском по всей базе (аудит 17.11, № 66).
+    const sameSerial = hasEquipmentSerialConflict(records, serial, record?.id)
+      || hasEquipmentSerialConflict(
+        (await m2Api.equipmentPage({ search: serial, limit: 20 }).then((page) => page.items).catch(() => [])).map((item) => ({ id: item.id, serial: item.serialNumber })),
+        serial, record?.id);
+    if (sameSerial) {
       setError("Прибор с таким S/N уже существует. Регистр и пробелы при проверке не учитываются.");
       return;
     }
@@ -2311,7 +2318,7 @@ function EquipmentAssignmentForm({
       submitLabel={kind === "site_change" ? "Сменить место" : "Сменить плательщика"}
       title={kind === "site_change" ? "Смена места установки" : "Смена плательщика"}
     >
-      <label>{kind === "site_change" ? "Новая площадка" : "Новый плательщик"} *<Select defaultValue={available[0]?.id} name="targetId" required>{available.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</Select></label>
+      <label>{kind === "site_change" ? "Новая площадка" : "Новый плательщик"} *<Select defaultValue={available.length === 1 ? available[0]?.id : ""} name="targetId" required><option disabled value="">{kind === "site_change" ? "Выберите площадку" : "Выберите плательщика"}</option>{available.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}</Select></label>
       <label>Когда произошло *<DateTimePicker defaultValue={localDateTimeInputValue()} max={companyToday()} maxMessage="Событие не могло произойти позже сегодняшнего дня" name="occurredAt" required /></label>
       <label className="field-wide">Комментарий *<AutoTextarea maxLength={2000} name="comment" placeholder="Причина перемещения или смены плательщика" required rows={3} /></label>
     </DialogForm>

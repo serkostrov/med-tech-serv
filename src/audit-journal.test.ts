@@ -11,6 +11,7 @@ import {
   auditEntityLabel,
   auditFieldLabel,
   auditPlaceLabel,
+  auditEntityTitle,
   auditValueText,
   canReadJournals,
   loginFailureLabel,
@@ -211,3 +212,26 @@ describe("журналы: что уходит в базу", () => {
     assert.match(page, /Суммы, цены и реквизиты в журнал не пишутся/u);
   });
 });
+
+describe("журнал: значения словами (аудит 17.11, № 74)", () => {
+  it("деньги, даты, срочность, состояние, события и каналы — по-человечески", () => {
+    assert.equal(auditValueText(125000, "total_amount", "invoice"), "125\u00a0000,00\u00a0₽");
+    assert.equal(auditValueText("138500.5", "total_amount", "invoice"), "138\u00a0500,50\u00a0₽");
+    assert.equal(auditValueText("2026-11-18", "deadline_to", "task"), "18.11.2026");
+    assert.equal(auditValueText("2026-11-18T06:30:00Z", "visit_date", "task"), "18.11.2026 09:30");
+    assert.equal(auditValueText("planned", "priority", "task"), "Плановая");
+    assert.equal(auditValueText("G", "part_condition", "warehouse"), "Г · гарантийная");
+    assert.equal(auditValueText("requested", "status", "warehouse"), "Заказан");
+    assert.equal(auditValueText("task_engineer_assigned", "event_code", "integration"), "Инженер назначен");
+    assert.equal(auditValueText("email", "channel", "integration"), "Почта");
+    assert.equal(auditValueText(6.5, "hours", "task"), "6,5");
+    assert.equal(auditValueText(["repair", "installation"], "extra_work_type_codes", "task"), "repair, installation");
+  });
+
+  it("в «Где» номер или название записи, а не внутренний код", () => {
+    assert.equal(auditEntityTitle({ afterData: { id: "u-eng4", full_name: "Иванов Пётр" } }), "Иванов Пётр");
+    assert.equal(auditEntityTitle({ beforeData: { number: "СЧ-000042" }, afterData: { total_amount: 1 } }), "СЧ-000042");
+    assert.equal(auditEntityTitle({ afterData: { id: "n9" } }), "");
+  });
+});
+

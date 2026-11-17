@@ -18,6 +18,7 @@ import {
   auditActionLabel,
   auditActorLabel,
   auditChangeLines,
+  auditEntityTitle,
   auditChangeSummary,
   auditEntityLabel,
   auditPlaceLabel,
@@ -147,7 +148,7 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
                         </button>
                         <small>{auditEntityLabel(event.entityType)}{event.outcome === "denied" ? " · отказано" : ""}</small>
                       </td>
-                      <td>{auditPlaceLabel(event)}<small>{event.entityId}</small></td>
+                      <td>{auditPlaceLabel(event)}{auditEntityTitle(event) ? <small>{auditEntityTitle(event)}</small> : null}</td>
                       <td>{auditChangeSummary(event) || "—"}</td>
                     </tr>
                     {open ? <tr className="journal-table__detail" id={`journal-event-${event.id}`}><td colSpan={5}>

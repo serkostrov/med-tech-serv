@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeToIso, companyDay, companyDayEnd, companyDayStart, companyTime, companyToday, isFutureCompanyDate, isFutureCompanyMoment, taskCalendarDate } from "./task-dates.js";
+import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeToIso, companyDay, companyDayEnd, companyDayStart, companyTime, companyToday, isFutureCompanyDate, isFutureCompanyMoment, taskCalendarDate, taskPeriodProblem } from "./task-dates.js";
 
 describe("task calendar dates", () => {
   it("keeps midnight on the selected Moscow calendar day", () => {
@@ -93,3 +93,15 @@ describe("даты не из будущего", () => {
     assert.doesNotThrow(() => assertNotFutureCompanyMoment("2026-11-16T20:30:00.000Z", "Дата события", now));
   });
 });
+
+describe("срок задачи (аудит 17.11, № 77, 78)", () => {
+  it("перевёрнутый срок и срок раньше вызова не принимаются", () => {
+    assert.equal(taskPeriodProblem({ periodFrom: "2026-11-20", periodTo: "2026-11-18" }), "Начало периода не может быть позже конца");
+    assert.equal(taskPeriodProblem({ periodFrom: "2020-01-01", periodTo: "2020-01-02", callDate: "2026-11-17" }),
+      "Срок «по» 02.01.2020 раньше даты вызова 17.11.2026: работа не могла закончиться раньше, чем поступила заявка");
+    assert.equal(taskPeriodProblem({ periodFrom: "2026-11-10", periodTo: "2026-11-20", callDate: "2026-11-17" }), "",
+      "начало раньше вызова допустимо: задача из плана ТО внутри своего периода");
+    assert.equal(taskPeriodProblem({ periodFrom: "", periodTo: "2026-11-20" }), "Укажите период выполнения: даты «с» и «по»");
+  });
+});
+
