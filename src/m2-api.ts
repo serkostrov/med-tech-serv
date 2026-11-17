@@ -4,6 +4,7 @@ import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import { companyDay, companyDayEnd, companyDayStart, companyToday, taskCalendarDate } from "./task-dates.js";
 import type { NotificationPreferenceRow } from "./notification-channels.js";
 import type { EquipmentSpend } from "./equipment-spend.js";
+import { isQuoteStatus, type QuoteStatus } from "./quotes.js";
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistoryPart } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
@@ -320,6 +321,46 @@ export interface InvoiceCardResponse {
  * (`null` — действует сейчас). Прошлые строки остаются с заполненным `validTo`: это история цен.
  * `guaranteeCategoryId` пустой — цена для всех категорий гарантии.
  */
+/** КП — коммерческое предложение (ТЗ, блок 9; таблица quotes, стражи 0071). */
+export interface QuoteApiRecord {
+  readonly id: string;
+  readonly number: string;
+  readonly name: string;
+  readonly status: QuoteStatus;
+  readonly siteId?: string;
+  readonly siteName?: string;
+  readonly payerId?: string;
+  readonly payerName?: string;
+  readonly totalAmount: number;
+  /** ГГГГ-ММ-ДД */
+  readonly validUntil?: string;
+  readonly createdAt: string;
+  readonly updatedAt: string;
+}
+
+export interface QuoteItemApiRecord {
+  readonly id: string;
+  readonly quoteId: string;
+  readonly partId?: string;
+  readonly partArticle?: string;
+  readonly partCountable?: boolean;
+  readonly workTypeCode?: string;
+  readonly workTypeName?: string;
+  readonly description: string;
+  readonly quantity: number;
+  readonly unitPrice: number;
+  readonly lineTotal: number;
+}
+
+/** Запчасть для КП: из номенклатуры склада, с остатком. */
+export interface QuotePartOption {
+  readonly id: string;
+  readonly articleNumber: string;
+  readonly name: string;
+  readonly availableQuantity: number;
+  readonly onHandQuantity: number;
+}
+
 export interface PriceRowApiRecord {
   readonly id: string;
   readonly workTypeCode: string;
@@ -754,6 +795,29 @@ function related(row: Row, key: string): Row {
   const value = row[key];
   if (Array.isArray(value)) return asRow(value[0]);
   return asRow(value);
+}
+
+function mapQuote(row: Row): QuoteApiRecord {
+  const status = text(row, "status");
+  const siteId = optionalText(row, "site_id");
+  const payerId = optionalText(row, "payer_id");
+  const siteName = optionalText(asRow(row.site), "name");
+  const payerName = optionalText(asRow(row.payer), "name");
+  const validUntil = optionalText(row, "valid_until")?.slice(0, 10);
+  return {
+    id: text(row, "id"),
+    number: text(row, "number"),
+    name: text(row, "name"),
+    status: isQuoteStatus(status) ? status : "draft",
+    ...(siteId ? { siteId } : {}),
+    ...(siteName ? { siteName } : {}),
+    ...(payerId ? { payerId } : {}),
+    ...(payerName ? { payerName } : {}),
+    totalAmount: numberValue(row.total_amount) ?? 0,
+    ...(validUntil ? { validUntil } : {}),
+    createdAt: iso(row.created_at),
+    updatedAt: iso(row.updated_at)
+  };
 }
 
 function mapPayerOption(row: Row): PayerOption {
@@ -5453,6 +5517,145 @@ export class M2ApiClient {
    * Прайс целиком: действующие, прошлые и будущие цены по видам работ. Читать можно
    * с правом `price.read` или `finance.read` — это решает политика строк в базе.
    */
+  // ---------------------------------------------------------------- КП (ТЗ, блок 9)
+
+  public async listQuotes(): Promise<readonly QuoteApiRecord[]> {
+    const { data, error } = await this.db().from("quotes")
+      .select("id, number, name, status, site_id, payer_id, total_amount, valid_until, created_at, updated_at, site:sites!site_id(name), payer:payers!payer_id(name)")
+      .order("created_at", { ascending: false })
+      .limit(500);
+    throwIfError(error, "Не получилось загрузить КП");
+    return (data ?? []).map((item) => mapQuote(asRow(item)));
+  }
+
+  public async quote(id: string): Promise<{ readonly quote: QuoteApiRecord; readonly items: readonly QuoteItemApiRecord[] }> {
+    const [head, lines] = await Promise.all([
+      this.db().from("quotes")
+        .select("id, number, name, status, site_id, payer_id, total_amount, valid_until, created_at, updated_at, site:sites!site_id(name), payer:payers!payer_id(name)")
+        .eq("id", id).maybeSingle(),
+      this.db().from("quote_items")
+        .select("id, quote_id, part_id, work_type_code, description, quantity, unit_price, line_total, created_at, part:parts(article_number, is_countable), work_type:work_types(name)")
+        .eq("quote_id", id)
+        .order("created_at", { ascending: true })
+        .order("id", { ascending: true })
+    ]);
+    throwIfError(head.error, "Не получилось открыть КП");
+    throwIfError(lines.error, "Не получилось загрузить позиции КП");
+    if (!head.data) throw new M2ApiError(404, "КП не найдено: возможно, у вас нет к нему доступа");
+    return {
+      quote: mapQuote(asRow(head.data)),
+      items: (lines.data ?? []).map((item) => {
+        const row = asRow(item);
+        const part = asRow(row.part);
+        const workType = asRow(row.work_type);
+        const partId = optionalText(row, "part_id");
+        const workTypeCode = optionalText(row, "work_type_code");
+        const partArticle = optionalText(part, "article_number");
+        const workTypeName = optionalText(workType, "name");
+        return {
+          id: text(row, "id"),
+          quoteId: text(row, "quote_id"),
+          ...(partId ? { partId } : {}),
+          ...(partArticle ? { partArticle } : {}),
+          ...(partId ? { partCountable: part.is_countable !== false } : {}),
+          ...(workTypeCode ? { workTypeCode } : {}),
+          ...(workTypeName ? { workTypeName } : {}),
+          description: text(row, "description"),
+          quantity: numberValue(row.quantity) ?? 0,
+          unitPrice: numberValue(row.unit_price) ?? 0,
+          lineTotal: numberValue(row.line_total) ?? 0
+        };
+      })
+    };
+  }
+
+  public async createQuote(input: { readonly name: string; readonly siteId?: string; readonly payerId?: string; readonly validUntil?: string }): Promise<QuoteApiRecord> {
+    const name = input.name.trim();
+    if (!name) throw new M2ApiError(400, "Назовите КП: например, «Лампы и реагенты для КДЛ»");
+    const { data, error } = await this.db().from("quotes")
+      .insert({ name, site_id: input.siteId || null, payer_id: input.payerId || null, valid_until: input.validUntil || null })
+      .select("id, number, name, status, site_id, payer_id, total_amount, valid_until, created_at, updated_at, site:sites!site_id(name), payer:payers!payer_id(name)")
+      .single();
+    throwIfError(error, "Не получилось создать КП");
+    return mapQuote(asRow(data));
+  }
+
+  public async updateQuote(id: string, input: { readonly name: string; readonly siteId?: string; readonly payerId?: string; readonly validUntil?: string }): Promise<void> {
+    const name = input.name.trim();
+    if (!name) throw new M2ApiError(400, "Назовите КП");
+    const { error } = await this.db().from("quotes")
+      .update({ name, site_id: input.siteId || null, payer_id: input.payerId || null, valid_until: input.validUntil || null })
+      .eq("id", id);
+    throwIfError(error, "Не получилось сохранить КП");
+  }
+
+  public async setQuoteStatus(id: string, status: QuoteStatus): Promise<void> {
+    const { error } = await this.db().from("quotes").update({ status }).eq("id", id);
+    throwIfError(error, "Не получилось сменить статус КП");
+  }
+
+  public async addQuoteItem(input: {
+    readonly quoteId: string;
+    readonly partId?: string;
+    readonly workTypeCode?: string;
+    readonly description: string;
+    readonly quantity: number;
+    readonly unitPrice: number;
+  }): Promise<void> {
+    const { error } = await this.db().from("quote_items").insert({
+      quote_id: input.quoteId,
+      part_id: input.partId ?? null,
+      work_type_code: input.workTypeCode ?? null,
+      description: input.description.trim(),
+      quantity: input.quantity,
+      unit_price: input.unitPrice
+    });
+    throwIfError(error, "Не получилось добавить позицию");
+  }
+
+  public async updateQuoteItem(id: string, input: { readonly quantity: number; readonly unitPrice: number }): Promise<void> {
+    const { error } = await this.db().from("quote_items").update({ quantity: input.quantity, unit_price: input.unitPrice }).eq("id", id);
+    throwIfError(error, "Не получилось сохранить позицию");
+  }
+
+  public async deleteQuoteItem(id: string): Promise<void> {
+    const { error } = await this.db().from("quote_items").delete().eq("id", id);
+    throwIfError(error, "Не получилось убрать позицию");
+  }
+
+  /** Запчасти для КП: поиск по артикулу (и старым артикулам) и названию, с остатком на складе. */
+  public async searchQuoteParts(search: string): Promise<readonly QuotePartOption[]> {
+    let request = this.db().from("inventory_part_registry")
+      .select("id, article_number, name, available_quantity, on_hand_quantity")
+      .eq("is_active", true)
+      .order("article_number")
+      .limit(20);
+    for (const token of searchTokens(search)) request = request.ilike("search_text", searchTextPattern(token));
+    const { data, error } = await request;
+    throwIfError(error, "Не получилось найти запчасти");
+    return (data ?? []).map((item) => {
+      const row = asRow(item);
+      return {
+        id: text(row, "id"),
+        articleNumber: text(row, "article_number"),
+        name: text(row, "name"),
+        availableQuantity: numberValue(row.available_quantity) ?? 0,
+        onHandQuantity: numberValue(row.on_hand_quantity) ?? 0
+      };
+    });
+  }
+
+  /** Сколько свободно на складе по запчастям из КП. */
+  public async quotePartsAvailability(partIds: readonly string[]): Promise<ReadonlyMap<string, number>> {
+    if (partIds.length === 0) return new Map();
+    const { data, error } = await this.db().from("inventory_part_registry").select("id, available_quantity").in("id", [...new Set(partIds)]);
+    throwIfError(error, "Не получилось узнать остатки");
+    return new Map((data ?? []).map((item) => {
+      const row = asRow(item);
+      return [text(row, "id"), numberValue(row.available_quantity) ?? 0] as const;
+    }));
+  }
+
   public async listPriceList(): Promise<readonly PriceRowApiRecord[]> {
     const { data, error } = await this.db().from("price_list")
       .select("id, work_type_code, guarantee_category_id, valid_from, valid_to, amount, include_guarantee_work, created_at")

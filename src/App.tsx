@@ -79,6 +79,7 @@ import { installedReservationNumbers } from "./reservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { PricePage } from "./PricePage.js";
+import { QuotesPage } from "./QuotesPage.js";
 import { ImportPage } from "./ImportPage.js";
 import { JournalsPage } from "./JournalsPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
@@ -3508,6 +3509,7 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
     case "price": return <PricePage />;
+    case "quotes": return <QuotesPage />;
     case "import": return <ImportPage />;
     default: return <CoordinatorTasks initialDrill={taskDrill} initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
   }
@@ -3795,6 +3797,8 @@ function navigationForSession(role: AppRole, user: ApiSessionUser | null | undef
     if (item.id === "access") return user.permissions.some((permission) => permission === "users.read" || permission === "roles.write");
     // Прайс смотрят и те, кто ведёт цены, и те, кто выставляет счета: так же устроено правило строк в базе.
     if (item.id === "price") return user.permissions.some((permission) => permission === "price.read" || permission === "finance.read");
+    // КП видят те, кто видит деньги или ведёт договоры: так же устроено правило строк в базе (0009).
+    if (item.id === "quotes") return user.permissions.some((permission) => permission === "finance.read" || permission === "contracts.write");
     return user.permissions.includes(navigationPermission[item.id] ?? "");
   });
 }

@@ -7824,6 +7824,25 @@ td .resource-state {
   .task-next-step__actions > * { width: 100%; }
 }
 
+/* КП — коммерческие предложения (ТЗ, блок 9) */
+.quote-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 14px; }
+.quote-card__add { display: flex; flex-wrap: wrap; gap: 8px; }
+.quote-items td strong { display: block; }
+.quote-items__kind, .quote-items__stock { display: block; color: var(--color-muted); font-size: 12px; }
+.quote-items__stock--short { color: var(--color-danger); }
+.quote-items input { width: 96px; min-height: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+.quote-items tfoot th { text-align: right; color: var(--color-muted); font-weight: 600; }
+.quote-overdue { display: block; color: var(--color-danger); font-size: 12px; }
+.quote-part-results { display: grid; gap: 6px; max-height: 280px; overflow-y: auto; }
+.quote-part-results__item { display: grid; grid-template-columns: minmax(120px, auto) 1fr auto; gap: 4px 12px; align-items: center; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: var(--radius-md); color: var(--color-ink); background: var(--color-surface); text-align: left; cursor: pointer; }
+.quote-part-results__item small { color: var(--color-muted); font-size: 12px; white-space: nowrap; }
+.quote-part-results__item:hover { border-color: var(--color-accent); }
+.quote-part-results__item--on { border-color: var(--color-accent); box-shadow: inset 0 0 0 1px var(--color-accent); background: var(--color-accent-soft); }
+@media (max-width: 640px) {
+  .quote-part-results__item { grid-template-columns: 1fr; }
+  .quote-items input { width: 100%; }
+}
+
 /* Затраты в карточке прибора (ТЗ, блок 8) */
 .equipment-spend { margin-top: 14px; }
 .equipment-spend__periods { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 10px; }

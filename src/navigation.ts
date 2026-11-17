@@ -13,6 +13,7 @@ export type NavigationId =
   | "references"
   | "import"
   | "finance"
+  | "quotes"
   | "price"
   | "reservations"
   | "inventory"
@@ -30,6 +31,7 @@ export type NavigationIcon =
   | "reports"
   | "references"
   | "finance"
+  | "quotes"
   | "price"
   | "reservations"
   | "inventory"
@@ -73,6 +75,7 @@ const coordinatorNavigation: readonly NavigationItem[] = [
   { id: "reservations", label: "Резервы", description: "Запчасти под задачи и что у инженеров", group: "Работа", icon: "reservations" },
   { id: "customers", label: "Клиенты", description: "Площадки и люди в них", group: "Контроль", icon: "customers" },
   { id: "finance", label: "Счета", description: "Выставить счёт по закрытым задачам", group: "Контроль", icon: "finance" },
+  { id: "quotes", label: "КП", description: "Коммерческие предложения клиентам", group: "Контроль", icon: "quotes" },
   { id: "price", label: "Прайс", description: "Цены по видам работ и их история", group: "Контроль", icon: "price" },
   { id: "reports", label: "Отчёты", description: "Сводка по задачам за период", group: "Контроль", icon: "reports" },
   { id: "notifications", label: "Уведомления", description: "Письма клиентам и сотрудникам", group: "Контроль", icon: "notifications" },

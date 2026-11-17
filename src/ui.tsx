@@ -54,6 +54,7 @@ import {
   Warehouse,
   Wrench,
   X,
+  FileText,
   type LucideIcon
 } from "lucide-react";
 import { Alert } from "./components/ui/alert.js";
@@ -80,7 +81,7 @@ import { ToastHost, toast } from "./components/ui/toast.js";
 
 export type IconName =
   | "tasks" | "maintenance" | "equipment" | "engineers" | "warehouse" | "customers" | "notifications"
-  | "reports" | "references" | "finance" | "price" | "reservations" | "inventory" | "handoff"
+  | "reports" | "references" | "finance" | "quotes" | "price" | "reservations" | "inventory" | "handoff"
   | "plus" | "bell" | "check" | "search" | "filter" | "arrow" | "back" | "clock"
   | "info" | "close" | "users" | "shield" | "mail" | "logout"
   | "edit" | "hide" | "show" | "disable" | "enable" | "open" | "relocate" | "ignore" | "restore"
@@ -97,6 +98,7 @@ const icons: Readonly<Record<IconName, LucideIcon>> = {
   reports: BarChart3,
   references: BookOpen,
   finance: Wallet,
+  quotes: FileText,
   price: Tags,
   reservations: Bookmark,
   inventory: Package,
