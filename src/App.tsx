@@ -1802,8 +1802,10 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
   const [workTypes, setWorkTypes] = useState<readonly ReferenceCatalogValue[]>([]);
   const [taskStatuses, setTaskStatuses] = useState<readonly ReferenceCatalogValue[]>([]);
   const [engineers, setEngineers] = useState<readonly { readonly id: string; readonly fullName: string }[]>([]);
-  const [registryView, setRegistryView] = useState<"board" | "list" | "mail">(initialDrill ? "list" : "board");
-  const [showCompletedBoard, setShowCompletedBoard] = useState(false);
+  // Из отчёта тоже открывается доска (17.11): отбор применяется ко всем колонкам. Закрытые
+  // показываем сразу — отчёт считает и их, иначе число на плашке и на доске разойдётся.
+  const [registryView, setRegistryView] = useState<"board" | "list" | "mail">("board");
+  const [showCompletedBoard, setShowCompletedBoard] = useState(Boolean(initialDrill && !initialDrill.openOnly && !initialDrill.overdue));
   const [loading, setLoading] = useState(false);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [taskCard, setTaskCard] = useState<TaskCardResponse | null>(null);
@@ -1870,7 +1872,8 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
   const applyFilters = async (nextFilters = filters) => {
     setFilters(nextFilters); setAppliedFilters(nextFilters); setSelectedTaskIds(new Set()); setPageIndex(0);
     // На доске колонки перезагрузятся сами по новым фильтрам; список — только если он открыт.
-    if (registryView !== "list") { setListLoaded(false); return; }
+    // Отбор из отчёта пишет над доской, сколько задач: это число даёт загрузка списка.
+    if (registryView !== "list" && !nextFilters.drillTitle) { setListLoaded(false); return; }
     try { await reloadTasks(nextFilters, 0); }
     catch (loadError) { toast.error(loadError instanceof Error ? loadError.message : "Не получилось обновить список"); }
   };
@@ -1965,6 +1968,8 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
     || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue
     || appliedFilters.drillTitle);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
+    // Отбор по этапу: остальные колонки видны пустыми («Не входит в отбор»), запрос не нужен.
+    if (appliedFilters.status && status !== appliedFilters.status) return { items: [], total: 0, manualOrder: false };
     const page = await m2Api.tasksPage({
       ...taskPageQuery(appliedFilters),
       status,
@@ -1989,8 +1994,8 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
     void m2Api.listSiteNames().then(setSiteNames).catch(report);
   }, []);
   useEffect(() => {
-    // Список задач грузим только когда открыта вкладка «Список».
-    if (registryView !== "list" || listLoaded) return;
+    // Список задач грузим, когда открыта вкладка «Список» или над доской стоит отбор из отчёта (нужно число задач).
+    if ((registryView !== "list" && !appliedFilters.drillTitle) || listLoaded) return;
     void reloadTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить список задач"));
   }, [registryView]);
   useEffect(() => {
@@ -2077,8 +2082,9 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
       {registryView !== "mail" && attention ? <TaskAttentionStrip applied={appliedFilters} counts={attention} onPick={(key, active) => {
         if (active) { void applyFilters(EMPTY_TASK_FILTERS); return; }
         const picked = attentionFilter(key);
-        // Счётчик открывает список: на доске колонка этапа и так видна, а просроченные разбросаны по колонкам.
-        setRegistryView("list"); setShowCompletedBoard(false);
+        // Счётчик не переключает вид (17.11: «почему сразу в список кидает»): на доске остаются
+        // все колонки, в них — только задачи из отбора; в списке — те же задачи строками.
+        setShowCompletedBoard(false);
         void applyFilters({ ...EMPTY_TASK_FILTERS, status: picked.status, overdue: picked.overdue, sort: key === "overdue" ? "deadline_asc" : EMPTY_TASK_FILTERS.sort });
       }} /> : null}
       {registryView !== "mail" && appliedFilters.drillTitle ? <section aria-label="Отбор из отчёта" className="task-next-step task-drill">

@@ -187,12 +187,15 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   const missing = useMemo(() => [...new Set(tasks.map((task) => task.status).filter((status) => !known.has(status)))].map((status) => ({
     id: status, code: status, name: TASK_STATUS_LABELS[status] ?? "Статус", isActive: true, attributes: {}
   } satisfies ReferenceCatalogValue)), [known, tasks]);
+  // Отбор по этапу не сжимает доску до одной колонки: видны все этапы, остальные бледные
+  // с подписью «Не входит в отбор» (просьба 17.11: «почему не полностью доска показывается»).
   const columns = useMemo(() => [...activeStatuses, ...missing].filter((status) => {
     const code = status.code ?? status.id;
-    if (visibleStatus) return code === visibleStatus;
+    if (visibleStatus && code === visibleStatus) return true;
     if (!showCompleted && isCompletedBoardStatus(status)) return false;
     return true;
   }), [activeStatuses, missing, showCompleted, visibleStatus]);
+  const outsideSelection = (code: string) => Boolean(visibleStatus) && code !== visibleStatus;
   const [pages, setPages] = useState<Readonly<Record<string, ColumnPage>>>({});
   // Для обновления колонок после переноса: свежие данные, номер изменения каждой колонки,
   // сколько переносов в ней ещё идёт и номер загрузки доски (меняется вместе с фильтрами).
@@ -612,7 +615,8 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     const terminal = (status.attributes as Readonly<Record<string, string | number | boolean | null>>)["isTerminal"] === true;
     // Колонка недоступна, если ни одну из перетаскиваемых задач сюда перенести нельзя.
     const incoming = draggedEntries.filter((entry) => entry.source !== code);
-    const blocked = incoming.length > 0 && incoming.every((entry) => boardDropDecision(entry.task, entry.source, code, engineerMode).kind === "no");
+    const outside = outsideSelection(code);
+    const blocked = incoming.length > 0 && (outside || incoming.every((entry) => boardDropDecision(entry.task, entry.source, code, engineerMode).kind === "no"));
     const slotIndex = dropSlot?.code === code && !blocked ? dropSlot.index : -1;
     const slotNode = <div aria-hidden="true" className="task-board__slot" key="drop-slot" style={dragHeight > 0 ? { height: `${Math.round(dragHeight)}px` } : undefined} />;
     // Карточки и место, куда встанут перетаскиваемые (как в Trello). Перетаскиваемые остаются
@@ -627,19 +631,19 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
       nodes.push(renderCard(task));
     }
     if (slotIndex >= 0 && slotIndex >= restIndex) nodes.push(slotNode);
-    return <section className={`task-board__column task-board__column--${code}${dropTarget === code && incoming.length > 0 && !blocked ? " task-board__column--drop" : ""}${blocked ? " task-board__column--blocked" : ""}`} key={status.id} onDragEnter={() => setDropTarget(code)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; trackSlot(event, code); }} onDragLeave={(event) => {
+    return <section className={`task-board__column task-board__column--${code}${dropTarget === code && incoming.length > 0 && !blocked ? " task-board__column--drop" : ""}${blocked ? " task-board__column--blocked" : ""}${outside ? " task-board__column--outside" : ""}`} key={status.id} onDragEnter={() => setDropTarget(code)} onDragOver={(event) => { event.preventDefault(); event.dataTransfer.dropEffect = "move"; trackSlot(event, code); }} onDragLeave={(event) => {
       if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
       // Safari не сообщает, куда ушёл курсор: если он ещё над колонкой, это переход между карточками.
       const box = event.currentTarget.getBoundingClientRect();
       if (event.clientX > box.left && event.clientX < box.right && event.clientY > box.top && event.clientY < box.bottom) return;
       setDropTarget(null);
       if (dropSlotRef.current?.code === code) updateSlot(null);
-    }} onDrop={(event) => { event.preventDefault(); const ids = draggedIds.length > 0 ? draggedIds : [event.dataTransfer.getData("text/plain")].filter(Boolean); const place = dropSlotRef.current?.code === code ? dropSlotRef.current.index : undefined; if (ids.length > 0) void moveTasks(ids, code, place); }}>
+    }} onDrop={(event) => { event.preventDefault(); if (outside) return; const ids = draggedIds.length > 0 ? draggedIds : [event.dataTransfer.getData("text/plain")].filter(Boolean); const place = dropSlotRef.current?.code === code ? dropSlotRef.current.index : undefined; if (ids.length > 0) void moveTasks(ids, code, place); }}>
       <header><div><span className="task-board__title"><span aria-hidden="true" className={`task-board__dot task-board__dot--${tone(code, terminal)}`} />{status.name}</span><strong>{total}</strong></div></header>
       <div className="task-board__cards" onScroll={(event) => handleScroll(code, event)}>
         {page?.loading ? <p className="task-board__empty">Загружаем задачи…</p> : null}
         {nodes}
-        {!page?.loading && items.length === 0 && slotIndex < 0 ? <p className="task-board__empty">В этом статусе пока нет задач.</p> : null}
+        {!page?.loading && items.length === 0 && slotIndex < 0 ? <p className="task-board__empty">{outside ? "Не входит в отбор" : "В этом статусе пока нет задач."}</p> : null}
         {page?.loadingMore ? <p className="task-board__loading-more">Загружаем ещё…</p> : null}
         {page?.error ? <button className="task-board__retry" onClick={() => void retryColumn(code)} type="button">{page.error} · Повторить</button> : null}
         {!page?.loading && items.length < total ? <button className="task-board__more" onClick={() => void loadMore(code)} type="button">Показать ещё {Math.min(COLUMN_PAGE_SIZE, total - items.length)}</button> : null}

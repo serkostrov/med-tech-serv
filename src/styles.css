@@ -161,6 +161,10 @@
   opacity: .5;
 }
 
+/* Этап не входит в отбор (счётчик «Новые» или переход из отчёта): колонка на месте, но бледная */
+.task-board__column--outside { opacity: .55; }
+.task-board__column--outside .task-board__empty { font-style: italic; }
+
 .task-board__column--drop {
   border-color: var(--color-accent);
   box-shadow: inset 0 0 0 2px rgb(35 142 190 / 16%);

@@ -86,3 +86,32 @@ it("declines the task count for the board messages", () => {
   assert.equal(tasksWord(21), "задача");
   assert.equal(tasksWord(24), "задачи");
 });
+
+it("keeps every column when a stage is selected: the rest are dimmed and say they are outside the selection", () => {
+  const statuses = [
+    { id: "new", code: "new", name: "Новая", isActive: true, attributes: { sortOrder: 10, isTerminal: false } },
+    { id: "assigned", code: "assigned", name: "Назначена", isActive: true, attributes: { sortOrder: 20, isTerminal: false } },
+    { id: "closed", code: "closed", name: "Закрыта", isActive: true, attributes: { sortOrder: 90, isTerminal: true } }
+  ];
+  const html = renderToStaticMarkup(<TaskBoard
+    engineers={[]}
+    equipment={[]}
+    onMove={async () => undefined}
+    onOpen={() => undefined}
+    statuses={statuses}
+    tasks={[{ id: "t-1", number: "З-1", title: "Замена фильтра", status: "assigned", createdAt: "2026-11-17T09:00:00.000Z", updatedAt: "2026-11-17T09:00:00.000Z" }]}
+    visibleStatus="assigned"
+  />);
+  // Вся доска на месте, а не одна колонка «Назначена».
+  assert.match(html, /Новая/u);
+  assert.match(html, /Назначена/u);
+  assert.match(html, /Замена фильтра/u);
+  assert.match(html, /task-board__column--new[^"]*task-board__column--outside/u);
+  assert.doesNotMatch(html, /task-board__column--assigned[^"]*task-board__column--outside/u);
+  assert.match(html, /Не входит в отбор/u);
+  // Закрытые без явного показа скрыты, но выбранный закрытый этап виден.
+  assert.doesNotMatch(html, /Закрыта/u);
+  const closed = renderToStaticMarkup(<TaskBoard engineers={[]} equipment={[]} onMove={async () => undefined} onOpen={() => undefined} statuses={statuses} tasks={[]} visibleStatus="closed" />);
+  assert.match(closed, /Закрыта/u);
+  assert.match(closed, /Новая/u);
+});
