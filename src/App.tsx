@@ -115,6 +115,7 @@ import {
 } from "./ui.js";
 import { formatDisplayDate, parseDisplayTime, todayIsoDate } from "./date-format.js";
 import { drillPeriodText, type TaskDrillDown } from "./task-drilldown.js";
+import { EngineerCalendar } from "./EngineerCalendar.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { toTechnicalCode } from "./slug.js";
 import { AppShell } from "./components/app-shell.js";
@@ -3445,7 +3446,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
-  const [view, setView] = useState<"board" | "list">("board");
+  const [view, setView] = useState<"board" | "list" | "calendar">("board");
   // Список задач постранично: раньше показывались только первые 20.
   const [listPageIndex, setListPageIndex] = useState(0);
   const { pageSize: listPageSize, setPageSize: setListPageSize } = usePageSize("engineer-tasks");
@@ -3548,7 +3549,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
   }
   const openFromList = (id: string) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"));
   return <>
-    <PageIntro title="Мои задачи" titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать задачи" onValueChange={(next) => { setView(next); setReload((value) => value + 1); }} value={view} />} />
+    <PageIntro title="Мои задачи" titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }, { value: "calendar", label: "Календарь" }]} label="Как показать задачи" onValueChange={(next) => { setView(next); setReload((value) => value + 1); }} value={view} />} />
     {view === "board" ? <TaskBoard
       engineers={[]}
       equipment={[]}
@@ -3573,6 +3574,8 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
       {!loading && !error && page ? <div className="mobile-task-list">{page.items.map((task) => <EngineerTaskCard key={task.id} onOpen={openFromList} task={task} />)}</div> : null}
       {!error && page ? <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={setListPageIndex} onPageSizeChange={(size) => { setListPageSize(size); setListPageIndex(0); }} pageIndex={listPageIndex} pageSize={listPageSize} total={page.total} /> : null}
     </section> : null}
+    {/* Свои задачи по дням: что запланировано на неделю или месяц (встреча 16.11). */}
+    {view === "calendar" ? <EngineerCalendar onOpenTask={openFromList} ownOnly /> : null}
   </>;
 }
 

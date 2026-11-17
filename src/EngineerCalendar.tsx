@@ -18,7 +18,7 @@ import {
   type EngineerCalendar as CalendarLayout
 } from "./engineer-calendar.js";
 import { companyToday } from "./task-dates.js";
-import { Button, CardHeader, DatePicker, Dialog, MetricCard, ResourceState, StatusBadge, ViewSwitch, toast } from "./ui.js";
+import { Button, CardHeader, DatePicker, Dialog, MetricCard, ResourceState, Select, StatusBadge, ViewSwitch, toast } from "./ui.js";
 import { EngineerPicker } from "./EngineerPicker.js";
 import { formatIsoCalendarDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
@@ -312,8 +312,23 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
  * Задачи за период отдаёт база (функция engineer_calendar, миграция 0051), раскладку
  * по дням делает чистый модуль engineer-calendar.ts.
  */
-export function EngineerCalendar() {
+/** Этапы в фильтре календаря — по порядку жизни задачи. */
+const CALENDAR_STATUS_FILTER: readonly string[] = ["planned", "new", "assigned", "in_progress", "under_review", "closed"];
+
+/**
+ * Календарь загрузки. Координатор видит всех инженеров и может отобрать одного и этап
+ * задачи (встреча 16.11: «два фильтра — тип задачи и инженер»). Инженер видит только
+ * себя — это решает и база (engineer_calendar_scope), — а задачу открывает своей карточкой.
+ */
+export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
+  /** Календарь инженера: только его задачи, без фильтра по людям и без «не назначенных». */
+  readonly ownOnly?: boolean;
+  /** Открыть задачу своей карточкой вместо окна назначения. */
+  readonly onOpenTask?: (taskId: string) => void;
+} = {}) {
   const today = companyToday();
+  const [engineerFilter, setEngineerFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState("");
   const [mode, setMode] = useState<CalendarMode>("week");
   const [range, setRange] = useState<CalendarRange>(() => calendarRange("week", today));
   // Свой период набирают в двух полях: показываем его, только когда обе даты заданы.
@@ -388,10 +403,14 @@ export function EngineerCalendar() {
 
   // Пересобираем раскладку только когда меняются данные или день: на каждое открытие
   // окна задачи заново раскладывать месяц на двадцать инженеров незачем.
-  const calendar = useMemo(
-    () => buildEngineerCalendar({ engineers: data.loaded.engineers, tasks: data.loaded.tasks, range: data.range, today }),
-    [data, today]
-  );
+  const calendar = useMemo(() => {
+    // Отбор — до раскладки: перегруз и «свободен весь период» считаются по тому, что видно.
+    const engineers = engineerFilter ? data.loaded.engineers.filter((item) => item.id === engineerFilter) : data.loaded.engineers;
+    const tasks = data.loaded.tasks.filter((task) => (!statusFilter || task.status === statusFilter)
+      && (!engineerFilter || task.engineerId === engineerFilter));
+    return buildEngineerCalendar({ engineers, tasks, range: data.range, today });
+  }, [data, today, engineerFilter, statusFilter]);
+  const openTask = (taskId: string) => { if (onOpenTask) onOpenTask(taskId); else setOpenTaskId(taskId); };
   const showToday = today >= range.from && today <= range.to;
   return <>
     <div className="engineer-calendar-toolbar">
@@ -407,6 +426,16 @@ export function EngineerCalendar() {
         onValueChange={changeMode}
         value={mode}
       />
+      <div className="engineer-calendar-toolbar__filters">
+        {ownOnly ? null : <label>Инженер<Select onChange={(event) => setEngineerFilter(event.target.value)} value={engineerFilter}>
+          <option value="">Все инженеры</option>
+          {data.loaded.engineers.map((item) => <option key={item.id} value={item.id}>{item.fullName}</option>)}
+        </Select></label>}
+        <label>Этап<Select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}>
+          <option value="">Все этапы</option>
+          {CALENDAR_STATUS_FILTER.map((code) => <option key={code} value={code}>{TASK_STATUS_LABELS[code] ?? code}</option>)}
+        </Select></label>
+      </div>
       {mode === "custom" ? <div className="engineer-calendar-toolbar__custom">
         <label>С<DatePicker onChange={(from) => applyCustom({ ...customDraft, from })} value={customDraft.from} /></label>
         <label>По<DatePicker onChange={(to) => applyCustom({ ...customDraft, to })} value={customDraft.to} /></label>
@@ -415,12 +444,12 @@ export function EngineerCalendar() {
       </div> : null}
     </div>
 
-    <div className="metric-grid metric-grid--four">
+    {ownOnly ? null : <div className="metric-grid metric-grid--four">
       <MetricCard icon="engineers" label="Инженеров в сетке" value={String(calendar.rows.length)} />
       <MetricCard icon="tasks" label="Задач в периоде" tone="yellow" value={String(calendar.totals.taskCount)} />
       <MetricCard icon="clock" label={`Перегружены (от ${OVERLOADED_TASKS_PER_DAY} задач в день)`} tone="orange" value={String(calendar.totals.overloadedEngineerCount)} />
       <MetricCard icon="engineers" label="Свободны весь период" tone="purple" value={String(calendar.totals.freeEngineerCount)} />
-    </div>
+    </div>}
 
     <section aria-labelledby="engineer-calendar-title" className="card card--table engineer-calendar">
       <CardHeader
@@ -437,9 +466,9 @@ export function EngineerCalendar() {
             : <div aria-busy={loading} className={loading ? "engineer-calendar__pending" : undefined}>
               {/* Пока летит запрос нового периода, показываем прежний и помечаем ожидание:
                   раскладывать старые задачи по новым дням нельзя. */}
-              <EngineerCalendarGrid calendar={calendar} onOpenTask={setOpenTaskId} title={calendarRangeTitle(calendar.range, mode)} />
+              <EngineerCalendarGrid calendar={calendar} onOpenTask={openTask} title={calendarRangeTitle(calendar.range, mode)} />
             </div>}
-      {calendar.totals.unassignedTaskCount > 0 ? <div className="engineer-calendar__unassigned">
+      {!ownOnly && calendar.totals.unassignedTaskCount > 0 ? <div className="engineer-calendar__unassigned">
         <h3>Ещё не назначены · {calendar.totals.unassignedTaskCount}</h3>
         <p>Задачи периода без инженера. Откройте задачу и выберите, кому её отдать.</p>
         <div className="engineer-calendar__unassigned-list">

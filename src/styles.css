@@ -9269,3 +9269,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .report-bar--action { width: 100%; margin: 0 -6px; padding: 4px 6px; border: 0; border-radius: 8px; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; box-sizing: content-box; }
 .report-bar--action:hover, .report-bar--action:focus-visible { background: var(--color-accent-soft); outline: none; }
 .report-bar--action:hover > span:first-child { color: var(--color-accent-dark); text-decoration: underline; }
+
+/* Календарь: фильтры по инженеру и этапу в одной строке с периодом */
+.engineer-calendar-toolbar__filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.engineer-calendar-toolbar__filters label { display: grid; gap: 4px; min-width: 180px; color: var(--color-muted); font-size: 12.5px; }
