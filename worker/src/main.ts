@@ -5,12 +5,12 @@ import { PostgresEmailEventDeliveryPlanner } from "./email-planner.js";
 import { maintenanceActivationConfig } from "./maintenance-activation.js";
 import { PostgresEventOutboxRepository, type DeliveryChannel, type EventDeliveryPlanner, type OutboxSqlExecutor } from "./outbox.js";
 import { CompositeEventDeliveryPlanner, DryRunDeliveryChannel, runPollCycle } from "./runtime.js";
-import { NodeSmtpTransport, PostgresEmailTaskCardSource, SmtpDeliveryChannel, smtpConfiguration } from "./smtp.js";
+import { NodeSmtpTransport, PostgresEmailActSource, PostgresEmailTaskCardSource, SmtpDeliveryChannel, smtpConfiguration } from "./smtp.js";
 import { aiMailParserOrRules } from "./ai-parser.js";
 import { sendMailAutoreplies, type AutoreplySender } from "./mail-autoreply.js";
 import { sendTaskMailReplies, type TaskMailReplySender } from "./mail-reply.js";
 import { ImapMailIntake, imapSettings } from "./mail-intake.js";
-import { supabaseMailFileStore } from "./storage-upload.js";
+import { supabaseFileReader, supabaseMailFileStore } from "./storage-upload.js";
 import {
   PostgresTelegramEventDeliveryPlanner,
   TelegramChatIdResponder,
@@ -83,7 +83,14 @@ if (enabled.email) {
     console.log(smtp.testRedirectTo ? `Тестовый режим почты: все письма уходят на ${smtp.testRedirectTo}` : "Почта: письма уходят адресатам");
     // Письма о задачах уходят с HTML-карточкой и кнопкой «Открыть задачу», текст из шаблона — внутри
     // того же письма. Нет данных для карточки — письмо уходит только текстом, как раньше.
-    adapters.push(new SmtpDeliveryChannel(smtp, new NodeSmtpTransport(smtp), { publicAppUrl, cards: new PostgresEmailTaskCardSource(database) }));
+    // К письму «Работы завершены» прикладывается принятый акт: файл берём из хранилища ключом сервиса.
+    const storedFiles = supabaseFileReader(process.env);
+    if (!storedFiles) console.warn("SUPABASE_URL и SUPABASE_SERVICE_ROLE_KEY не заданы: письма «Работы завершены» уйдут без акта");
+    adapters.push(new SmtpDeliveryChannel(smtp, new NodeSmtpTransport(smtp), {
+      publicAppUrl,
+      cards: new PostgresEmailTaskCardSource(database),
+      ...(storedFiles ? { acts: new PostgresEmailActSource(database, storedFiles) } : {})
+    }));
   }
 }
 if (enabled.telegram) {

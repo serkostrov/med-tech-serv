@@ -1,6 +1,6 @@
 import {
   cardNumber, cardRows, clipMultiline, clipText, escapeHtml, formatTaskPeriod, isReworkEvent,
-  isStockEvent, cardTitle, stockAmount, taskStageLook, type TaskCardData
+  isStockEvent, cardTitle, stockAmount, taskStageLook, type CardRow, type TaskCardData
 } from "./task-card.js";
 
 /**
@@ -18,6 +18,8 @@ export interface TaskEmailOptions {
   /** Тема письма: заголовок документа. */
   readonly subject?: string;
   readonly timeZone?: string;
+  /** К письму приложен акт: в карточке строка «Акт — во вложении к письму». */
+  readonly actAttached?: boolean;
 }
 
 /** Цвета CRM (src/styles.css). */
@@ -70,7 +72,10 @@ export function taskEmailHtml(card: TaskCardData, options: TaskEmailOptions = {}
   const href = url ? escapeHtml(url) : undefined;
 
   // Строки карточки: подпись серым, значение; над первой строкой тонкая линия, как в карточке на доске.
-  const rows = cardRows(card, { site: 200, person: 120, part: 120, task: 320 }, period);
+  const rows: readonly CardRow[] = [
+    ...cardRows(card, { site: 200, person: 120, part: 120, task: 320 }, period),
+    ...(options.actAttached ? [{ label: "Акт", value: "во вложении к письму", dim: false }] : [])
+  ];
   const rowsHtml = rows.map((row, index) => {
     const edge = index === 0 ? `padding-top:12px;border-top:1px solid ${COLOR.borderSoft};` : "padding-top:6px;";
     return "<tr>"

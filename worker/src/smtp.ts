@@ -4,6 +4,7 @@ import { connect as connectTls, type TLSSocket } from "node:tls";
 import { isValidEmailAddress, taskLinkSuitsRecipient } from "./domain.js";
 import { taskEmailHtml } from "./email-html.js";
 import { ChannelDeliveryError, type ChannelDeliveryCommand, type ChannelDeliveryReceipt, type DeliveryChannel, type OutboxSqlExecutor } from "./outbox.js";
+import type { StoredFileReader } from "./storage-upload.js";
 import { loadTaskCardFromPlan, type TaskCardData } from "./task-card.js";
 
 export type SmtpStartTlsMode = "disabled" | "optional" | "required";
@@ -48,6 +49,15 @@ export interface SmtpMessage {
   readonly autoSubmitted?: boolean;
   /** Куда отвечать, если не на адрес отправителя (например, на адрес для заявок). */
   readonly replyTo?: string;
+  /** Файлы во вложении (акт в письме «Работы завершены»). Нет — письмо без вложений, как раньше. */
+  readonly attachments?: readonly SmtpAttachment[];
+}
+
+export interface SmtpAttachment {
+  /** Имя файла у получателя, например «Акт З-000123.pdf». */
+  readonly fileName: string;
+  readonly contentType: string;
+  readonly data: Uint8Array;
 }
 
 export interface SmtpTransport {
@@ -193,7 +203,11 @@ function encodedHeader(value: string): string {
  * сервером и от лимита длины строки (998), точка в начале строки невозможна.
  */
 function encodedBody(value: string): string {
-  const base64 = Buffer.from(value.replace(/\r?\n/gu, "\r\n"), "utf8").toString("base64");
+  return base64Lines(Buffer.from(value.replace(/\r?\n/gu, "\r\n"), "utf8"));
+}
+
+function base64Lines(data: Uint8Array): string {
+  const base64 = Buffer.from(data).toString("base64");
   return base64.match(/.{1,76}/gu)?.join("\r\n") ?? "";
 }
 
@@ -215,9 +229,49 @@ function textPart(contentType: "text/plain" | "text/html", value: string): reado
   return [`Content-Type: ${contentType}; charset=UTF-8`, "Content-Transfer-Encoding: base64", "", encodedBody(value)];
 }
 
+/** Тип файла из базы идёт в заголовок только в виде «тип/подтип»: иначе — application/octet-stream. */
+const MIME_TYPE = /^[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}\/[A-Za-z0-9][A-Za-z0-9!#$&^_.+-]{0,63}$/u;
+
+export function attachmentContentType(value: string): string {
+  const type = value.trim().toLowerCase();
+  return MIME_TYPE.test(type) ? type : "application/octet-stream";
+}
+
+/**
+ * Имя файла без управляющих символов, кавычек и путей, не длиннее 80 символов
+ * (расширение сохраняется). Пустое — «Вложение».
+ */
+export function attachmentFileName(value: string): string {
+  const clean = value.replace(/[\u0000-\u001f\u007f"\\/:*?<>|]/gu, " ").replace(/\s+/gu, " ").trim();
+  const chars = [...clean];
+  if (chars.length === 0) return "Вложение";
+  if (chars.length <= 80) return clean;
+  const extension = /\.[A-Za-z0-9]{1,10}$/u.exec(clean)?.[0] ?? "";
+  return `${chars.slice(0, 80 - extension.length).join("").trimEnd()}${extension}`;
+}
+
+/**
+ * Часть-вложение. Имя дважды: словами RFC 2047 в name (его читают Outlook и старые программы)
+ * и по RFC 2231 в filename* (Gmail, Яндекс, Mail.ru, Apple Mail). Сам файл — base64.
+ */
+function attachmentPart(attachment: SmtpAttachment): readonly string[] {
+  const name = attachmentFileName(attachment.fileName);
+  const plain = isPlainHeader(name) && !/[;=]/u.test(name);
+  const encoded = encodeURIComponent(name).replace(/['()*]/gu, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return [
+    `Content-Type: ${attachmentContentType(attachment.contentType)};`,
+    ` name="${plain ? name : encodedHeader(name).replace(/\r\n /gu, " ")}"`,
+    "Content-Transfer-Encoding: base64",
+    plain ? `Content-Disposition: attachment; filename="${name}"` : `Content-Disposition: attachment;\r\n filename*=UTF-8''${encoded}`,
+    "",
+    base64Lines(attachment.data)
+  ];
+}
+
 /**
  * Письмо целиком. С html — multipart/alternative: сначала текст из шаблона, затем HTML
  * (почта показывает последнюю часть, которую умеет). Без html — только текст, как раньше.
+ * С вложениями — multipart/mixed: письмо (текст или alternative), затем файлы.
  */
 export function smtpMessageData(message: SmtpMessage): string {
   assertMessageEnvelope(message);
@@ -233,17 +287,30 @@ export function smtpMessageData(message: SmtpMessage): string {
     ...(message.autoSubmitted ? ["Auto-Submitted: auto-replied"] : []),
     "MIME-Version: 1.0"
   ];
-  if (!message.html) return [...headers, ...textPart("text/plain", message.body)].join("\r\n");
   const boundary = mimeBoundary(message.messageId);
+  const content: readonly string[] = message.html
+    ? [
+      `Content-Type: multipart/alternative; boundary="${boundary}"`,
+      "",
+      `--${boundary}`,
+      ...textPart("text/plain", message.body),
+      `--${boundary}`,
+      ...textPart("text/html", message.html),
+      `--${boundary}--`
+    ]
+    : textPart("text/plain", message.body);
+  const attachments = message.attachments ?? [];
+  if (attachments.length === 0) return [...headers, ...content].join("\r\n");
+  // Своя граница у внешней части той же длины: ни одна граница не начинается с другой.
+  const mixed = mimeBoundary(`${message.messageId}:mixed`);
   return [
     ...headers,
-    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    `Content-Type: multipart/mixed; boundary="${mixed}"`,
     "",
-    `--${boundary}`,
-    ...textPart("text/plain", message.body),
-    `--${boundary}`,
-    ...textPart("text/html", message.html),
-    `--${boundary}--`
+    `--${mixed}`,
+    ...content,
+    ...attachments.flatMap((attachment) => [`--${mixed}`, ...attachmentPart(attachment)]),
+    `--${mixed}--`
   ].join("\r\n");
 }
 
@@ -491,12 +558,66 @@ export class PostgresEmailTaskCardSource implements EmailTaskCardSource {
   }
 }
 
+/**
+ * Акт больше 10 МБ к письму не прикладываем: в base64 он вырастет на треть, а Gmail и Яндекс
+ * принимают письма до 25 МБ. Акт — скан или фото, обычно до 2–3 МБ.
+ */
+export const ACT_ATTACHMENT_LIMIT_BYTES = 10 * 1024 * 1024;
+/** Сколько ждать акт из базы и хранилища; дольше — письмо уходит без вложения. */
+const ACT_TIMEOUT_MS = 25_000;
+
+/** Акт к письму «Работы завершены»; undefined — письмо уходит без вложения. */
+export interface EmailActSource {
+  load(delivery: ChannelDeliveryCommand): Promise<SmtpAttachment | undefined>;
+}
+
+/** Имя файла акта у клиента: «Акт З-000123.pdf» — номер задачи и расширение исходного файла. */
+export function actFileName(taskNumber: string | undefined, originalName: string): string {
+  const extension = /\.([A-Za-z0-9]{1,10})$/u.exec(originalName.trim())?.[1]?.toLowerCase();
+  const number = taskNumber?.trim();
+  return `Акт${number ? ` ${number}` : ""}${extension ? `.${extension}` : ""}`;
+}
+
+/**
+ * Акт задачи: база по номеру события отдаёт файл принятого акта (0068), файл берём из хранилища.
+ * Только для письма «Работы завершены» — в остальных письмах вложений нет.
+ */
+export class PostgresEmailActSource implements EmailActSource {
+  public constructor(
+    private readonly database: OutboxSqlExecutor,
+    private readonly files: StoredFileReader,
+    private readonly limitBytes = ACT_ATTACHMENT_LIMIT_BYTES
+  ) {}
+
+  public async load(delivery: ChannelDeliveryCommand): Promise<SmtpAttachment | undefined> {
+    if (delivery.eventCode !== "task_work_completed" || !delivery.outboxEventId) return undefined;
+    const result = await this.database.executeSql(
+      "SELECT task_number, storage_key, original_name, content_type, byte_size FROM public.task_act_for_event($1::uuid)",
+      [delivery.outboxEventId]
+    );
+    const row = result.rows[0];
+    if (!row || typeof row.storage_key !== "string" || typeof row.original_name !== "string") return undefined;
+    const size = Number(row.byte_size);
+    if (!Number.isFinite(size) || size <= 0 || size > this.limitBytes) return undefined;
+    const data = await this.files.get(row.storage_key, this.limitBytes);
+    if (!data) return undefined;
+    return {
+      fileName: actFileName(typeof row.task_number === "string" ? row.task_number : undefined, row.original_name),
+      contentType: typeof row.content_type === "string" ? row.content_type : "application/octet-stream",
+      data
+    };
+  }
+}
+
 export interface SmtpDeliveryOptions {
   /** Адрес CRM: кнопка «Открыть задачу» в HTML-письме. */
   readonly publicAppUrl?: string;
   /** Данные для HTML-письма о задаче. Нет источника или данных — письмо только текстом. */
   readonly cards?: EmailTaskCardSource;
   readonly cardTimeoutMs?: number;
+  /** Акт во вложении письма «Работы завершены». Нет источника — письмо без вложения. */
+  readonly acts?: EmailActSource;
+  readonly actTimeoutMs?: number;
 }
 
 async function withinTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T | undefined> {
@@ -528,17 +649,36 @@ export class SmtpDeliveryChannel implements DeliveryChannel {
 
   private async send(command: ChannelDeliveryCommand): Promise<ChannelDeliveryReceipt> {
     const messageId = stableMessageId(command.idempotencyKey, this.configuration.fromAddress);
-    const html = await this.taskHtml(command);
+    const act = await this.taskAct(command);
+    const html = await this.taskHtml(command, act !== undefined);
     await this.transport.send({
       messageId,
       fromAddress: this.configuration.fromAddress,
       fromName: this.configuration.fromName,
       toAddress: command.recipientAddress,
       subject: command.subject,
-      body: command.body,
-      ...(html ? { html } : {})
+      body: act ? `${command.body.trimEnd()}\n\nАкт выполненных работ — во вложении к письму.` : command.body,
+      ...(html ? { html } : {}),
+      ...(act ? { attachments: [act] } : {})
     });
     return { providerMessageId: messageId };
+  }
+
+  /**
+   * Акт для письма «Работы завершены». Нет акта, сбой хранилища или долгий ответ — undefined,
+   * и письмо уходит без вложения: из-за акта уведомление не задерживается и не теряется.
+   */
+  private async taskAct(command: ChannelDeliveryCommand): Promise<SmtpAttachment | undefined> {
+    const acts = this.options.acts;
+    if (!acts || command.eventCode !== "task_work_completed") return undefined;
+    try {
+      const act = await withinTimeout(acts.load(command), this.options.actTimeoutMs ?? ACT_TIMEOUT_MS);
+      if (!act) console.warn(`Письмо «Работы завершены» уходит без акта: акт не найден или больше ${ACT_ATTACHMENT_LIMIT_BYTES / 1024 / 1024} МБ`);
+      return act;
+    } catch (error) {
+      console.warn(`Письмо «Работы завершены» уходит без акта: ${error instanceof Error ? error.message : "ошибка чтения файла"}`);
+      return undefined;
+    }
   }
 
   /**
@@ -546,7 +686,7 @@ export class SmtpDeliveryChannel implements DeliveryChannel {
    * меняет адрес позже, в транспорте. Нет данных, сбой или долгий ответ базы — undefined,
    * и письмо уходит только текстом: из-за HTML доставка не ломается.
    */
-  private async taskHtml(command: ChannelDeliveryCommand): Promise<string | undefined> {
+  private async taskHtml(command: ChannelDeliveryCommand, actAttached = false): Promise<string | undefined> {
     const cards = this.options.cards;
     if (!cards) return undefined;
     try {
@@ -555,7 +695,7 @@ export class SmtpDeliveryChannel implements DeliveryChannel {
       const taskUrl = command.taskId && this.publicAppUrl && taskLinkSuitsRecipient(command.eventCode)
         ? `${this.publicAppUrl}/tasks/${encodeURIComponent(command.taskId)}`
         : undefined;
-      const html = taskEmailHtml(card, { subject: command.subject, ...(taskUrl ? { taskUrl } : {}) });
+      const html = taskEmailHtml(card, { subject: command.subject, ...(taskUrl ? { taskUrl } : {}), ...(actAttached ? { actAttached } : {}) });
       return Buffer.byteLength(html, "utf8") <= TASK_HTML_LIMIT_BYTES ? html : undefined;
     } catch {
       return undefined;
