@@ -1824,6 +1824,40 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
   const [mailEquipment, setMailEquipment] = useState<EquipmentApiRecord | undefined>(undefined);
   const [mailRefresh, setMailRefresh] = useState(0);
   const [canAssignEngineer, setCanAssignEngineer] = useState(false);
+  // Задачу без инженера перенесли на доске в «Назначена»: окно выбора инженера прямо на доске.
+  const [boardAssign, setBoardAssign] = useState<{ readonly task: TaskApiRecord; readonly resolve: (assigned: boolean) => void } | null>(null);
+  const [boardAssignEngineer, setBoardAssignEngineer] = useState("");
+  const [boardAssignBusy, setBoardAssignBusy] = useState(false);
+  const [boardAssignError, setBoardAssignError] = useState<string | null>(null);
+  const assignFromBoard = (task: TaskApiRecord) => new Promise<boolean>((resolve) => {
+    setBoardAssignEngineer("");
+    setBoardAssignError(null);
+    setBoardAssign({ task, resolve });
+  });
+  const cancelBoardAssign = () => {
+    const pending = boardAssign;
+    setBoardAssign(null);
+    pending?.resolve(false);
+  };
+  const submitBoardAssign = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const pending = boardAssign;
+    if (!pending) return;
+    if (!boardAssignEngineer) { setBoardAssignError("Выберите инженера"); return; }
+    setBoardAssignBusy(true);
+    setBoardAssignError(null);
+    try {
+      await m2Api.assignTask(pending.task.id, boardAssignEngineer);
+      const name = engineers.find((engineer) => engineer.id === boardAssignEngineer)?.fullName;
+      toast.success(name ? `${pending.task.number}: назначен ${name}` : `${pending.task.number}: инженер назначен`);
+      setBoardAssign(null);
+      pending.resolve(true);
+    } catch (assignError) {
+      setBoardAssignError(assignError instanceof Error ? assignError.message : "Не получилось назначить инженера");
+    } finally {
+      setBoardAssignBusy(false);
+    }
+  };
   const [exporting, setExporting] = useState(false);
   useEffect(() => { void m2Api.hasPermission("tasks.assign").then(setCanAssignEngineer).catch(() => setCanAssignEngineer(false)); }, []);
   // Порядок карточек общий для всех: расставляет тот, кто может менять задачи (координатор, руководитель).
@@ -2101,7 +2135,11 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
-      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} {...(canArrangeBoard && !boardFiltered ? { onReorder: saveBoardPositions } : {})} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
+      <DialogForm busy={boardAssignBusy} description="Задача встанет в «Назначена» на то место, куда вы её перенесли. Инженер получит уведомление." error={boardAssignError} onOpenChange={(open) => { if (!open) cancelBoardAssign(); }} onSubmit={(event) => void submitBoardAssign(event)} open={boardAssign !== null} submitLabel="Назначить" title={boardAssign ? `Назначить инженера · ${boardAssign.task.number}` : "Назначить инженера"}>
+        {boardAssign ? <p className="form-hint">{boardAssign.task.title}</p> : null}
+        <label>Инженер<Select autoFocus onChange={(event) => setBoardAssignEngineer(event.target.value)} required value={boardAssignEngineer}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label>
+      </DialogForm>
+      {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} {...(canAssignEngineer ? { onAssign: assignFromBoard } : {})} {...(canArrangeBoard && !boardFiltered ? { onReorder: saveBoardPositions } : {})} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
         <section className="card card--table" aria-labelledby="tasks-table-title">
           <CardHeader headingId="tasks-table-title" meta={`${tasks.length} из ${total}`} title="Все задачи" />
           {(loading || !listLoaded) && tasks.length === 0

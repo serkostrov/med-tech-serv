@@ -164,7 +164,16 @@ interface DropProblem {
   readonly openable: boolean;
 }
 
-export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, onMove, onReorder, loadColumn, queryKey = "initial", visibleStatus = "", showCompleted = false, hideEngineer = false, engineerMode = false }: {
+/** Пользователь закрыл окно назначения инженера: перенос просто не состоялся, без ошибки. */
+export class BoardAssignCancelled extends Error {}
+
+export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, onMove, onReorder, onAssign, loadColumn, queryKey = "initial", visibleStatus = "", showCompleted = false, hideEngineer = false, engineerMode = false }: {
+  /**
+   * Задачу без инженера перенесли в «Назначена»: доска спрашивает инженера сама (окно на доске),
+   * и после назначения карточка встаёт на место, куда её опустили (просьба 17.11).
+   * Возвращает false, если окно закрыли без выбора.
+   */
+  readonly onAssign?: (task: TaskApiRecord) => Promise<boolean>;
   /** Доска инженера: с «На проверке» задачу не двигает. */
   readonly engineerMode?: boolean;
   /** На доске инженера строка «Инженер» лишняя: все задачи его. */
@@ -349,6 +358,9 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     });
   };
 
+  /** Задачу без инженера переносят в «Назначена», и доска умеет спросить инженера сама. */
+  const assignsOnDrop = (task: TaskApiRecord, to: string) => Boolean(onAssign) && !engineerMode && to === "assigned" && !task.engineerId;
+
   /** Можно ли поставить карточку на выбранное место в колонке, а не просто в колонку. */
   const canReorder = (code: string): boolean => {
     if (!onReorder || !loadColumn) return false;
@@ -444,10 +456,13 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     const problems: DropProblem[] = [];
     const direct: BoardEntry[] = [];
     const checked: BoardEntry[] = [];
+    // Задачи, которым инженера выбирают в окне на доске, а не переносом этапа.
+    const assigning = new Set<string>();
     for (const entry of entries) {
       const decision = boardDropDecision(entry.task, entry.source, targetStatus, engineerMode);
       if (decision.kind === "move") direct.push(entry);
       else if (decision.kind === "check") checked.push(entry);
+      else if (decision.kind === "card" && entry.source === "new" && assignsOnDrop(entry.task, targetStatus)) { checked.push(entry); assigning.add(entry.task.id); }
       else problems.push({
         task: entry.task,
         reason: dropProblemText(decision, entry.source, targetStatus, engineerMode),
@@ -502,7 +517,11 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
       // Каждый ответ применяем сразу: отказ возвращает задачу, не дожидаясь остальных.
       await Promise.all(working.map(async (entry) => {
         try {
-          await onMove(entry.task.id, targetStatus);
+          if (assigning.has(entry.task.id)) {
+            if (!onAssign || !(await onAssign(entry.task))) throw new BoardAssignCancelled();
+          } else {
+            await onMove(entry.task.id, targetStatus);
+          }
           moved.add(entry.task.id);
           // Проверенный перенос показываем, только когда сервер согласился.
           if (!directIds.has(entry.task.id)) {
@@ -515,6 +534,8 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
             // Обратно с прежним местом: на сервере задача осталась там, где была.
             shiftLocal(entry.task, targetStatus, entry.source);
           }
+          // Окно назначения закрыли: задача осталась на месте, ругаться не о чем.
+          if (moveError instanceof BoardAssignCancelled) return;
           problems.push({
             task: entry.task,
             reason: moveError instanceof Error ? moveError.message : "Не получилось изменить этап",
@@ -572,7 +593,8 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     // Место показываем, только если хоть одна карточка сюда встанет: уже лежит в колонке
     // или её можно перенести сразу. Если нужна карточка задачи (инженер, отмена), места нет.
     const lands = draggedEntries.some((entry) => entry.source === code
-      || ["move", "check"].includes(boardDropDecision(entry.task, entry.source, code, engineerMode).kind));
+      || ["move", "check"].includes(boardDropDecision(entry.task, entry.source, code, engineerMode).kind)
+      || (entry.source === "new" && assignsOnDrop(entry.task, code)));
     // Колонка закрыта для переносимых сюда карточек (её видно бледной): места тоже нет.
     const incoming = draggedEntries.filter((entry) => entry.source !== code);
     const blocked = incoming.length > 0 && incoming.every((entry) => boardDropDecision(entry.task, entry.source, code, engineerMode).kind === "no");

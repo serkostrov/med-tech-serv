@@ -9455,8 +9455,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* Доски: видимая полоса прокрутки и стрелки по краям, когда колонки не помещаются (17.11) */
 .board-scroller { position: relative; min-width: 0; }
-.task-board { scrollbar-width: auto; scrollbar-color: #a3b3bf #e4eaef; }
-.task-board::-webkit-scrollbar { height: 12px; }
+/* scrollbar-color и scrollbar-width не задаём: с ними Chrome и Яндекс на Mac прячут полосу и не берут ::-webkit-scrollbar.
+   Своя полоса ниже на Mac видна всегда (просьба 17.11: «скролл сделай постоянным»). */
+.task-board { scrollbar-width: auto; scrollbar-color: auto; }
+.task-board::-webkit-scrollbar { height: 12px; background: #e4eaef; }
+.task-board::-webkit-scrollbar-thumb:hover { background: #7f93a1; }
 .task-board::-webkit-scrollbar-track { background: #e4eaef; border-radius: 6px; }
 .task-board::-webkit-scrollbar-thumb { background: #a3b3bf; border: 2px solid #e4eaef; border-radius: 6px; }
 .board-scroller__button {
