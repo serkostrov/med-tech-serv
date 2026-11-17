@@ -1,4 +1,4 @@
-export type AppRole = "admin" | "coordinator" | "engineer" | "warehouse";
+export type AppRole = "admin" | "coordinator" | "engineer" | "warehouse" | "initiator";
 
 export type NavigationId =
   | "tasks"
@@ -52,14 +52,16 @@ export const roleLabels: Readonly<Record<AppRole, string>> = {
   admin: "Администратор",
   coordinator: "Координатор",
   engineer: "Инженер",
-  warehouse: "Кладовщик"
+  warehouse: "Кладовщик",
+  initiator: "Инициатор"
 };
 
 export const roleDescriptions: Readonly<Record<AppRole, string>> = {
   admin: "Все разделы и сотрудники",
   coordinator: "Заявки, приборы и склад",
   engineer: "Ваши выезды и приборы",
-  warehouse: "Запчасти и остатки"
+  warehouse: "Запчасти и остатки",
+  initiator: "Ваши заявки и их статусы"
 };
 
 /**
@@ -101,6 +103,12 @@ const roleNavigation: Readonly<Record<AppRole, readonly NavigationItem[]>> = {
     { id: "warehouse", label: "Склад", description: "Запчасти и остатки", group: "Работа", icon: "warehouse" },
     { id: "reservations", label: "Резервы", description: "Собрать, выдать инженеру, принять обратно", group: "Работа", icon: "reservations" },
     { id: "notifications", label: "Уведомления", description: "События по складу", group: "Работа", icon: "notifications" }
+  ],
+  // Менеджер-инициатор (ТЗ, раздел 2): свои заявки, их статусы и результат. Остальное ему не нужно,
+  // а права в базе всё равно показывают только его задачи.
+  initiator: [
+    { id: "tasks", label: "Мои заявки", description: "Ваши заявки и их статусы", group: "Работа", icon: "tasks" },
+    { id: "notifications", label: "Уведомления", description: "Что происходит с вашими заявками", group: "Работа", icon: "notifications" }
   ]
 };
 

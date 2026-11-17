@@ -80,6 +80,7 @@ import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
 import { PricePage } from "./PricePage.js";
 import { QuotesPage } from "./QuotesPage.js";
+import { InitiatorRequests } from "./InitiatorPage.js";
 import { ImportPage } from "./ImportPage.js";
 import { JournalsPage } from "./JournalsPage.js";
 import { EquipmentTreePage } from "./EquipmentTreePage.js";
@@ -3736,6 +3737,11 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
   </>;
 }
 
+/** Менеджер-инициатор: свои заявки и уведомления о них (ТЗ, раздел 2). */
+function InitiatorWorkspace({ view }: { readonly view: NavigationId }) {
+  return view === "notifications" ? <NotificationsPage /> : <InitiatorRequests />;
+}
+
 function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
   readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
@@ -3779,6 +3785,8 @@ function appRoleForApiRole(role: string, accessRoleKey?: string): AppRole {
   if (keys.includes("admin")) return "admin";
   if (keys.includes("engineer")) return "engineer";
   if (keys.includes("warehouse")) return "warehouse";
+  // Менеджер-инициатор (и старое имя роли manager): свой простой экран заявок.
+  if (keys.includes("initiator") || keys.includes("manager")) return "initiator";
   return "coordinator";
 }
 
@@ -4044,6 +4052,7 @@ function App() {
       {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
       {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
       {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace key={navigationKey} view={activeView} /> : null}
+      {navigation.length > 0 && role === "initiator" ? <InitiatorWorkspace key={navigationKey} view={activeView} /> : null}
       {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
     </AppShell>
   );

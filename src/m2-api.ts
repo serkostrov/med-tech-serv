@@ -3447,6 +3447,8 @@ export class M2ApiClient {
       visit_date: input.visitDate ?? null,
       call_reason: callReason || null,
       created_by: actor,
+      // Заявку с экрана менеджера-инициатора он подаёт от себя: ему и уведомления по ней (ТЗ, блок 5).
+      ...(input.asInitiator === true ? { initiator_id: actor } : {}),
       ...(input.payerOverrideReason ? {
         payer_override_reason: input.payerOverrideReason,
         payer_overridden_by: actor

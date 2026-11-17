@@ -7824,6 +7824,19 @@ td .resource-state {
   .task-next-step__actions > * { width: 100%; }
 }
 
+/* Экран менеджера-инициатора: свои заявки и новая заявка (ТЗ, раздел 2) */
+.initiator-hint { display: block; color: var(--color-muted); font-size: 12px; font-weight: 400; }
+.initiator-serial { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
+.initiator-serial label { flex: 1 1 240px; }
+.initiator-serial__found { margin: 0; padding: 8px 12px; border-radius: var(--radius-md); color: var(--color-ink); background: var(--color-success-soft); }
+.initiator-serial__miss { margin: 0; color: var(--color-danger); }
+.initiator-card__facts { display: grid; gap: 12px; }
+.initiator-card__facts dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px 20px; margin: 0; }
+.initiator-card__facts dt { color: var(--color-muted); font-size: 12px; }
+.initiator-card__facts dd { margin: 2px 0 0; color: var(--color-ink); font-weight: 600; }
+.initiator-card__facts h3 { margin: 6px 0 2px; color: var(--color-muted); font-size: 12px; font-weight: 600; }
+.initiator-card__text { margin: 0; color: var(--color-ink); white-space: pre-line; }
+
 /* КП — коммерческие предложения (ТЗ, блок 9) */
 .quote-card__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 0 0 14px; }
 .quote-card__add { display: flex; flex-wrap: wrap; gap: 8px; }

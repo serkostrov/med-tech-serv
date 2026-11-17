@@ -24,6 +24,10 @@ describe("web process navigation", () => {
       "customers", "finance", "quotes", "price", "reports", "notifications", "journals", "references", "import", "access"
     ]);
     assert.equal(hasNavigationItem("admin", "tasks"), true);
+    // Менеджер-инициатор: только свои заявки и уведомления о них.
+    assert.deepEqual(getRoleNavigation("initiator").map((item) => item.label), ["Мои заявки", "Уведомления"]);
+    assert.equal(hasNavigationItem("initiator", "finance"), false);
+    assert.equal(getDefaultView("initiator"), "tasks");
   });
 
   it("keeps the coordinator sidebar aligned with the approved demo structure", () => {
