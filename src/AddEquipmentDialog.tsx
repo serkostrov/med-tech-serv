@@ -247,12 +247,8 @@ export function AddEquipmentDialog({
         </Select>
       </label>
 
-      <label>
-        Категория гарантии *
-        <Select defaultValue={references.guaranteeCategories[0]?.id ?? ""} name="guaranteeCategoryId" required>
-          {references.guaranteeCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </Select>
-      </label>
+      {/* Категорию гарантии не спрашиваем: гарантию решают по каждой заявке (встреча 16.11). */}
+      <input name="guaranteeCategoryId" type="hidden" value={references.guaranteeCategories[0]?.id ?? ""} />
       <label>
         Статус *
         <Select defaultValue={references.statuses[0]?.code ?? "in_use"} name="status" required>

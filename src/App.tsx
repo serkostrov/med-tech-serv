@@ -2199,7 +2199,9 @@ function EquipmentPassportForm({
       <label className="field-wide">S/N *<input autoFocus defaultValue={record?.serial} maxLength={200} name="serialNumber" placeholder="Например, BS620-001" required /><small>Серийный номер должен быть уникальным. Пробелы не учитываются.</small></label>
       <label>Производитель *<Select name="manufacturerId" onChange={changeManufacturer} required value={manufacturerId}>{references.manufacturers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
       <label>Модель *<Select name="modelId" onChange={(event) => setModelId(event.target.value)} required value={modelId}>{availableModels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
-      <label>Категория гарантии *<Select defaultValue={record?.guaranteeCategoryId || references.guaranteeCategories[0]?.id} name="guaranteeCategoryId" required>{references.guaranteeCategories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
+      {/* Категорию гарантии на экране не показываем: гарантия «плавающая», её решают по каждой
+          заявке (встреча 16.11). В базе значение остаётся — от него зависит прайс по категориям. */}
+      <input name="guaranteeCategoryId" type="hidden" value={record?.guaranteeCategoryId || references.guaranteeCategories[0]?.id || ""} />
       <label>Статус *<Select defaultValue={record?.statusCode || references.statuses[0]?.code} name="status" required>{references.statuses.map((item) => <option key={item.code} value={item.code}>{item.name}</option>)}</Select></label>
       <label className="field-wide">Примечания<AutoTextarea defaultValue={record?.notes} maxLength={5000} name="notes" placeholder="Служебные сведения о приборе" rows={3} /></label>
       <label className="field-wide field-file">Файлы<span className="field-file__control"><input accept="image/*,video/*,.pdf,.doc,.docx,.xls,.xlsx,.txt" multiple name="files" onChange={chooseFiles} type="file" /></span><small>{selectedFiles.length ? `Выбрано: ${selectedFiles.map((file) => file.name).join(", ")}` : record?.files.length ? `Уже прикреплено: ${record.files.join(", ")}` : "Документы, фото или видео прибора"}</small></label>
@@ -2415,7 +2417,7 @@ function EquipmentCard({
           <StatusBadge tone={record.tone}>{record.status}</StatusBadge>
         </div>
         <h1>{record.manufacturer} {record.model}</h1>
-        <p>{[placeUnset ? null : record.place, record.guarantee === "Не указана" ? null : record.guarantee].filter(Boolean).join(" · ")}</p>
+        <p>{placeUnset ? null : record.place}</p>
       </header>
       <div className="task-layout">
         <div className="task-layout__main">
@@ -2486,7 +2488,6 @@ function EquipmentCard({
               <div><dt>Модель</dt><dd>{record.model}</dd></div>
               <div><dt>S/N</dt><dd>{record.serial}</dd></div>
               <div><dt>Статус</dt><dd><StatusBadge tone={record.tone}>{record.status}</StatusBadge></dd></div>
-              <div><dt>Гарантия</dt><dd>{record.guarantee === "Не указана" ? <span className="is-empty">Не указана</span> : record.guarantee}</dd></div>
             </dl>
             <dl>
               <div><dt>Площадка</dt><dd>{placeUnset ? <span className="is-empty">Не указана</span> : record.place}{readOnly ? null : <button className="text-button" onClick={() => setChangeKind("site_change")} type="button">{placeUnset ? "Указать" : "Сменить"}</button>}</dd></div>
@@ -2835,7 +2836,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
                 <thead><tr><th scope="col">Прибор</th><th scope="col">S/N</th><th scope="col">Площадка</th>{engineer ? null : <th scope="col">Плательщик</th>}<th scope="col">Статус</th>{engineer ? null : <th scope="col"><span className="sr-only">Действия</span></th>}</tr></thead>
                 <tbody>
                   {records.map((record) => <tr className="data-table__selectable" key={record.id} onClick={() => void openCard(record.id)}>
-                    <td className="equipment-registry-table__wide" data-label="Прибор"><strong>{record.manufacturer} {record.model}</strong><small>{record.guarantee}</small></td>
+                    <td className="equipment-registry-table__wide" data-label="Прибор"><strong>{record.manufacturer} {record.model}</strong></td>
                     <td className="equipment-registry-table__serial" data-label="S/N">{record.serial}</td>
                     <td data-label="Площадка">{record.place === "Не указана" ? <span className="muted">Не указана</span> : record.place}</td>
                     {engineer ? null : <td data-label="Плательщик">{record.payer === "Не указан" ? <span className="muted">Не указан</span> : record.payer}</td>}
