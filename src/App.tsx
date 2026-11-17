@@ -805,8 +805,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [resultEditing, setResultEditing] = useState(false);
   const [overviewEditing, setOverviewEditing] = useState(false);
   const [editExtraWorkTypes, setEditExtraWorkTypes] = useState<readonly string[]>([]);
-  // Вкладки карточки: работа и акт (результат и файлы), запчасти отдельно, письмо клиента, история.
-  const [detailTab, setDetailTab] = useState<"work" | "parts" | "history" | "mail">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : initialTab === "mail" ? "mail" : "work");
+  // Вкладки карточки: свойства, работа и акт (результат и файлы), запчасти, письмо клиента, история.
+  // «Свойства» — вкладка, а не правая колонка (просьба 17.11); инженер сразу попадает в «Работу и акт».
+  const [detailTab, setDetailTab] = useState<"props" | "work" | "parts" | "history" | "mail">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : initialTab === "mail" ? "mail" : initialTab === "overview" && !card.isTaskEngineer ? "props" : "work");
   // Переписка с клиентом: грузим отдельно от карточки, как резервы склада.
   const [mailThread, setMailThread] = useState<readonly TaskMailMessage[]>([]);
   const [mailLoading, setMailLoading] = useState(true);
@@ -1360,10 +1361,11 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         window.requestAnimationFrame(() => document.querySelector<HTMLElement>("[role='tablist'][aria-label='Разделы карточки задачи']")?.scrollIntoView({ behavior: "smooth", block: "start" }));
       }}
     /> : null}
-    <div className="task-layout">
+    <div className="task-layout task-layout--single">
       <div className="task-layout__main">
         {task.callReason ? <section className="task-brief" aria-label="Что случилось"><h2>Что случилось</h2><p>{task.callReason}</p></section> : null}
         <PageTabs items={[
+          { value: "props" as const, label: "Свойства" },
           { value: "work" as const, label: "Работа и акт", badge: card.files.length },
           { value: "parts" as const, label: "Запчасти", badge: card.parts.length },
           // Вкладка письма есть только у задач из почты: остальным она не нужна.
@@ -1455,9 +1457,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           <TaskStockDocuments refreshKey={`${task.status}:${reservations.map((item) => item.status).join(",")}`} taskId={task.id} />
         </> : null}
         {detailTab === "history" ? <section className="task-section" aria-label="История задачи"><TaskHistory journal={card.journal} /></section> : null}
-      </div>
-      <aside className="task-layout__aside" aria-label="Свойства задачи">
-        <section className="task-props">
+        {detailTab === "props" ? <section aria-label="Свойства задачи" className="task-props task-props--tab">
           <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setEditExtraWorkTypes(task.extraWorkTypeCodes ?? []); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
           <dl>
             <div><dt>Инженер</dt><dd>{card.engineer?.fullName ?? <span className="is-empty">Не назначен</span>}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить</button> : canAssign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Назначить</button> : null}</dd></div>
@@ -1483,8 +1483,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             {task.isMaintenancePlan ? <div><dt>План ТО</dt><dd>Создана по плану</dd></div> : null}
           </dl> : null}
           {canCancel ? <button className="task-props__cancel" disabled={busy} onClick={() => setActionDialog("cancel")} type="button">Отменить задачу</button> : null}
-        </section>
-      </aside>
+        </section> : null}
+      </div>
     </div>
     <DialogForm
       busy={busy}

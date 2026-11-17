@@ -8395,6 +8395,15 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .task-props__cancel { justify-self: start; margin-top: 8px; padding: 6px 0; border: 0; color: var(--color-danger); background: transparent; font-size: 13px; font-weight: 600; cursor: pointer; }
 .task-props__cancel:hover { text-decoration: underline; }
 
+/* Свойства во вкладке карточки (17.11): на всю ширину, группы рядом */
+.task-layout--single { grid-template-columns: minmax(0, 1fr); }
+.task-props--tab { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); column-gap: 32px; align-items: start; }
+.task-props--tab .task-props__head { grid-column: 1 / -1; justify-content: flex-end; padding-bottom: 0; }
+.task-props--tab .task-props__head h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.task-props--tab dl:first-of-type, .task-props--tab dl { border-top: 0; }
+.task-props--tab dl > div { grid-template-columns: 130px minmax(0, 1fr); }
+.task-props--tab .task-props__cancel { grid-column: 1 / -1; }
+
 /* История: по дням, событие словами, время справа, комментарий отдельным блоком */
 .task-history { display: grid; gap: 18px; }
 .task-history__day h4 { margin: 0 0 8px; color: var(--color-muted); font-size: 12px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
