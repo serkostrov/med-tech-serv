@@ -19,6 +19,7 @@ import { assertReferenceValueCanBeHidden } from "./reference-edit.js";
 import { assertRequisites } from "./requisites.js";
 import { invoiceWorkDate } from "./invoice-card.js";
 import { taskMailReplyRefusal } from "./task-mail.js";
+import { isStockDocumentKind, type StockDocumentKind, type StockDocumentLine, type StockDocumentPage, type StockDocumentRecord } from "./stock-documents.js";
 import {
   importSerialKey,
   type ImportExistingEquipment,
@@ -1126,6 +1127,43 @@ function stockMovementRecord(row: Row): StockMovementRecord {
     ...(optionalText(row, "reservation_number") ? { reservationNumber: optionalText(row, "reservation_number") as string } : {}),
     ...(optionalText(row, "equipment_serial_number") ? { equipmentSerialNumber: optionalText(row, "equipment_serial_number") as string } : {}),
     ...(optionalText(row, "lot_code") ? { lotCode: optionalText(row, "lot_code") as string } : {})
+  };
+}
+
+/** Документ склада из функции базы (0062). */
+function stockDocumentRecord(row: Row): StockDocumentRecord {
+  const kindText = text(row, "kind");
+  const optional = (key: string, field: string) => optionalText(row, key) ? { [field]: optionalText(row, key) as string } : {};
+  return {
+    id: text(row, "id"),
+    number: text(row, "number"),
+    kind: isStockDocumentKind(kindText) ? kindText : "writeoff",
+    date: text(row, "document_date"),
+    ...optional("task_id", "taskId"),
+    ...optional("task_number", "taskNumber"),
+    ...optional("task_title", "taskTitle"),
+    ...optional("equipment_serial_number", "equipmentSerialNumber"),
+    ...optional("equipment_name", "equipmentName"),
+    ...optional("site_name", "siteName"),
+    ...optional("engineer_name", "engineerName"),
+    lineCount: numberValue(row.line_count) ?? 0,
+    totalQuantity: numberValue(row.total_quantity) ?? 0
+  } as StockDocumentRecord;
+}
+
+/** Строка документа склада из функции базы (0062). */
+function stockDocumentLine(row: Row): StockDocumentLine {
+  const conditionText = text(row, "part_condition");
+  return {
+    documentId: text(row, "document_id"),
+    movementId: text(row, "movement_id"),
+    articleNumber: text(row, "article_number"),
+    partName: text(row, "part_name"),
+    condition: conditionText === "G" || conditionText === "B" ? conditionText : "N",
+    quantity: numberValue(row.quantity) ?? 0,
+    occurredAt: text(row, "occurred_at"),
+    ...(optionalText(row, "reservation_number") ? { reservationNumber: optionalText(row, "reservation_number") as string } : {}),
+    ...(optionalText(row, "comment") ? { comment: optionalText(row, "comment") as string } : {})
   };
 }
 
@@ -4217,6 +4255,44 @@ export class M2ApiClient {
       // Общее число приходит с каждой строкой; пустая страница — значит, движений нет.
       total: rows.length ? numberValue(rows[0]?.total_count) ?? rows.length : 0
     };
+  }
+
+  /**
+   * Документы склада (0062): перемещение на склад инженера, возврат и списание.
+   * Создаёт их база при движении запчасти; здесь только список с отбором.
+   */
+  public async stockDocumentPage(input: {
+    readonly kind?: StockDocumentKind | "";
+    readonly search?: string;
+    readonly from?: string;
+    readonly to?: string;
+    readonly taskId?: string;
+    readonly limit?: number;
+    readonly offset?: number;
+  } = {}): Promise<StockDocumentPage> {
+    const { data, error } = await this.db().rpc("stock_document_list", {
+      p_kind: input.kind || null,
+      p_search: input.search?.trim() || null,
+      p_from: input.from || null,
+      p_to: input.to || null,
+      p_task_id: input.taskId || null,
+      p_limit: input.limit ?? 50,
+      p_offset: input.offset ?? 0
+    }, { get: true });
+    throwIfError(error, "Не получилось загрузить документы склада");
+    const rows = Array.isArray(data) ? data.map((item) => asRow(item)) : [];
+    return {
+      items: rows.map((row) => stockDocumentRecord(row)),
+      total: rows.length ? numberValue(rows[0]?.total_count) ?? rows.length : 0
+    };
+  }
+
+  /** Строки документов склада: артикул, наименование, состояние и количество (0062). */
+  public async stockDocumentLines(documentIds: readonly string[]): Promise<readonly StockDocumentLine[]> {
+    if (documentIds.length === 0) return [];
+    const { data, error } = await this.db().rpc("stock_document_lines_for", { p_document_ids: [...documentIds] });
+    throwIfError(error, "Не получилось загрузить строки документа");
+    return Array.isArray(data) ? data.map((item) => stockDocumentLine(asRow(item))) : [];
   }
 
   /** Псевдонимы артикула запчасти: тот же артикул у других поставщиков (0047). */

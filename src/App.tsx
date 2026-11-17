@@ -71,6 +71,7 @@ import {
 } from "./OperationsPages.js";
 import { ReservationsPage } from "./ReservationsPage.js";
 import { EngineerPickupNote, ResultReservationChecks, TaskReservationsSection } from "./TaskReservations.js";
+import { TaskStockDocuments } from "./StockDocuments.js";
 import { installedReservationNumbers } from "./reservations.js";
 import { TaskBoard, type BoardPosition } from "./TaskBoard.js";
 import { CustomerReferencesPage } from "./CustomerReferencesPage.js";
@@ -1444,6 +1445,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             </tbody></table></div>
             : <div className="task-section__empty"><p>{canEditPartsNow ? "Запчасти не добавлены. Добавьте, если использовали детали на выезде." : "Запчасти на этой задаче не использовались."}</p></div>}
           </section>
+          <TaskStockDocuments refreshKey={`${task.status}:${reservations.map((item) => item.status).join(",")}`} taskId={task.id} />
         </> : null}
         {detailTab === "history" ? <section className="task-section" aria-label="История задачи"><TaskHistory journal={card.journal} /></section> : null}
       </div>

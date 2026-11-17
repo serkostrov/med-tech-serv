@@ -3,6 +3,7 @@ import { m2Api, type EngineerOverview, type InventoryPartRecord, type Operations
 import { InventoryBoard } from "./InventoryBoard.js";
 import { InventoryPartCard } from "./InventoryPartCard.js";
 import { StockReceiptImport } from "./StockReceiptImport.js";
+import { StockDocumentsView } from "./StockDocuments.js";
 import { conditionTotalsText, conditionTotalsTitle } from "./stock-movements.js";
 import { EngineerCompetencyEditor, type CompetencyDraft, type CompetencyReferences } from "./EngineerCompetencyEditor.js";
 import { EngineerCalendar } from "./EngineerCalendar.js";
@@ -158,8 +159,9 @@ export function WarehousePage() {
   const { pageSize, pageSizeRef, setPageSize } = usePageSize("inventory");
   // Доска или список, как в задачах и резервах. На складе доска только показывает:
   // остаток меняется приходом и выдачей, а не переносом карточки.
-  const [view, setView] = useState<"board" | "list">("list");
-  const viewRef = useRef<"board" | "list">("list");
+  // «Документы» — перемещения, возвраты и списания (0062): у них свой список и отбор.
+  const [view, setView] = useState<"board" | "list" | "documents">("list");
+  const viewRef = useRef<"board" | "list" | "documents">("list");
   const [editing, setEditing] = useState<InventoryPartRecord | "new" | null>(null);
   const [receiving, setReceiving] = useState<InventoryPartRecord | null>(null);
   const [deactivating, setDeactivating] = useState<InventoryPartRecord | null>(null);
@@ -176,7 +178,7 @@ export function WarehousePage() {
   // Ответ на прежний запрос не должен затереть свежий: доска и страница списка просят
   // разные объёмы, и при быстром переключении ответы могут прийти не по порядку.
   const loadTurn = useRef(0);
-  const reload = async (nextFilters = filters, nextPageIndex = pageIndex, nextView = viewRef.current) => {
+  const reload = async (nextFilters = filters, nextPageIndex = pageIndex, nextView: "board" | "list" | "documents" = viewRef.current) => {
     const turn = ++loadTurn.current;
     setLoading(true);
     try {
@@ -198,10 +200,10 @@ export function WarehousePage() {
     // хотя последнее слово всё равно за базой (0049, 0050).
     void m2Api.hasPermission("warehouse.write").then(setCanWrite).catch(() => setCanWrite(false));
   }, []);
-  const changeView = (next: "board" | "list") => {
+  const changeView = (next: "board" | "list" | "documents") => {
     viewRef.current = next;
     setView(next);
-    void reload(filters, 0, next);
+    if (next !== "documents") void reload(filters, 0, next);
   };
   const save = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -286,19 +288,23 @@ export function WarehousePage() {
   const openedFromList = openedId ? parts.find((item) => item.id === openedId) : undefined;
   if (openedFromList) lastOpened.current = openedFromList;
   const opened = openedId ? openedFromList ?? lastOpened.current : undefined;
+  const documentsView = view === "documents";
   return <>
     <PageIntro
-      actions={<>
+      actions={documentsView ? undefined : <>
         {canWrite === true ? <Button onClick={() => setImporting(true)} variant="secondary">Приход файлом</Button> : null}
         <Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || total === 0} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>
         <Button icon="plus" onClick={() => { setFormError(null); setEditing("new"); }}>Добавить запчасть</Button>
       </>}
-      description={canWrite === false
+      description={documentsView
+        ? "Документы склада формируются сами: выдали запчасть инженеру — перемещение на его склад, вернул — возврат, координатор закрыл задачу с установленной запчастью или кладовщик списал брак — списание. Откройте документ, чтобы посмотреть строки и скачать его в Excel."
+        : canWrite === false
         ? "Остатки и историю движений по позиции смотрите в её карточке. Кнопка «Скачать в Excel» выгружает весь текущий отбор, а не открытую страницу. Менять остатки может только склад."
         : "Накладную целиком загрузите кнопкой «Приход файлом». Остаток по одной позиции пополняйте в строке таблицы, а списание, корректировку и историю смотрите в её карточке. Кнопка «Скачать в Excel» выгружает весь текущий отбор, а не открытую страницу."}
       title="Склад"
-      titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать склад" onValueChange={changeView} value={view} />}
+      titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }, { value: "documents", label: "Документы" }]} label="Как показать склад" onValueChange={changeView} value={view} />}
     />
+    {documentsView ? <StockDocumentsView /> : <>
     <div className="metric-grid metric-grid--three">
       <MetricCard icon="inventory" label="Активные" value={String(summary.active)} />
       <MetricCard icon="warehouse" label="Мало на складе" tone="orange" value={String(summary.belowMinimum)} />
@@ -310,6 +316,7 @@ export function WarehousePage() {
         : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} />
         : <InventoryBoard loading={loading} onOpen={(part) => setOpenedId(part.id)} parts={parts} />}
     </DataTableShell> : <DataTableShell meta={formatRussianCount(total, ["позиция", "позиции", "позиций"])} title="Запчасти">{loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" /> : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} /> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Артикул</th><th>Наименование</th><th className="numeric">На складе</th><th>Г · Н · Б</th><th className="numeric">В резерве</th><th className="numeric">Доступно</th><th className="numeric">Минимум</th><th className="numeric">У инженеров</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{parts.map((part) => <tr className={part.isActive ? "" : "reference-admin-table__inactive"} key={part.id}><td><strong>{part.articleNumber}</strong>{part.aliases ? <small className="inventory-table__aliases" title={`Артикулы поставщиков: ${part.aliases}`}>{part.aliases}</small> : null}</td><td>{part.name}</td><td className="numeric">{part.onHandQuantity}</td><td className="inventory-table__conditions" title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</td><td className="numeric">{part.reservedQuantity}</td><td className="numeric"><strong>{part.availableQuantity}</strong></td><td className="numeric">{part.minimumStock}</td><td className="numeric">{part.withEngineersQuantity}</td><td><StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge></td><td><div className="table-actions"><Button className="button--compact" onClick={() => setOpenedId(part.id)} variant="ghost">История</Button>{part.isActive ? <Button className="button--compact" onClick={() => { setFormError(null); setReceiving(part); }} variant="secondary">Пополнить</Button> : null}<IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(part); }} />{part.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(part)} /> : <IconButton icon="enable" label="Включить" onClick={() => void m2Api.updateInventoryPart(part.id, { isActive: true }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div><RegistryPagination ariaLabel="Страницы склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}</DataTableShell>}
+    </>}
     <DialogForm busy={saving} description={editing === "new" ? "Можно сразу указать начальный остаток — он попадёт на склад как поступление." : "Изменятся наименование, минимум и примечание. Остаток меняйте через «Пополнить»."} error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(draft)} submitLabel={editing === "new" ? "Добавить запчасть" : "Сохранить изменения"} title={editing === "new" ? "Новая запчасть" : "Изменить запчасть"}><label>Артикул<input autoFocus defaultValue={draft?.articleNumber} name="articleNumber" required /></label><label>Наименование<input defaultValue={draft?.name} name="name" required /></label><label>Минимальный остаток<input defaultValue={draft?.minimumStock} min="0" name="minimumStock" step="0.001" type="number" /></label>{editing === "new" ? <label>Начальный остаток<input defaultValue="0" min="0" name="initialQuantity" step="0.001" type="number" /></label> : null}<label className="field-wide">Примечание<AutoTextarea defaultValue={draft?.notes ?? ""} name="notes" rows={3} /></label></DialogForm>
     <DialogForm
       busy={saving}

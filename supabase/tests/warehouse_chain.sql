@@ -694,4 +694,98 @@ SELECT pg_temp.check((SELECT b.available_quantity = 5 AND b.reserved_quantity = 
                        WHERE b.part_id = (SELECT id FROM ids WHERE k = 'part_a') AND b.part_condition = 'N'),
   'снятые резервы вернули количество в доступный остаток');
 
+-- ---------------------------------------------------------------- Документы склада (0062)
+-- Каждое движение по резерву лежит строкой ровно в одном документе своего вида.
+SELECT pg_temp.check((SELECT count(*) = 0 FROM stock_movements m
+                       WHERE m.movement_type IN ('issue', 'return', 'install', 'writeoff')
+                         AND NOT EXISTS (SELECT 1 FROM stock_document_lines l WHERE l.movement_id = m.id)),
+  'документы: у каждой выдачи, возврата, установки и списания есть документ');
+SELECT pg_temp.check((SELECT count(*) = 0 FROM stock_movements m
+                       JOIN stock_document_lines l ON l.movement_id = m.id
+                      WHERE m.movement_type IN ('receipt', 'reserve', 'adjustment')),
+  'документы: приход и корректировка в документы склада не попадают');
+
+-- По задаче t1 у одного инженера за один день: одно перемещение, один возврат, одно списание.
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_documents d
+                       WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1') AND d.kind = 'transfer'
+                         AND d.engineer_id = (SELECT id FROM ids WHERE k = 'engineer')
+                         AND d.equipment_id = (SELECT id FROM ids WHERE k = 'equipment')
+                         AND d.number ~ '^ПМ-[0-9]{6}$' AND d.document_date = public.company_today()),
+  'документы: все выдачи по задаче за день — одно перемещение на склад инженера с номером ПМ-');
+SELECT pg_temp.check((SELECT count(*) FROM stock_document_lines l JOIN stock_documents d ON d.id = l.document_id
+                       WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1') AND d.kind = 'transfer')
+                   = (SELECT count(*) FROM stock_movements m WHERE m.task_id = (SELECT id FROM ids WHERE k = 't1') AND m.movement_type = 'issue'),
+  'документы: в перемещении строка на каждую выдачу');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_documents d
+                       WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1') AND d.kind = 'return' AND d.number ~ '^ВЗ-[0-9]{6}$'),
+  'документы: возвраты по задаче за день — один документ ВЗ-');
+SELECT pg_temp.check((SELECT count(*) FROM stock_document_lines l JOIN stock_documents d ON d.id = l.document_id
+                       WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1') AND d.kind = 'return')
+                   = (SELECT count(*) FROM stock_movements m WHERE m.task_id = (SELECT id FROM ids WHERE k = 't1') AND m.movement_type = 'return'),
+  'документы: в возврате строка на каждый возврат');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_documents d
+                       WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1') AND d.kind = 'writeoff' AND d.number ~ '^СП-[0-9]{6}$'),
+  'документы: закрытие задачи с установленными запчастями даёт одно списание СП-');
+SELECT pg_temp.check((SELECT count(*) > 0 AND bool_and(m.movement_type = 'install')
+                        FROM stock_document_lines l
+                        JOIN stock_documents d ON d.id = l.document_id
+                        JOIN stock_movements m ON m.id = l.movement_id
+                       WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1') AND d.kind = 'writeoff')
+                   AND (SELECT count(*) FROM stock_document_lines l JOIN stock_documents d ON d.id = l.document_id
+                         WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1') AND d.kind = 'writeoff')
+                     = (SELECT count(*) FROM stock_movements m WHERE m.task_id = (SELECT id FROM ids WHERE k = 't1') AND m.movement_type = 'install'),
+  'документы: в списании ровно установленные запчасти');
+-- У другой задачи и другого инженера — свои документы.
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_documents d
+                       WHERE d.task_id = (SELECT id FROM ids WHERE k = 't2') AND d.kind = 'writeoff'
+                         AND d.engineer_id = (SELECT id FROM ids WHERE k = 'engineer2')),
+  'документы: списание другой задачи — отдельный документ на её инженера');
+
+-- Брак кнопкой «Списать» (0049): документ без задачи, причина в строке.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT public.write_off_stock((SELECT id FROM ids WHERE k = 'part_d'), 'N', 1, 'Разбит при разгрузке');
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+SET CONSTRAINTS ALL IMMEDIATE;
+SET CONSTRAINTS ALL DEFERRED;
+SELECT pg_temp.check((SELECT count(*) = 1 FROM stock_documents d
+                       JOIN stock_document_lines l ON l.document_id = d.id
+                       JOIN stock_movements m ON m.id = l.movement_id
+                      WHERE d.kind = 'writeoff' AND d.task_id IS NULL AND d.engineer_id IS NULL
+                        AND m.movement_type = 'writeoff' AND m.comment = 'Разбит при разгрузке'),
+  'документы: списание брака попадает в документ списания без задачи с причиной');
+
+-- Кто видит и кто пишет.
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'warehouse'));
+SELECT pg_temp.check((SELECT count(*) >= 4 FROM public.stock_document_list(NULL, NULL, NULL, NULL, NULL, 50, 0)),
+  'документы: кладовщик видит список документов');
+SELECT pg_temp.check((SELECT bool_and(x.task_number IS NOT NULL AND x.engineer_name = 'Тест engineer' AND x.line_count > 0)
+                        FROM public.stock_document_list(NULL, NULL, NULL, NULL, (SELECT id FROM ids WHERE k = 't1'), 50, 0) AS x),
+  'документы: в списке по задаче номер задачи и инженер подписаны, даже если кладовщик задачу не видит');
+SELECT pg_temp.check((SELECT count(*) = 1 FROM public.stock_document_list('writeoff', 'ART-A', NULL, NULL, NULL, 50, 0)),
+  'документы: поиск по артикулу находит списание с этой запчастью');
+SELECT pg_temp.check((SELECT count(*) > 0 AND bool_and(x.article_number IS NOT NULL AND x.quantity > 0)
+                        FROM public.stock_document_lines_for(ARRAY(SELECT d.id FROM stock_documents d WHERE d.task_id = (SELECT id FROM ids WHERE k = 't1'))) AS x),
+  'документы: строки отдают артикул и количество');
+SELECT pg_temp.expect_denied(
+  format('INSERT INTO public.stock_documents (number, kind, document_date) VALUES (%L, %L, current_date)', 'ПМ-999999', 'transfer'),
+  'документы: руками документ не завести даже складу');
+SELECT pg_temp.expect_denied(
+  format('DELETE FROM public.stock_document_lines WHERE document_id IN (SELECT id FROM public.stock_documents)'),
+  'документы: строку документа не удалить');
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'engineer'));
+SELECT pg_temp.check((SELECT count(*) > 0 FROM public.stock_document_list(NULL, NULL, NULL, NULL, NULL, 50, 0)),
+  'документы: инженеру со складским окном документы видны');
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+
+SELECT pg_temp.act_as((SELECT id FROM ids WHERE k = 'customer'));
+SELECT pg_temp.expect_denied('SELECT * FROM public.stock_document_list()', 'документы: клиенту список закрыт');
+SELECT pg_temp.check((SELECT count(*) = 0 FROM public.stock_documents), 'документы: клиент таблицу документов не видит');
+RESET ROLE;
+SELECT set_config('request.jwt.claim.sub', '', true), set_config('request.jwt.claims', '', true);
+
 ROLLBACK;
