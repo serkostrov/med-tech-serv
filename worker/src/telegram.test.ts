@@ -97,11 +97,23 @@ describe("Telegram", () => {
     body: "Здравствуйте!\n\nВам назначена задача.\n\nКарточка задачи:\nhttps://crm.example.test/tasks/t1"
   };
 
+  it("пока Telegram запрещает ботам виджеты, карточку даже не пробует: сразу текст с кнопкой", async () => {
+    const calls: Array<{ url: string; body: unknown }> = [];
+    const channel = new TelegramDeliveryChannel(
+      new TelegramClient(config, fakeFetch(200, { ok: true, result: { message_id: 81 } }, calls)),
+      { publicAppUrl: "https://crm.example.test/", cards: { load: async () => card } }
+    );
+    const receipt = await channel.deliver(withUrl);
+    assert.equal(receipt.providerMessageId, "telegram:123456789:81");
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0]?.url, `https://api.telegram.org/bot${TOKEN}/sendMessage`);
+  });
+
   it("отправляет карточку задачи виджетом с кнопкой «Открыть задачу»", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const channel = new TelegramDeliveryChannel(
       new TelegramClient(config, fakeFetch(200, { ok: true, result: { message_id: 78 } }, calls)),
-      { publicAppUrl: "https://crm.example.test/", cards: { load: async () => card } }
+      { publicAppUrl: "https://crm.example.test/", widgets: true, cards: { load: async () => card } }
     );
     const receipt = await channel.deliver(withUrl);
     assert.equal(receipt.providerMessageId, "telegram:123456789:78");
@@ -122,7 +134,7 @@ describe("Telegram", () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const channel = new TelegramDeliveryChannel(
       new TelegramClient(config, fakeFetch(200, { ok: true, result: { message_id: 79 } }, calls)),
-      { publicAppUrl: "https://crm.example.test/", cards: { load: async () => card } }
+      { publicAppUrl: "https://crm.example.test/", widgets: true, cards: { load: async () => card } }
     );
     await channel.deliver({ ...withUrl, eventCode: "stock_reservation_created" });
     const body = calls[0]?.body as { reply_markup?: unknown };
@@ -137,7 +149,7 @@ describe("Telegram", () => {
         ? { status: 400, json: async () => ({ ok: false, description: "Bad Request: INPUT_MEDIA_WIDGET_HTML_INVALID" }) }
         : { status: 200, json: async () => ({ ok: true, result: { message_id: 79 } }) };
     };
-    const channel = new TelegramDeliveryChannel(new TelegramClient(config, fetchImpl), { publicAppUrl: "https://crm.example.test", cards: { load: async () => card } });
+    const channel = new TelegramDeliveryChannel(new TelegramClient(config, fetchImpl), { publicAppUrl: "https://crm.example.test", widgets: true, cards: { load: async () => card } });
     const receipt = await channel.deliver(withUrl);
     assert.equal(receipt.providerMessageId, "telegram:123456789:79");
     assert.deepEqual(calls.map((call) => call.url.split("/").pop()), ["sendWidget", "sendMessage"]);
@@ -150,13 +162,13 @@ describe("Telegram", () => {
   it("сбой источника карточки не мешает доставке, временный сбой виджета повторяется без запасного сообщения", async () => {
     const calls: Array<{ url: string; body: unknown }> = [];
     const broken = new TelegramDeliveryChannel(new TelegramClient(config, fakeFetch(200, { ok: true, result: { message_id: 80 } }, calls)), {
-      cards: { load: async () => { throw new Error("база недоступна"); } }
+      widgets: true, cards: { load: async () => { throw new Error("база недоступна"); } }
     });
     await broken.deliver(command);
     assert.deepEqual(calls.map((call) => call.url.split("/").pop()), ["sendMessage"]);
 
     const busyCalls: Array<{ url: string; body: unknown }> = [];
-    const busy = new TelegramDeliveryChannel(new TelegramClient(config, fakeFetch(503, { ok: false }, busyCalls)), { cards: { load: async () => card } });
+    const busy = new TelegramDeliveryChannel(new TelegramClient(config, fakeFetch(503, { ok: false }, busyCalls)), { widgets: true, cards: { load: async () => card } });
     const error = await deliveryError(busy.deliver(command));
     assert.equal(error.diagnosticCode, "telegram_temporary_failure");
     assert.deepEqual(busyCalls.map((call) => call.url.split("/").pop()), ["sendWidget"]);
@@ -164,7 +176,7 @@ describe("Telegram", () => {
 
   it("обрыв после отправки виджета не повторяет, чтобы не было дубля", async () => {
     const aborted: FetchLike = async () => { throw Object.assign(new Error("aborted"), { name: "AbortError" }); };
-    const channel = new TelegramDeliveryChannel(new TelegramClient(config, aborted), { cards: { load: async () => card } });
+    const channel = new TelegramDeliveryChannel(new TelegramClient(config, aborted), { widgets: true, cards: { load: async () => card } });
     const error = await deliveryError(channel.deliver(command));
     assert.equal(error.diagnosticCode, "telegram_delivery_outcome_unknown");
     assert.equal(error.retryAllowed, false);
@@ -179,7 +191,7 @@ describe("Telegram", () => {
         ? { status: 200, json: async () => ({ ok: true, result: { message_id: 81 } }) }
         : { status: 400, json: async () => ({ ok: false, description: "Bad Request: BUTTON_URL_INVALID" }) };
     };
-    const channel = new TelegramDeliveryChannel(new TelegramClient(config, fetchImpl), { publicAppUrl: "https://crm.example.test", cards: { load: async () => card } });
+    const channel = new TelegramDeliveryChannel(new TelegramClient(config, fetchImpl), { publicAppUrl: "https://crm.example.test", widgets: true, cards: { load: async () => card } });
     const receipt = await channel.deliver(withUrl);
     assert.equal(receipt.providerMessageId, "telegram:123456789:81");
     assert.deepEqual(calls.map((call) => call.url.split("/").pop()), ["sendWidget", "sendMessage", "sendMessage"]);

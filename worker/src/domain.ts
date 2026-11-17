@@ -103,6 +103,15 @@ export function assertNotificationTemplate(template: NotificationTemplateText): 
   }
 }
 
+/**
+ * Дата из базы приходит как «2026-11-16» — в письме и в Telegram её пишем по-русски,
+ * «16.11.2026». Остальное — как есть.
+ */
+export function humanValue(value: string): string {
+  const date = /^(\d{4})-(\d{2})-(\d{2})$/u.exec(value.trim());
+  return date ? `${date[3]}.${date[2]}.${date[1]}` : value;
+}
+
 export function renderNotificationTemplate(
   template: NotificationTemplateText,
   variables: Readonly<Record<string, unknown>>
@@ -111,7 +120,7 @@ export function renderNotificationTemplate(
   const replace = (_token: string, name: string): string => {
     const value = variables[name];
     if (value === undefined || value === null || value === "") return "—";
-    return String(value);
+    return humanValue(String(value));
   };
   return {
     subject: template.subjectTemplate.replace(TEMPLATE_TOKEN, replace).trim(),

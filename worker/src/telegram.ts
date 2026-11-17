@@ -156,7 +156,17 @@ export class TelegramDeliveryChannel implements DeliveryChannel {
 
   public constructor(
     private readonly client: TelegramClient,
-    private readonly options: { readonly publicAppUrl?: string; readonly cards?: TelegramTaskCardSource } = {}
+    private readonly options: {
+      readonly publicAppUrl?: string;
+      readonly cards?: TelegramTaskCardSource;
+      /**
+       * Карточки-виджеты. С 13.11.2026 Telegram запретил обычным ботам виджеты из-за
+       * уязвимости (ошибка INPUT_MEDIA_WIDGET_NOT_ALLOWED), старые карточки показывает
+       * «Widget unavailable». Пока запрет действует — шлём только текст; вернут —
+       * включается переменной окружения TELEGRAM_WIDGETS=on.
+       */
+      readonly widgets?: boolean;
+    } = {}
   ) {
     this.publicAppUrl = options.publicAppUrl?.replace(/\/$/u, "");
   }
@@ -173,10 +183,12 @@ export class TelegramDeliveryChannel implements DeliveryChannel {
 
     // Сначала карточка-виджет. Нет данных или Telegram её не принял (400) — обычное сообщение.
     let card: TaskCardData | undefined;
-    try {
-      card = await this.options.cards?.load(command);
-    } catch {
-      card = undefined;
+    if (this.options.widgets === true) {
+      try {
+        card = await this.options.cards?.load(command);
+      } catch {
+        card = undefined;
+      }
     }
     const html = card ? taskWidgetHtml(card) : undefined;
     if (html && widgetFitsLimits(html)) {

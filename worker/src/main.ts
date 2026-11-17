@@ -93,7 +93,12 @@ if (enabled.telegram) {
   } else {
     const client = new TelegramClient(telegramConfiguration(process.env));
     // Сообщения о задачах приходят карточкой-виджетом с кнопкой «Открыть задачу».
-    adapters.push(new TelegramDeliveryChannel(client, { publicAppUrl, cards: new PostgresTelegramTaskCardSource(database) }));
+    adapters.push(new TelegramDeliveryChannel(client, {
+      publicAppUrl,
+      cards: new PostgresTelegramTaskCardSource(database),
+      // Виджеты Telegram сейчас запрещены ботам: по умолчанию только текст.
+      widgets: process.env.TELEGRAM_WIDGETS === "on"
+    }));
     if (flag("TELEGRAM_CHAT_ID_REPLIES", true)) telegramResponder = new TelegramChatIdResponder(client);
   }
 }
