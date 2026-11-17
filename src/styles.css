@@ -8322,7 +8322,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   cursor: pointer;
 }
 .toggle-chip:hover { color: var(--color-ink); }
-.toggle-chip--on { border-color: var(--color-ink); color: #fff; background: var(--color-ink); }
+.toggle-chip--on, .toggle-chip--on:hover { border-color: var(--color-ink); color: #fff; background: var(--color-ink); }
 .toggle-chip:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 1px; }
 
 /* Полоса прокрутки страницы и колонок доски справа, как везде (раньше стояла слева через rtl) */
