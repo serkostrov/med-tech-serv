@@ -229,6 +229,25 @@ export function taskOccupiedRange(task: Pick<CalendarTask, "periodFrom" | "perio
   return single ? { from: single, to: single } : undefined;
 }
 
+/** Этапы, на которых задача ещё на инженере: сдал на проверку — работа сделана. */
+const STILL_ON_ENGINEER_STATUSES: ReadonlySet<string> = new Set(["planned", "new", "assigned", "in_progress"]);
+
+/**
+ * Дни, которые задача занимает на самом деле. Незакрытая задача с прошедшим сроком
+ * не освобождает инженера: она тянется до сегодняшнего дня, пока её не сдадут.
+ * Иначе просрочка оставалась в прошлых неделях, а на текущей человек с двумя
+ * хвостами выглядел «свободным» — и календарь, и подсказка при назначении (аудит 17.11, № 81).
+ */
+export function taskCalendarSpan(
+  task: Pick<CalendarTask, "periodFrom" | "periodTo" | "visitDate" | "status">,
+  today: string
+): CalendarRange | undefined {
+  const occupied = taskOccupiedRange(task);
+  if (!occupied) return undefined;
+  if (occupied.to < today && STILL_ON_ENGINEER_STATUSES.has(task.status)) return { from: occupied.from, to: today };
+  return occupied;
+}
+
 export type DayLoadLevel = "free" | "normal" | "overloaded";
 
 /** Уровень дня по числу задач: окно, норма или перегруз. */
@@ -341,7 +360,7 @@ export function buildEngineerCalendar(input: {
     const visibleTaskIds = new Set<string>();
     let overdueTaskCount = 0;
     for (const task of tasks) {
-      const occupied = taskOccupiedRange(task);
+      const occupied = taskCalendarSpan(task, input.today);
       if (!occupied) {
         undated.push(task);
         continue;

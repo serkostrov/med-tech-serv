@@ -19,6 +19,7 @@ import {
   rankAssignmentCandidates,
   shiftCalendarDay,
   shiftCalendarRange,
+  taskCalendarSpan,
   taskOccupiedRange,
   weekRange,
   type CalendarEngineer,
@@ -357,3 +358,30 @@ describe("порядок подсказки при назначении", () => 
     assert.deepEqual(ranked.map((item) => item.engineerId), ["e-2", "e-1"]);
   });
 });
+
+describe("календарь: незакрытая просрочка (аудит 17.11, № 81)", () => {
+  const today = "2026-11-17";
+  it("задача на инженере с прошедшим сроком тянется до сегодня", () => {
+    assert.deepEqual(taskCalendarSpan({ periodFrom: "2026-11-10", periodTo: "2026-11-12", status: "in_progress" }, today),
+      { from: "2026-11-10", to: "2026-11-17" });
+    assert.deepEqual(taskCalendarSpan({ periodFrom: "2026-11-10", periodTo: "2026-11-12", status: "under_review" }, today),
+      { from: "2026-11-10", to: "2026-11-12" }, "сдана на проверку — работа сделана");
+    assert.deepEqual(taskCalendarSpan({ periodFrom: "2026-11-18", periodTo: "2026-11-20", status: "assigned" }, today),
+      { from: "2026-11-18", to: "2026-11-20" });
+  });
+
+  it("инженер с хвостом на текущей неделе не «свободен»", () => {
+    const calendar = buildEngineerCalendar({
+      engineers: [{ id: "e1", fullName: "Иванов", isActive: true }],
+      tasks: [{ id: "t1", number: "З-1", title: "Хвост", status: "in_progress", engineerId: "e1", periodFrom: "2026-11-10", periodTo: "2026-11-12", isOverdue: true }],
+      range: { from: "2026-11-16", to: "2026-11-22" },
+      today
+    });
+    const row = calendar.rows[0];
+    assert.equal(row?.summary.taskCount, 1);
+    assert.equal(row?.cells.find((cell) => cell.date === today)?.placements.length, 1);
+    assert.equal(row?.cells.find((cell) => cell.date === "2026-11-18")?.placements.length, 0, "в будущие дни хвост не рисуем");
+    assert.equal(calendar.totals.freeEngineerCount, 0);
+  });
+});
+
