@@ -7,6 +7,7 @@
 import { formatIsoCalendarDate } from "./date-format.js";
 import { formatMoney, roundToKopecks } from "./price-list.js";
 import { companyDay } from "./task-dates.js";
+import { formatRussianCount } from "./equipment-changes.js";
 
 export type InvoiceStatus = "cancelled" | "draft" | "issued" | "transferred_to_1c";
 
@@ -125,7 +126,7 @@ export function invoiceZeroPriceWarning(items: readonly { readonly description: 
   const more = free.length > 3 ? ` и ещё ${free.length - 3}` : "";
   return free.length === 1
     ? `В счёте строка без цены: ${names}. Клиент получит её бесплатно, и так же она уйдёт в 1С.`
-    : `В счёте ${free.length} строки без цены: ${names}${more}. Клиент получит их бесплатно, и так же они уйдут в 1С.`;
+    : `В счёте ${formatRussianCount(free.length, ["строка", "строки", "строк"])} без цены: ${names}${more}. Клиент получит их бесплатно, и так же они уйдут в 1С.`;
 }
 
 export function invoiceItemTypeLabel(itemType: string): string {

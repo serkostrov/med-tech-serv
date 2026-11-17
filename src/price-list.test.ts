@@ -514,10 +514,10 @@ describe("прайс: ноль говорит о себе сам", () => {
     assert.equal(zeroPriceWarning(21), "Станет бесплатной 21 строка: в счёт такая работа не попадёт.");
   });
 
-  it("в окне правки объясняет, что значит нулевая цена (находка 39)", async () => {
+  it("нулевую цену окно правки не сохраняет и объясняет почему (находка 39)", async () => {
     const page = await readFile(new URL("./PricePage.tsx", import.meta.url), "utf8");
     assert.match(page, /parseAmount\(amountDraft\) === 0 \?/u);
-    assert.match(page, /в счёт такая работа не попадёт/u);
+    assert.match(page, /if \(amount === 0\) \{\s*setFormError\(ZERO_PRICE_MESSAGE\);/u);
   });
 
   it("в массовом изменении предупреждает про нули отдельной строкой (находка 40)", async () => {
