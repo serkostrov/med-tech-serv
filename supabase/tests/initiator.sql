@@ -74,7 +74,10 @@ BEGIN
   INSERT INTO equipment (serial_number, manufacturer_id, model_id, current_site_id, current_payer_id)
   VALUES ('INI-777', man, model, site, payer) RETURNING id INTO eq;
   INSERT INTO ids VALUES ('site', site), ('payer', payer), ('eq', eq);
-  INSERT INTO price_list (work_type_code, amount, valid_from) VALUES ('repair', 5000, current_date - 10);
+  -- Цена нужна, чтобы проверить, что инициатор её не видит; на живой базе она уже может быть.
+  INSERT INTO price_list (work_type_code, amount, valid_from)
+  SELECT 'repair', 5000, current_date - 10
+   WHERE NOT EXISTS (SELECT 1 FROM price_list WHERE work_type_code = 'repair');
 END $$;
 
 -- Координатор завёл свою задачу: инициатор её не увидит.
