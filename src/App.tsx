@@ -261,6 +261,37 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
   );
 }
 
+/**
+ * Ещё виды работ к основному (встреча 16.11: «инсталляция и ремонт в одной задаче»).
+ * Чипы с крестиком и список «Добавить вид работ»; основной в список не попадает.
+ * В счёте у каждого вида будет своя строка по своей цене — это и написано под полем.
+ */
+function ExtraWorkTypesField({ value, onChange, mainCode, workTypes }: {
+  readonly value: readonly string[];
+  readonly onChange: (next: readonly string[]) => void;
+  readonly mainCode: string;
+  readonly workTypes: readonly ReferenceCatalogValue[];
+}) {
+  const codeOf = (item: ReferenceCatalogValue) => item.code ?? item.id;
+  const nameOf = (code: string) => workTypes.find((item) => codeOf(item) === code)?.name ?? code;
+  const shown = value.filter((code) => code !== mainCode);
+  const available = workTypes.filter((item) => item.isActive && codeOf(item) !== mainCode && !shown.includes(codeOf(item)));
+  return <div className="extra-work-types field-wide">
+    <span className="extra-work-types__label">Ещё виды работ</span>
+    <div className="extra-work-types__chips">
+      {shown.map((code) => <span className="extra-work-types__chip" key={code}>
+        {nameOf(code)}
+        <button aria-label={`Убрать «${nameOf(code)}»`} onClick={() => onChange(shown.filter((item) => item !== code))} type="button">×</button>
+      </span>)}
+      {available.length ? <Select aria-label="Добавить вид работ" onChange={(event) => { if (event.target.value) onChange([...shown, event.target.value]); }} value="">
+        <option value="">+ Добавить вид работ</option>
+        {available.map((item) => <option key={item.id} value={codeOf(item)}>{item.name}</option>)}
+      </Select> : null}
+    </div>
+    <small>Если в задаче несколько работ — например, инсталляция и ремонт. В счёте у каждой будет своя строка по своей цене.</small>
+  </div>;
+}
+
 function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], canAssignEngineer = false, initialTitle = "", initialWorkTypeCode, initialComment = "", initialEquipment, mail, onOpenChange, onCreated, onEquipmentAttached }: {
   readonly open: boolean;
   /** Инженеры для необязательного назначения сразу при создании. */
@@ -285,6 +316,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
   const defaultWorkType = initialWorkTypeCode || activeWorkTypes[0]?.code || activeWorkTypes[0]?.id || "diagnostics";
   const [equipmentId, setEquipmentId] = useState("");
   const [workTypeCode, setWorkTypeCode] = useState(defaultWorkType);
+  const [extraWorkTypes, setExtraWorkTypes] = useState<readonly string[]>([]);
   const [priority, setPriority] = useState<"planned" | "urgent">("planned");
   const [initiatorContactId, setInitiatorContactId] = useState("");
   const [siteContactId, setSiteContactId] = useState("");
@@ -522,6 +554,9 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
         workTypeCode,
         priority,
         ...(workModifier === "G" || workModifier === "N" ? { workModifier } : {}),
+        ...(extraWorkTypes.filter((code) => code !== workTypeCode).length
+          ? { extraWorkTypeCodes: extraWorkTypes.filter((code) => code !== workTypeCode) }
+          : {}),
         equipmentId: selectedEquipment.id,
         siteId: selectedEquipment.siteId,
         payerId: selectedEquipment.payerId,
@@ -623,6 +658,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
       <h3 className="task-form-step field-wide"><span>3</span>Что сделать</h3>
       <label className="field-wide">Название задачи *<input defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, не включается анализатор" required /></label>
       <label>Вид работ *<Select onChange={(event) => setWorkTypeCode(event.target.value)} required value={workTypeCode}>{activeWorkTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
+      <ExtraWorkTypesField mainCode={workTypeCode} onChange={setExtraWorkTypes} value={extraWorkTypes} workTypes={activeWorkTypes} />
       {/* Гарантию решает координатор при создании: инженер этого может и не знать (встреча 16.11). */}
       <label>Гарантия<Select defaultValue="" name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label>
       <label className="task-priority-check">
@@ -762,6 +798,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [actRowsEditing, setActRowsEditing] = useState(false);
   const [resultEditing, setResultEditing] = useState(false);
   const [overviewEditing, setOverviewEditing] = useState(false);
+  const [editExtraWorkTypes, setEditExtraWorkTypes] = useState<readonly string[]>([]);
   // Вкладки карточки: работа и акт (результат и файлы), запчасти отдельно, письмо клиента, история.
   const [detailTab, setDetailTab] = useState<"work" | "parts" | "history" | "mail">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : initialTab === "mail" ? "mail" : "work");
   // Переписка с клиентом: грузим отдельно от карточки, как резервы склада.
@@ -873,8 +910,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       .then(([reasons, types]) => setResultCatalogs({ reasons: reasons.filter((item) => item.isActive), workTypes: types }))
       .catch(() => toast.warning("Не получилось загрузить справочник причин. Обновите страницу, если списка нет."));
   }, [resultEditing]);
+  const taskTypeCodes = [task.workTypeCode ?? card.workType?.code, ...(task.extraWorkTypeCodes ?? [])];
   const hoursRequired = (resultCatalogs.workTypes.length ? resultCatalogs.workTypes : workTypes)
-    .find((item) => (item.code ?? item.id) === (task.workTypeCode ?? card.workType?.code))?.attributes.requiresHours === true;
+    .some((item) => taskTypeCodes.includes(item.code ?? item.id) && item.attributes.requiresHours === true);
 
   const perform = async (code: string, suppliedComment?: string) => {
     setBusy(true);
@@ -981,6 +1019,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         workTypeCode: String(data.get("workTypeCode") ?? "").trim(),
         priority: data.get("urgent") === "on" ? "urgent" : "planned",
         workModifier: (String(data.get("workModifier") ?? "") || null) as "G" | "N" | null,
+        extraWorkTypeCodes: editExtraWorkTypes.filter((code) => code !== String(data.get("workTypeCode") ?? "")),
         periodFrom,
         periodTo,
         callDate,
@@ -1182,7 +1221,11 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const canUploadFiles = card.canUploadFiles === true || canEditResult;
 
   // Модификатор русской буквой, как в акте: Г (гарантия) или Н (неправильная эксплуатация).
-  const workTypeLabel = card.workType?.name ? `${card.workType.name}${task.workModifier ? ` · ${task.workModifier === "G" ? "Г" : "Н"}` : ""}` : "—";
+  const catalogTypes = resultCatalogs.workTypes.length ? resultCatalogs.workTypes : workTypes;
+  const extraTypeNames = (task.extraWorkTypeCodes ?? []).map((code) => catalogTypes.find((item) => (item.code ?? item.id) === code)?.name ?? code);
+  const workTypeLabel = card.workType?.name
+    ? `${[card.workType.name, ...extraTypeNames].join(" + ")}${task.workModifier ? ` · ${task.workModifier === "G" ? "Г" : "Н"}` : ""}`
+    : "—";
   const meterLabel = task.meterReading ?? card.closure?.meterReading;
   const contactDetails = [task.customer?.contactPhone, task.customer?.contactEmail].filter(Boolean).join(" · ");
   const canCancel = card.availableActions.some((action) => action.code === "cancel");
@@ -1406,7 +1449,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       </div>
       <aside className="task-layout__aside" aria-label="Свойства задачи">
         <section className="task-props">
-          <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
+          <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setEditExtraWorkTypes(task.extraWorkTypeCodes ?? []); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
           <dl>
             <div><dt>Инженер</dt><dd>{card.engineer?.fullName ?? <span className="is-empty">Не назначен</span>}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить</button> : canAssign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Назначить</button> : null}</dd></div>
             <div><dt>Срок</dt><dd>{task.periodFrom || task.periodTo ? formatTaskDateRange(task.periodFrom, task.periodTo) : <span className="is-empty">Не указан</span>}</dd></div>
@@ -1472,7 +1515,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео). Можно выбрать сразу несколько.`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
     {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
-    <DialogForm busy={busy} description="Изменятся название, вид работ, гарантия, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Гарантия<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
+    <DialogForm busy={busy} description="Изменятся название, вид работ, гарантия, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><ExtraWorkTypesField mainCode={task.workTypeCode ?? card.workType?.code ?? ""} onChange={setEditExtraWorkTypes} value={editExtraWorkTypes} workTypes={workTypes.filter((item) => item.isActive)} /><label>Гарантия<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}

@@ -131,6 +131,8 @@ export interface TaskApiRecord {
   readonly title: string;
   readonly status: string;
   readonly workTypeCode?: string;
+  /** Дополнительные виды работ (0060): у задачи «инсталляция и ремонт» основной — первый. */
+  readonly extraWorkTypeCodes?: readonly string[];
   readonly workModifier?: "G" | "N";
   readonly hours?: number;
   readonly priority?: "urgent" | "planned";
@@ -1175,7 +1177,7 @@ const EQUIPMENT_SELECT = `
 `;
 
 const TASK_SELECT = `
-  id, number, title, status_code, work_type_code, work_modifier, hours, priority,
+  id, number, title, status_code, work_type_code, extra_work_type_codes, work_modifier, hours, priority,
   is_maintenance_plan, maintenance_plan_id, site_id, site_contact_id, initiator_contact_id,
   initiator_name, payer_id, equipment_id,
   engineer_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
@@ -1194,7 +1196,7 @@ const TASK_SELECT = `
 `;
 
 const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
-  id, number, title, status_code, work_type_code, work_modifier, hours, priority,
+  id, number, title, status_code, work_type_code, extra_work_type_codes, work_modifier, hours, priority,
   is_maintenance_plan, maintenance_plan_id, site_id, site_contact_id, payer_id, equipment_id,
   engineer_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
   work_started_at, work_finished_at, contract_id, primary_task_id, reason_code,
@@ -1411,6 +1413,9 @@ export function mapTask(row: Row): TaskApiRecord {
     title: text(row, "title"),
     status,
     workTypeCode: optionalText(row, "work_type_code"),
+    ...(Array.isArray(row.extra_work_type_codes) && row.extra_work_type_codes.length
+      ? { extraWorkTypeCodes: row.extra_work_type_codes.filter((code): code is string => typeof code === "string") }
+      : {}),
     ...(workModifier === "G" || workModifier === "N" ? { workModifier } : {}),
     ...(hours !== undefined ? { hours } : {}),
     priority: text(row, "priority") === "urgent" ? "urgent" : "planned",
@@ -3025,7 +3030,8 @@ export class M2ApiClient {
       if (query.equipmentId) next = next.eq("equipment_id", query.equipmentId);
       if (query.openOnly) next = next.not("status_code", "in", "(closed,cancelled)");
       if (query.siteId) next = next.eq("site_id", query.siteId);
-      if (query.workTypeCode) next = next.eq("work_type_code", query.workTypeCode);
+      // Вид работ — основной или дополнительный (0060).
+      if (query.workTypeCode) next = next.or(`work_type_code.eq.${query.workTypeCode},extra_work_type_codes.cs.{${query.workTypeCode}}`);
       if (query.priority) next = next.eq("priority", query.priority);
       if (query.guarantee === "none") next = next.is("work_modifier", null);
       else if (query.guarantee) next = next.eq("work_modifier", query.guarantee);
@@ -3242,6 +3248,9 @@ export class M2ApiClient {
     const payload = {
       title: input.title,
       work_type_code: String(input.workTypeCode || "diagnostics"),
+      ...(Array.isArray(input.extraWorkTypeCodes) && input.extraWorkTypeCodes.length
+        ? { extra_work_type_codes: input.extraWorkTypeCodes }
+        : {}),
       ...(planned ? { status_code: "planned" } : {}),
       priority: input.priority ?? "planned",
       ...(input.workModifier === "G" || input.workModifier === "N" ? { work_modifier: input.workModifier } : {}),
@@ -3284,6 +3293,8 @@ export class M2ApiClient {
     readonly priority: "urgent" | "planned";
     /** Г — гарантийный случай, Н — вина клиента, null — не гарантия. Ставит координатор. */
     readonly workModifier?: "G" | "N" | null;
+    /** Дополнительные виды работ; пустой список — только основной. */
+    readonly extraWorkTypeCodes?: readonly string[];
     readonly periodFrom: string;
     readonly periodTo: string;
     readonly callDate: string;
@@ -3297,6 +3308,7 @@ export class M2ApiClient {
       work_type_code: input.workTypeCode,
       priority: input.priority,
       ...(input.workModifier !== undefined ? { work_modifier: input.workModifier } : {}),
+      ...(input.extraWorkTypeCodes !== undefined ? { extra_work_type_codes: input.extraWorkTypeCodes } : {}),
       deadline_from: input.periodFrom,
       deadline_to: input.periodTo,
       call_date: input.callDate,
