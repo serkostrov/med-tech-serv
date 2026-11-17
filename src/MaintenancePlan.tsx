@@ -13,6 +13,11 @@ export const MAINTENANCE_MONTHS = [
   "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"
 ] as const;
 
+/** Полные названия: колонки доски «По месяцам» широкие, сокращать незачем (17.11). */
+export const MAINTENANCE_MONTH_NAMES = [
+  "Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"
+] as const;
+
 export const maintenancePlanStatusLabel: Readonly<Record<MaintenancePlanPeriodResponse["status"], string>> = {
   planned: "Запланировано",
   generated: "Задача создана",
@@ -35,7 +40,7 @@ export function maintenanceMonthIndex(periodFrom: string): number {
 export function maintenanceMonthColumns(year: number, today = new Date()): readonly { readonly key: string; readonly title: string; readonly color: string }[] {
   const nowYear = today.getFullYear();
   const nowMonth = today.getMonth();
-  return MAINTENANCE_MONTHS.map((month, index) => {
+  return MAINTENANCE_MONTH_NAMES.map((month, index) => {
     const past = year < nowYear || (year === nowYear && index < nowMonth);
     const current = year === nowYear && index === nowMonth;
     return { key: String(index), title: month, color: current ? "#e07a2e" : past ? "#8a9aa3" : "#2f86c4" };

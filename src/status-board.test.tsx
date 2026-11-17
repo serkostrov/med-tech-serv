@@ -40,7 +40,8 @@ describe("план ТО по месяцам", () => {
   it("двенадцать колонок, текущий месяц выделен, прошедшие серые", () => {
     const columns = maintenanceMonthColumns(2026, new Date(2026, 10, 17));
     assert.equal(columns.length, 12);
-    assert.equal(columns[10]?.title, "Ноя");
+    assert.equal(columns[10]?.title, "Ноябрь");
+    assert.equal(columns[0]?.title, "Январь");
     assert.equal(columns[10]?.color, "#e07a2e");
     assert.equal(columns[0]?.color, "#8a9aa3");
     assert.equal(columns[11]?.color, "#2f86c4");
