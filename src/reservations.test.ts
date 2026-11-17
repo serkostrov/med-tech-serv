@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { M2ApiClient, stockReservationRecord } from "./m2-api.js";
-import { EMPTY_RESERVATION_FILTERS, RESERVATION_BOARD_STATUSES, RESERVATION_STATUS_LABELS, availableReservationActions, filterReservations, hasReservationFilters, issueBlockReason, reservationActions, reservationDropDecision, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
+import { EMPTY_RESERVATION_FILTERS, RESERVATION_BOARD_STATUSES, RESERVATION_STATUS_LABELS, availableReservationActions, engineerPickupTitle, engineerReservationHint, filterReservations, hasReservationFilters, issueBlockReason, reservationActions, reservationDropDecision, reservationFilterOptions, reservationQuantityText, reservationStepAuthorText, reservationStepText, reservationSummary, reservationTaskNote, type ReservationFilters } from "./reservations.js";
 
 /** Поддельный клиент Supabase: запоминает цепочку запроса к таблице и вызовы функций базы. */
 function fakeClient(response: { data?: unknown; error?: { message: string; code?: string } | null }) {
@@ -200,5 +200,19 @@ describe("резервы склада", () => {
     assert.deepEqual(done.calls.find((call) => call[0] === "in"), ["in", "status", ["created", "warehouse_notified"]]);
     const stale = fakeClient({ data: [] });
     await assert.rejects(new M2ApiClient(stale.client).cancelStockReservation("r1"), /Обновите список/u);
+  });
+});
+
+describe("блок запчастей у инженера", () => {
+  it("«Получить на складе» — пока есть что забирать, иначе «Запчасти у вас»", () => {
+    assert.equal(engineerPickupTitle(["created"]), "Получить на складе");
+    assert.equal(engineerPickupTitle(["issued", "warehouse_notified"]), "Получить на складе");
+    assert.equal(engineerPickupTitle(["issued"]), "Запчасти у вас");
+  });
+  it("выданная и отмеченная установленной запчасть так и подписана", () => {
+    assert.equal(engineerReservationHint("issued"), "у вас");
+    assert.equal(engineerReservationHint("issued", true), "у вас, отмечена установленной");
+    assert.equal(engineerReservationHint("warehouse_notified", true), "собрана, можно забрать");
+    assert.equal(engineerReservationHint("installed"), undefined);
   });
 });

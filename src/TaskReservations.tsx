@@ -7,6 +7,7 @@ import {
   RESERVATION_CONDITION_LABELS,
   RESERVATION_STATUS_LABELS,
   RESERVATION_STATUS_TONES,
+  engineerPickupTitle,
   engineerReservationHint,
   lastReservationStep,
   reservationQuantityText,
@@ -255,11 +256,11 @@ export function EngineerPickupNote({ reservations }: { readonly reservations: re
   const items = reservations.filter((item) => engineerReservationHint(item.status) !== undefined);
   if (items.length === 0) return null;
   return <section aria-label="Запчасти со склада" className="task-pickup">
-    <h2>Получить на складе</h2>
+    <h2>{engineerPickupTitle(items.map((item) => item.status))}</h2>
     <ul className="task-pickup__list">{items.map((reservation) => <li key={reservation.id}>
       <strong>{reservation.articleNumber}</strong>
       <span>{reservation.partName}</span>
-      <small>{reservationQuantityText(reservation)} · {engineerReservationHint(reservation.status)}</small>
+      <small>{reservationQuantityText(reservation)} · {engineerReservationHint(reservation.status, reservation.installMarked)}</small>
     </li>)}</ul>
   </section>;
 }

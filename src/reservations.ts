@@ -139,11 +139,19 @@ export function daysWithEngineer(reservation: Pick<StockReservationRecord, "step
 }
 
 /** Что инженеру делать с запчастью: забирать её или она уже у него. */
-export function engineerReservationHint(status: StockReservationStatus): string | undefined {
+export function engineerReservationHint(status: StockReservationStatus, installMarked = false): string | undefined {
   if (status === "created") return "ждёт сборки";
   if (status === "warehouse_notified") return "собрана, можно забрать";
-  if (status === "issued") return "у вас";
+  if (status === "issued") return installMarked ? "у вас, отмечена установленной" : "у вас";
   return undefined;
+}
+
+/**
+ * Заголовок блока запчастей у инженера: «Получить на складе», только пока есть что забирать.
+ * Когда всё уже выдано, блок говорит «Запчасти у вас» — иначе инженер идёт на склад зря.
+ */
+export function engineerPickupTitle(statuses: readonly StockReservationStatus[]): string {
+  return statuses.some((status) => status === "created" || status === "warehouse_notified") ? "Получить на складе" : "Запчасти у вас";
 }
 
 export interface EngineerReservationRow {
