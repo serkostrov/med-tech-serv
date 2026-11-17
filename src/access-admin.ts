@@ -109,3 +109,34 @@ export function roleDisableText(
   return `${roleLabel}: ${formatRussianCount(affected.length, ["сотрудник", "сотрудника", "сотрудников"])} сразу потеряют вход — ${names}${more}. Если доступ им нужен, сначала переведите их на другую роль в «Сотрудниках».`;
 }
 
+
+/** Встроенная роль того же типа: её права подставляются в новую роль (встреча 17.11: «должны быть предзаполнены»). */
+export function permissionsForBaseRole<P extends string>(
+  roles: readonly { readonly key: string; readonly baseRole: string; readonly builtIn?: boolean; readonly permissions: readonly P[] }[],
+  baseRole: string
+): readonly P[] {
+  const builtIn = roles.find((role) => role.builtIn && role.key === baseRole)
+    ?? roles.find((role) => role.builtIn && role.baseRole === baseRole);
+  return builtIn ? [...builtIn.permissions] : [];
+}
+
+/**
+ * Что может роль, коротко: по строке на раздел, права через запятую строчными буквами.
+ * Вместо сетки из тридцати галочек — пять-шесть строк; сетка открывается кнопкой «Настроить подробно».
+ */
+export function permissionSummary<P extends string>(
+  permissions: readonly P[],
+  groups: readonly (readonly [string, readonly P[]])[],
+  groupLabels: Readonly<Record<string, string>>,
+  labels: Readonly<Record<P, string>>
+): readonly { readonly group: string; readonly text: string }[] {
+  return groups.flatMap(([group, items]) => {
+    const granted = items.filter((permission) => permissions.includes(permission));
+    if (granted.length === 0) return [];
+    const text = granted.map((permission, index) => {
+      const label = labels[permission] ?? permission;
+      return index === 0 ? label : label.charAt(0).toLowerCase() + label.slice(1);
+    }).join(", ");
+    return [{ group: groupLabels[group] ?? group, text }];
+  });
+}

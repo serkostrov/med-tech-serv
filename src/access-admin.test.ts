@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey, roleDisableText } from "./access-admin.js";
+import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey, permissionsForBaseRole, permissionSummary, roleDisableText } from "./access-admin.js";
 
 describe("роль в форме сотрудника", () => {
   it("у нового сотрудника роль не выбрана", () => {
@@ -89,3 +89,25 @@ describe("отключение роли называет, кто потеряе�
   });
 });
 
+
+describe("окно роли: права по типу и коротко", () => {
+  const roles = [
+    { key: "coordinator", baseRole: "coordinator", builtIn: true, permissions: ["tasks.read", "tasks.assign"] },
+    { key: "initiator", baseRole: "initiator", builtIn: true, permissions: ["tasks.read_own", "tasks.create"] },
+    { key: "senior-coord", baseRole: "coordinator", builtIn: false, permissions: ["tasks.read"] }
+  ];
+
+  it("новая роль получает права встроенной роли того же типа", () => {
+    assert.deepEqual(permissionsForBaseRole(roles, "initiator"), ["tasks.read_own", "tasks.create"]);
+    assert.deepEqual(permissionsForBaseRole(roles, "coordinator"), ["tasks.read", "tasks.assign"]);
+    assert.deepEqual(permissionsForBaseRole(roles, "customer"), []);
+  });
+
+  it("права коротко: строка на раздел, пустые разделы не показываются", () => {
+    const groups = [["tasks", ["tasks.read", "tasks.create", "tasks.assign"]], ["finance", ["finance.read"]]] as const;
+    const labels = { "tasks.read": "Просмотр задач", "tasks.create": "Создание задач", "tasks.assign": "Назначение инженеров", "finance.read": "Просмотр счетов" };
+    assert.deepEqual(permissionSummary(["tasks.read", "tasks.assign"], groups, { tasks: "Задачи", finance: "Счета" }, labels), [
+      { group: "Задачи", text: "Просмотр задач, назначение инженеров" }
+    ]);
+  });
+});

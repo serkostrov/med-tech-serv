@@ -7824,6 +7824,17 @@ td .resource-state {
   .task-next-step__actions > * { width: 100%; }
 }
 
+/* Окно роли: что может роль — коротко, сетка прав по кнопке */
+.role-summary { display: grid; gap: 8px; margin-top: 4px; }
+.role-summary h3 { margin: 0; color: var(--color-ink); font-size: 14px; font-weight: 600; }
+.role-summary dl { display: grid; gap: 6px; margin: 0; }
+.role-summary dl > div { display: grid; grid-template-columns: 120px 1fr; gap: 8px; font-size: 13px; }
+.role-summary dt { color: var(--color-muted); }
+.role-summary dd { margin: 0; color: var(--color-ink); }
+.role-summary__empty { margin: 0; color: var(--color-danger); font-size: 13px; }
+.role-summary__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 640px) { .role-summary dl > div { grid-template-columns: 1fr; gap: 2px; } }
+
 /* Экран менеджера-инициатора: свои заявки и новая заявка (ТЗ, раздел 2) */
 .initiator-hint { display: block; color: var(--color-muted); font-size: 12px; font-weight: 400; }
 .initiator-serial { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px 10px; }
