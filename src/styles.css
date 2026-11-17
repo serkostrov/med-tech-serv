@@ -7824,6 +7824,17 @@ td .resource-state {
   .task-next-step__actions > * { width: 100%; }
 }
 
+/* Каналы уведомлений сотрудника: событие × почта / Telegram (ТЗ, блок 5) */
+.notify-channels { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
+.notify-channels legend { margin-bottom: 6px; color: var(--color-ink); font-size: 14px; font-weight: 600; }
+.notify-channels__table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.notify-channels__table th, .notify-channels__table td { padding: 7px 8px; border-bottom: 1px solid var(--color-border-soft); text-align: center; vertical-align: middle; }
+.notify-channels__table thead th { color: var(--color-muted); font-size: 12px; font-weight: 600; }
+.notify-channels__table thead th:first-child, .notify-channels__table tbody th { text-align: left; }
+.notify-channels__table tbody th strong { display: block; color: var(--color-ink); font-weight: 600; }
+.notify-channels__table tbody th small { display: block; color: var(--color-muted); font-size: 12px; font-weight: 400; }
+.notify-channels__table input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--color-accent); cursor: pointer; }
+
 /* Плашка «Требуют внимания» над задачами: новые, просроченные, на проверке (ТЗ, блок 1) */
 .task-attention {
   display: flex;

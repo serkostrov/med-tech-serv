@@ -3,6 +3,8 @@ import type { AccessRoleResponse } from "./types.js";
 import type { Permission, WorkingRole } from "./domain/access.js";
 import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey, roleDisableText } from "./access-admin.js";
 import { m2Api, type AccessUserRecord } from "./m2-api.js";
+import { NotificationChannelsField } from "./NotificationChannels.js";
+import { changedPreferences, preferenceMatrix, type NotificationPreferenceMatrix } from "./notification-channels.js";
 import { toTechnicalCode } from "./slug.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DialogForm, IconButton, PageIntro, PageTabs, ResourceState, StatusBadge, Select, toast } from "./ui.js";
 
@@ -68,6 +70,18 @@ export function AccessAdminPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const editedRole = roleEditor?.mode === "edit" ? roles.find((role) => role.key === roleEditor.key) : undefined;
   const editedUser = userEditor?.mode === "edit" ? users.find((user) => user.id === userEditor.id) : undefined;
+  // Каналы уведомлений сотрудника (ТЗ, блок 5): грузим при открытии карточки, сохраняем вместе с ней.
+  const [userChannels, setUserChannels] = useState<{ readonly userId: string; readonly initial: NotificationPreferenceMatrix; readonly current: NotificationPreferenceMatrix } | null>(null);
+  useEffect(() => {
+    setUserChannels(null);
+    if (userEditor?.mode !== "edit") return undefined;
+    let alive = true;
+    const userId = userEditor.id;
+    m2Api.notificationPreferences(userId)
+      .then((rows) => { if (alive) { const matrix = preferenceMatrix(rows); setUserChannels({ userId, initial: matrix, current: matrix }); } })
+      .catch(() => undefined);
+    return () => { alive = false; };
+  }, [userEditor]);
   const selectedUserRole = roles.find((role) => role.key === userRoleKey);
   const adminCount = activeAdminCount(users.map((user) => ({ id: user.id, isActive: user.isActive, role: user.role })));
   const permissionGroups = useMemo(() => {
@@ -142,7 +156,10 @@ export function AccessAdminPage() {
         ...(selectedUserRole?.baseRole === "customer" ? { organizationIds } : {})
       };
       if (userEditor.mode === "create") await m2Api.createAccessUser({ ...common, password: String(data.get("password") ?? "") });
-      else await m2Api.updateAccessUser(userEditor.id, common);
+      else {
+        await m2Api.updateAccessUser(userEditor.id, common);
+        if (userChannels?.userId === userEditor.id) await m2Api.saveNotificationPreferences(userEditor.id, changedPreferences(userChannels.initial, userChannels.current));
+      }
       await load(); setUserEditor(null);
     } catch (saveError) {
       const message = errorMessage(saveError);
@@ -186,6 +203,7 @@ export function AccessAdminPage() {
     </DialogForm>
     <DialogForm busy={saving} description={editedUser ? "Имя, почта и роль обновятся сразу." : "Сотрудник сможет войти с временным паролем и назначенной ролью."} error={formError} key={userEditor?.mode === "edit" ? userEditor.id : "new-user"} onOpenChange={(open) => { if (!open) { setUserEditor(null); setFormError(null); } }} onSubmit={saveUser} open={userEditor !== null} submitLabel={editedUser ? "Сохранить изменения" : "Добавить сотрудника"} title={editedUser ? "Изменить сотрудника" : "Новый сотрудник"}>
       <div className="dialog-form-grid"><label className="dialog-form-grid__wide">ФИО<input defaultValue={editedUser?.fullName} name="fullName" required /></label><label>E-mail<input autoComplete="username" defaultValue={editedUser?.email} name="email" readOnly={Boolean(editedUser)} required title={editedUser ? "Почту для входа сейчас меняют через администратора Supabase" : undefined} type="email" /></label>{!editedUser ? <label>Временный пароль<input autoComplete="new-password" minLength={8} name="password" required type="password" /></label> : null}<label className="dialog-form-grid__wide">Роль<Select disabled={editedUser ? !canChangeEmployeeRole(editedUser.id, viewerId) : false} onChange={(event) => setUserRoleKey(event.target.value)} required title={editedUser && !canChangeEmployeeRole(editedUser.id, viewerId) ? "Себе роль менять нельзя: так можно остаться без нужных прав. Попросите другого администратора" : undefined} value={userRoleKey}><option value="">Не выбрана</option>{roles.filter((role) => role.isActive || role.key === userRoleKey).map((role) => <option key={role.key} value={role.key}>{role.name}</option>)}</Select>{editedUser && !canChangeEmployeeRole(editedUser.id, viewerId) ? <small>Себе роль менять нельзя: попросите другого администратора</small> : null}</label><label className="dialog-form-grid__wide">Telegram, номер чата<input defaultValue={editedUser?.telegramChatId ?? ""} inputMode="numeric" name="telegramChatId" pattern="-?[0-9]{1,20}" placeholder="Сотрудник пишет боту /start и получает номер" title="Только цифры" /></label>{selectedUserRole?.baseRole === "customer" ? <label className="dialog-form-grid__wide">Организации, каждая с новой строки<AutoTextarea name="organizationIds" required rows={3} /></label> : null}</div>
+      {editedUser && userChannels ? <NotificationChannelsField matrix={userChannels.current} onChange={(current) => setUserChannels((state) => (state ? { ...state, current } : state))} role={selectedUserRole?.baseRole ?? editedUser.role} telegramLinked={Boolean(editedUser.telegramChatId)} /> : null}
     </DialogForm>
     <ConfirmationDialog confirmLabel={pendingState?.isActive ? "Отключить" : "Включить"} description={pendingState ? (pendingState.kind === "role" && pendingState.isActive ? roleDisableText(pendingState.label, pendingState.id, users) : `${pendingState.label}: сразу повлияет на вход и доступ к разделам.`) : ""} onConfirm={changeState} onOpenChange={(open) => { if (!open) setPendingState(null); }} open={pendingState !== null} title={pendingState?.isActive ? "Отключить доступ?" : "Включить доступ?"} tone={pendingState?.isActive ? "danger" : "primary"} />
   </>;

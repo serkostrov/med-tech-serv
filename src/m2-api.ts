@@ -2,6 +2,7 @@ import type { Permission, WorkingRole } from "./domain/access.js";
 import { availableTaskActions, type AvailableTaskAction } from "./domain/task-actions.js";
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import { companyDay, companyDayEnd, companyDayStart, companyToday, taskCalendarDate } from "./task-dates.js";
+import type { NotificationPreferenceRow } from "./notification-channels.js";
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistoryPart } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
@@ -1751,14 +1752,41 @@ export class M2ApiClient {
   private readonly catalogCache = new Map<string, { readonly at: number; readonly value: Promise<readonly ReferenceCatalogValue[]> }>();
 
   /** Мой профиль: почта и номер чата Telegram вошедшего сотрудника. */
-  public async myProfile(): Promise<{ readonly email?: string; readonly telegramChatId?: string }> {
+  public async myProfile(): Promise<{ readonly email?: string; readonly telegramChatId?: string; readonly role?: string }> {
     const session = await this.cachedSession();
-    const { data, error } = await this.db().from("users").select("email, telegram_chat_id").eq("id", session.id).maybeSingle();
+    const { data, error } = await this.db().from("users").select("email, telegram_chat_id, role").eq("id", session.id).maybeSingle();
     throwIfError(error, "Не получилось загрузить профиль");
     const row = asRow(data);
     const email = optionalText(row, "email");
     const telegramChatId = optionalText(row, "telegram_chat_id");
-    return { ...(email ? { email } : {}), ...(telegramChatId ? { telegramChatId } : {}) };
+    const role = optionalText(row, "role");
+    return { ...(email ? { email } : {}), ...(telegramChatId ? { telegramChatId } : {}), ...(role ? { role } : {}) };
+  }
+
+  /**
+   * Каналы уведомлений сотрудника (ТЗ, блок 5): строки «событие × канал». Нет строки — включено,
+   * так же читает рассылка. Своё меняет каждый, чужое — тот, у кого право «Настройка уведомлений».
+   */
+  public async notificationPreferences(userId?: string): Promise<readonly NotificationPreferenceRow[]> {
+    const id = userId ?? (await this.cachedSession()).id;
+    const { data, error } = await this.db().from("notification_preferences").select("event_code, channel, is_enabled").eq("user_id", id);
+    throwIfError(error, "Не получилось загрузить настройки уведомлений");
+    return (data ?? []).flatMap((item): NotificationPreferenceRow[] => {
+      const row = asRow(item);
+      const eventCode = optionalText(row, "event_code");
+      const channel = optionalText(row, "channel");
+      return eventCode && (channel === "email" || channel === "telegram") ? [{ eventCode, channel, isEnabled: row.is_enabled !== false }] : [];
+    });
+  }
+
+  public async saveNotificationPreferences(userId: string | undefined, rows: readonly NotificationPreferenceRow[]): Promise<void> {
+    if (rows.length === 0) return;
+    const id = userId ?? (await this.cachedSession()).id;
+    const { error } = await this.db().from("notification_preferences").upsert(
+      rows.map((row) => ({ user_id: id, event_code: row.eventCode, channel: row.channel, is_enabled: row.isEnabled })),
+      { onConflict: "user_id,event_code,channel" }
+    );
+    throwIfError(error, "Не получилось сохранить настройки уведомлений");
   }
 
   /**
