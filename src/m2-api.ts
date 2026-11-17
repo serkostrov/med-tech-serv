@@ -4621,8 +4621,9 @@ export class M2ApiClient {
   }
 
   /** Инженер вернул запчасть: она снова на складе (миграция 0022). */
-  public async returnStockReservation(id: string): Promise<void> {
-    await this.stockReservationRpc("return_stock_reservation", id, "Не получилось принять запчасть на склад");
+  /** Возврат на склад: всё выданное или часть (quantity, миграция 0066). */
+  public async returnStockReservation(id: string, quantity?: number): Promise<void> {
+    await this.stockReservationRpc("return_stock_reservation", id, "Не получилось принять запчасть на склад", quantity);
   }
 
   /**
@@ -4663,8 +4664,8 @@ export class M2ApiClient {
     if (!data?.length) throw new M2ApiError(409, "Резерв уже в другом состоянии. Обновите список резервов.");
   }
 
-  private async stockReservationRpc(fn: "issue_stock_reservation" | "return_stock_reservation", id: string, fallback: string): Promise<void> {
-    const { error } = await this.db().rpc(fn, { p_reservation_id: id });
+  private async stockReservationRpc(fn: "issue_stock_reservation" | "return_stock_reservation", id: string, fallback: string, quantity?: number): Promise<void> {
+    const { error } = await this.db().rpc(fn, quantity === undefined ? { p_reservation_id: id } : { p_reservation_id: id, p_quantity: quantity });
     if (isMissingDatabaseFunction(error)) {
       throw new M2ApiError(501, "Выдача и возврат заработают после обновления базы на сервере");
     }

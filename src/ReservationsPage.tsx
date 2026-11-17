@@ -69,6 +69,8 @@ export function ReservationsPage() {
   const [canWrite, setCanWrite] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<{ readonly reservation: StockReservationRecord; readonly action: ConfirmedAction } | null>(null);
+  // Сколько вернули: всё выданное или часть (0066). Один поставил, второй вернул — так тоже бывает.
+  const [returnDraft, setReturnDraft] = useState("");
   // Два разных файла с одной вкладки: реестр резервов и список «у кого что на руках».
   // Флаги раздельные, иначе на вкладке «У инженеров» обе кнопки сразу писали бы
   // «Готовим файл…», и было бы не понять, какая из них работает.
@@ -144,19 +146,38 @@ export function ReservationsPage() {
       if (action === "ready") await m2Api.markStockReservationReady(reservation.id);
       else if (action === "issue") await m2Api.issueStockReservation(reservation.id);
       else if (action === "cancel") await m2Api.cancelStockReservation(reservation.id);
-      else await m2Api.returnStockReservation(reservation.id);
+      else {
+        const part = returnQuantity(reservation);
+        await m2Api.returnStockReservation(reservation.id, part);
+      }
       const what = `${reservation.articleNumber} · ${reservationQuantityText(reservation)}`;
       if (action === "ready") toast.success(issueBlockReason(reservation) ? `Собрано: ${what}` : `Собрано: ${what}. Можно выдавать инженеру`);
       else if (action === "issue") toast.success(`Выдано: ${what}. Получил: ${reservation.engineerName ?? "инженер задачи"}`);
       else if (action === "cancel") toast.success(`Резерв ${reservation.number} снят, запчасть снова доступна`);
-      else toast.success(`Принято на склад: ${what}`);
+      else {
+        const part = returnQuantity(reservation);
+        toast.success(part === undefined ? `Принято на склад: ${what}` : `Принято на склад: ${reservation.articleNumber} · ${part} из ${reservation.quantity}. Остальное у инженера`);
+      }
     } finally {
       await reload();
       setBusyId(null);
     }
   };
 
+  /**
+   * Количество для возврата: undefined — всё выданное. Ошибка ввода бросается
+   * и показывается прямо в окне подтверждения.
+   */
+  const returnQuantity = (reservation: StockReservationRecord): number | undefined => {
+    if (reservation.quantity <= 1) return undefined;
+    const value = Number(returnDraft.replace(/\s/gu, "").replace(",", "."));
+    if (!returnDraft.trim() || !Number.isFinite(value) || value <= 0) throw new Error("Укажите, сколько вернули: число больше нуля");
+    if (value > reservation.quantity) throw new Error(`Выдано ${reservation.quantity}: вернуть больше нельзя`);
+    return value === reservation.quantity ? undefined : value;
+  };
+
   const runFromRow = (reservation: StockReservationRecord, action: ReservationAction) => {
+    if (action === "return") setReturnDraft(String(reservation.quantity).replace(".", ","));
     if (action !== "ready") { setConfirming({ reservation, action }); return; }
     void run(reservation, action).catch((error: unknown) => toast.error(error instanceof Error ? error.message : "Не получилось выполнить действие"));
   };
@@ -324,7 +345,13 @@ export function ReservationsPage() {
     </DataTableShell>}
     <ConfirmationDialog
       confirmLabel={shown ? CONFIRM_TEXT[shown.action].confirm : ""}
-      description={shown ? confirmDescription(shown.reservation, shown.action) : null}
+      description={shown ? (shown.action === "return" && shown.reservation.quantity > 1
+        ? <>{confirmDescription(shown.reservation, shown.action)}
+          <label className="reservation-return-quantity">Сколько вернули
+            <input inputMode="decimal" onChange={(event) => setReturnDraft(event.target.value)} value={returnDraft} />
+            <small>Выдано {shown.reservation.quantity}. Если вернули не всё, остальное останется у инженера.</small>
+          </label></>
+        : confirmDescription(shown.reservation, shown.action)) : null}
       onConfirm={async () => { if (confirming) await run(confirming.reservation, confirming.action); }}
       onOpenChange={(open) => { if (!open) setConfirming(null); }}
       open={Boolean(confirming)}

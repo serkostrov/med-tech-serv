@@ -9328,3 +9328,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .own-day-list__task small { color: var(--color-muted); font-size: 12px; }
 .own-day-list__task.is-overdue { border-color: var(--color-danger, #d64545); }
 .own-day-list__empty { margin: 0; color: var(--color-muted); }
+
+/* Возврат части выданного (0066): поле количества в окне подтверждения. */
+.reservation-return-quantity { display: grid; gap: 4px; margin-top: 12px; color: var(--color-ink); font-size: 13px; font-weight: 600; }
+.reservation-return-quantity input { max-width: 140px; padding: 8px 10px; border: 1px solid var(--color-border); border-radius: 8px; font: inherit; font-weight: 400; }
+.reservation-return-quantity small { color: var(--color-muted); font-size: 12px; font-weight: 400; }

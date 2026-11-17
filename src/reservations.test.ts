@@ -181,6 +181,9 @@ describe("резервы склада", () => {
     const back = fakeClient({});
     await new M2ApiClient(back.client).returnStockReservation("r1");
     assert.deepEqual(back.calls, [["rpc", "return_stock_reservation", { p_reservation_id: "r1" }]]);
+    const part = fakeClient({});
+    await new M2ApiClient(part.client).returnStockReservation("r1", 1);
+    assert.deepEqual(part.calls, [["rpc", "return_stock_reservation", { p_reservation_id: "r1", p_quantity: 1 }]], "возврат части передаёт количество (0066)");
   });
 
   it("пока базу не обновили, говорит об этом, а ошибку базы показывает как есть", async () => {
