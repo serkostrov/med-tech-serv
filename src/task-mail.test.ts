@@ -9,7 +9,9 @@ import {
   taskMailReplyLost,
   taskMailReplyPending,
   taskMailReplyRefusal,
-  taskMailReplyStatus
+  taskMailReplyStatus,
+  taskMailReplySubject,
+  taskMailReplyTemplates
 } from "./task-mail.js";
 import type { TaskMailMessage } from "./types.js";
 
@@ -126,5 +128,22 @@ describe("карточка задачи берёт переписку и пра�
     // открывается сразу на ней.
     assert.match(app, /label: "Письмо клиента", badge: mailThread\.length/u);
     assert.match(app, /initialTab=\{openOnMailTab \? "mail" : "overview"\}/u);
+  });
+});
+
+describe("ответ клиенту как письмо", () => {
+  const incoming = (subject: string, author = "Иванов Иван <ivanov@example.ru>") => ({ id: subject, direction: "incoming", author, subject, body: "", occurredAt: "2026-11-17T09:00:00Z", attachments: [] }) as unknown as TaskMailMessage;
+  it("тема как у базы: последнее письмо клиента, Re: один раз, пробелы схлопнуты", () => {
+    assert.equal(taskMailReplySubject([incoming("Заявка:  не проходит   калибровка")]), "Re: Заявка: не проходит калибровка");
+    assert.equal(taskMailReplySubject([incoming("Первое"), incoming("RE: Второе")]), "RE: Второе");
+    assert.equal(taskMailReplySubject([incoming("")]), "Re: Заявка");
+    assert.equal(taskMailReplySubject([incoming("С адресом"), incoming("Без адреса", "Склад")]), "Re: С адресом");
+  });
+  it("заготовки подставляют номер заявки, инженера и срок", () => {
+    const templates = taskMailReplyTemplates({ taskNumber: "З-000006", engineerName: "Инженер Демо", period: "17–24 ноября" });
+    assert.deepEqual(templates.map((item) => item.label), ["Заявка принята", "Инженер назначен", "Время выезда", "Нужны уточнения", "Работы выполнены"]);
+    assert.match(templates[1]!.text, /назначен инженер Инженер Демо\. Срок работ: 17–24 ноября\./u);
+    assert.ok(templates.every((item) => item.text.includes("З-000006")));
+    assert.match(taskMailReplyTemplates({ taskNumber: "З-1" })[1]!.text, /назначен инженер\. Перед выездом/u);
   });
 });

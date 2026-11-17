@@ -81,3 +81,32 @@ export function taskMailAttachmentFile(message: TaskMailMessage, attachment: Tas
     ...(attachment.storageKey ? { storageKey: attachment.storageKey } : {})
   };
 }
+
+/**
+ * Тема ответа: как её соберёт база (send_task_mail_reply) — тема последнего письма клиента
+ * с адресом, пробелы схлопнуты, впереди «Re: », если его ещё нет. Без темы — «Re: Заявка».
+ */
+export function taskMailReplySubject(messages: readonly TaskMailMessage[]): string {
+  const letter = [...messages].reverse().find((message) => message.direction === "incoming" && Boolean(taskMailAuthor(message.author).address));
+  const base = (letter?.subject ?? "").trim().replace(/\s+/gu, " ") || "Заявка";
+  return /^re:/iu.test(base) ? base : `Re: ${base}`;
+}
+
+/** Заготовки ответа клиенту: координатор выбирает и дописывает, «…» — что нужно уточнить. */
+export interface TaskMailReplyTemplate {
+  readonly key: string;
+  readonly label: string;
+  readonly text: string;
+}
+
+export function taskMailReplyTemplates(context: { readonly taskNumber: string; readonly engineerName?: string | undefined; readonly period?: string | undefined }): readonly TaskMailReplyTemplate[] {
+  const engineer = context.engineerName ? ` ${context.engineerName}` : "";
+  const period = context.period ? ` Срок работ: ${context.period}.` : "";
+  return [
+    { key: "accepted", label: "Заявка принята", text: `Здравствуйте!\n\nЗаявку получили, её номер ${context.taskNumber}. В ближайшее время свяжемся и согласуем время выезда.` },
+    { key: "engineer", label: "Инженер назначен", text: `Здравствуйте!\n\nПо заявке ${context.taskNumber} назначен инженер${engineer}.${period} Перед выездом он позвонит.` },
+    { key: "visit", label: "Время выезда", text: `Здравствуйте!\n\nИнженер приедет … . Перед выездом позвонит. Номер заявки: ${context.taskNumber}.` },
+    { key: "question", label: "Нужны уточнения", text: `Здравствуйте!\n\nЧтобы подготовиться к выезду по заявке ${context.taskNumber}, уточните, пожалуйста: …` },
+    { key: "done", label: "Работы выполнены", text: `Здравствуйте!\n\nРаботы по заявке ${context.taskNumber} выполнены. Акт выполненных работ придёт отдельным письмом.` }
+  ];
+}

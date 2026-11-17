@@ -63,7 +63,7 @@ import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryP
 import { allRegistryRows, downloadWorkbook, equipmentRegistrySheets, registryExportNote, registryFileName, taskRegistrySheets } from "./registry-export.js";
 import { FileDropField } from "./FileDropField.js";
 import { FileGallery } from "./FileGallery.js";
-import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAuthor, taskMailReplyAddress, taskMailReplyLost, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
+import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAuthor, taskMailReplyAddress, taskMailReplySubject, taskMailReplyTemplates, taskMailReplyLost, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
 import { tasksAvailableForInvoice } from "./invoice-tasks.js";
 import { InvoiceCardPage } from "./InvoiceCardPage.js";
 import {
@@ -707,7 +707,11 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
  * и наши ответы по порядку. Вложения показывает обычная галерея файлов задачи, поэтому
  * открываются и скачиваются они так же и по тем же правам (их проверяет база).
  */
-export function TaskMailThread({ messages, canReply, loading, error, onReload, onReply }: {
+export function TaskMailThread({ messages, canReply, loading, error, onReload, onReply, taskNumber = "", engineerName, period }: {
+  /** Для заготовок ответа: номер заявки, инженер и срок подставляются в текст. */
+  readonly taskNumber?: string;
+  readonly engineerName?: string | undefined;
+  readonly period?: string | undefined;
   readonly messages: readonly TaskMailMessage[];
   readonly canReply: boolean;
   readonly loading: boolean;
@@ -718,8 +722,16 @@ export function TaskMailThread({ messages, canReply, loading, error, onReload, o
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
   const refusal = taskMailReplyRefusal(draft);
-  // Кому уйдёт ответ, видно до отправки: правило то же, что в базе.
+  // Кому уйдёт ответ и с какой темой, видно до отправки: правило то же, что в базе.
   const replyTo = taskMailReplyAddress(messages);
+  const replySubject = taskMailReplySubject(messages);
+  const templates = taskMailReplyTemplates({ taskNumber, engineerName, period });
+  const length = [...draft.trim()].length;
+  const useTemplate = (text: string) => {
+    // Заготовку не вписываем поверх начатого текста: дописываем ниже.
+    setDraft((current) => current.trim() ? `${current.trimEnd()}\n\n${text}` : text);
+    window.requestAnimationFrame(() => document.getElementById("task-mail-reply")?.focus());
+  };
   const send = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     // Та же проверка, что в базе: пустой ответ клиенту не уходит.
@@ -767,20 +779,35 @@ export function TaskMailThread({ messages, canReply, loading, error, onReload, o
         </li>;
       })}
     </ol>
-    {canReply ? <form className="task-mail__reply" onSubmit={(event) => void send(event)}>
-      <label htmlFor="task-mail-reply">Ответ клиенту</label>
+    {canReply ? <form aria-label="Ответ клиенту" className="mail-compose" onSubmit={(event) => void send(event)}>
+      <header className="mail-compose__head">
+        <h4>Ответ клиенту</h4>
+        <dl>
+          <div><dt>Кому</dt><dd>{replyTo ? <span className="mail-compose__to">{replyTo}</span> : <span className="muted">отправителю письма</span>}</dd></div>
+          <div><dt>Тема</dt><dd>{replySubject}</dd></div>
+        </dl>
+      </header>
+      <div className="mail-compose__templates" role="group" aria-label="Заготовки ответа">
+        <span>Заготовки:</span>
+        {templates.map((template) => <button key={template.key} onClick={() => useTemplate(template.text)} type="button">{template.label}</button>)}
+      </div>
       <AutoTextarea
+        aria-label="Текст ответа клиенту"
+        className="mail-compose__body"
         id="task-mail-reply"
         maxLength={MAX_TASK_MAIL_REPLY}
         onChange={(event) => setDraft(event.target.value)}
-        placeholder="Например: инженер приедет в среду после обеда, перед выездом позвонит"
-        rows={4}
+        placeholder="Напишите клиенту, например: инженер приедет в среду после обеда, перед выездом позвонит"
+        rows={6}
         value={draft}
       />
-      <div className="task-mail__reply-actions">
-        <p className="form-hint">{replyTo ? <>Ответ уйдёт на <strong>{replyTo}</strong> в том же письме: у клиента он встанет ответом на его заявку, а его ответ вернётся сюда.</> : "Ответ уйдёт отправителю письма в той же переписке: у клиента он встанет ответом на его заявку."}</p>
-        <Button busy={sending} disabled={sending || Boolean(refusal)} type="submit">Отправить ответ</Button>
-      </div>
+      <footer className="mail-compose__foot">
+        <p>Клиент получит письмо ответом на свою заявку, его ответ вернётся сюда.{length > 0 ? <span className="mail-compose__count"> · {length.toLocaleString("ru")} симв.</span> : null}</p>
+        <div className="mail-compose__actions">
+          {draft ? <Button disabled={sending} onClick={() => setDraft("")} variant="ghost">Очистить</Button> : null}
+          <Button busy={sending} busyLabel="Отправляем…" disabled={sending || Boolean(refusal)} icon="mail" type="submit">Отправить</Button>
+        </div>
+      </footer>
     </form> : <p className="form-hint">Отвечать клиенту по задаче может координатор или руководитель. Переписку читают они и инженер задачи.</p>}
   </div>;
 }
@@ -1377,6 +1404,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           <header className="task-section__head"><h3 id={`task-mail-${task.id}`}>Переписка с клиентом</h3></header>
           <TaskMailThread
             canReply={canReplyMail}
+            engineerName={card.engineer?.fullName}
+            period={task.periodFrom || task.periodTo ? formatTaskDateRange(task.periodFrom, task.periodTo) : undefined}
+            taskNumber={task.number}
             error={mailError}
             loading={mailLoading}
             messages={mailThread}

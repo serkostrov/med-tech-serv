@@ -68,11 +68,14 @@ describe("переписка с клиентом в карточке задач�
 
   it("даёт форму ответа только тому, кому можно, и называет адрес до отправки", () => {
     const allowed = render({ canReply: true });
-    assert.match(allowed, /Ответ клиенту<\/label>/u);
-    assert.match(allowed, /Ответ уйдёт на <strong>a\.smirnova@gkb1\.example<\/strong>/u);
-    assert.match(allowed, /Отправить ответ/u);
+    // Ответ оформлен как письмо: «Кому» и «Тема» видны до отправки, как их соберёт база.
+    assert.match(allowed, /<h4>Ответ клиенту<\/h4>/u);
+    assert.match(allowed, /<dt>Кому<\/dt><dd><span class="mail-compose__to">a\.smirnova@gkb1\.example<\/span>/u);
+    assert.match(allowed, /<dt>Тема<\/dt><dd>Re: Срочно: XN-1000 не берёт пробу<\/dd>/u);
+    assert.match(allowed, /Заявка принята<\/button>/u);
+    assert.match(allowed, /<span>Отправить<\/span>/u);
     const denied = render();
-    assert.doesNotMatch(denied, /Отправить ответ/u);
+    assert.doesNotMatch(denied, /mail-compose/u);
     assert.match(denied, /Отвечать клиенту по задаче может координатор или руководитель/u);
   });
 

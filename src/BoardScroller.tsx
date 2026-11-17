@@ -12,6 +12,19 @@ export function BoardScroller({ children }: { readonly children: ReactNode }) {
   useEffect(() => {
     const board = wrap.current?.querySelector<HTMLElement>(".task-board");
     if (!board) return undefined;
+    // Доска тянется до низа окна (17.11: «надо вниз продлить»): на высоком экране под ней не остаётся пустоты.
+    const fit = () => {
+      if (window.innerWidth <= 760) { board.style.height = ""; return; }
+      const top = board.getBoundingClientRect().top + (document.querySelector(".main-shell")?.scrollTop ?? window.scrollY);
+      board.style.height = `${Math.max(360, Math.round(window.innerHeight - top - 20))}px`;
+    };
+    fit();
+    // Над доской могут появиться плашки (счётчики, отбор из отчёта): верх доски сдвинется — пересчитываем высоту.
+    const page = document.querySelector(".main-shell") ?? document.body;
+    let fitting = false;
+    const refit = () => { if (fitting) return; fitting = true; window.requestAnimationFrame(() => { fit(); fitting = false; }); };
+    const layout = typeof MutationObserver === "undefined" ? undefined : new MutationObserver(refit);
+    layout?.observe(page, { childList: true, subtree: true });
     const update = () => {
       const left = board.scrollLeft > 4;
       const right = board.scrollLeft + board.clientWidth < board.scrollWidth - 4;
@@ -20,6 +33,7 @@ export function BoardScroller({ children }: { readonly children: ReactNode }) {
     update();
     board.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
+    window.addEventListener("resize", fit);
     // Колонки появляются и пропадают («Закрытые и отменённые»), карточки догружаются.
     const resize = typeof ResizeObserver === "undefined" ? undefined : new ResizeObserver(update);
     resize?.observe(board);
@@ -28,7 +42,9 @@ export function BoardScroller({ children }: { readonly children: ReactNode }) {
     return () => {
       board.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
+      window.removeEventListener("resize", fit);
       resize?.disconnect();
+      layout?.disconnect();
       mutations?.disconnect();
     };
   }, []);
