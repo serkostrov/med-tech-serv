@@ -3138,6 +3138,24 @@ export class M2ApiClient {
     };
   }
 
+  /**
+   * Плашка «Требуют внимания» (ТЗ, блок 1): сколько всего новых, просроченных и на проверке.
+   * Просрочка считается так же, как отбор «Просрочено» в списке, чтобы число и список совпадали.
+   * Видимость задач решает база: каждый видит число по своим задачам.
+   */
+  public async taskAttention(): Promise<{ readonly new: number; readonly overdue: number; readonly underReview: number }> {
+    const head = () => this.db().from("tasks").select("id", { count: "exact", head: true });
+    const [fresh, overdue, review] = await Promise.all([
+      head().eq("status_code", "new"),
+      head().lt("deadline_to", companyToday()).not("status_code", "in", "(closed,cancelled)"),
+      head().eq("status_code", "under_review")
+    ]);
+    throwIfError(fresh.error);
+    throwIfError(overdue.error);
+    throwIfError(review.error);
+    return { new: fresh.count ?? 0, overdue: overdue.count ?? 0, underReview: review.count ?? 0 };
+  }
+
   public async mailInbox(query: { readonly search?: string; readonly status?: string; readonly limit?: number; readonly offset?: number } = {}): Promise<MailInboxResponse> {
     const limit = query.limit ?? 25;
     const offset = query.offset ?? 0;

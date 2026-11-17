@@ -54,6 +54,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
+import { attentionFilter, taskAttentionItems, type TaskAttentionCounts, type TaskAttentionKey } from "./task-attention.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate, taskPeriodProblem } from "./task-dates.js";
 import { clearClosureDraft, closureDraftChecked, closureDraftValue, closureDraftValues, readClosureDraft, saveClosureDraft } from "./closure-draft.js";
 import { pendingAfterRetry, pendingUploadNames, pendingUploadsText, type PendingUpload } from "./upload-retry.js";
@@ -1566,6 +1567,46 @@ interface TaskRegistryFilters {
 
 const EMPTY_TASK_FILTERS: TaskRegistryFilters = { search: "", status: "", engineerId: "", siteId: "", workTypeCode: "", priority: "", guarantee: "", drillTitle: "", createdFrom: "", createdTo: "", openOnly: false, reasonCode: "", equipmentId: "", periodFrom: "", periodTo: "", overdue: false, sort: "updated_desc" };
 
+/** Отборы, кроме этапа, просрочки и сортировки: с ними счётчик плашки не подсвечивается. */
+function hasOtherTaskFilters(filters: TaskRegistryFilters): boolean {
+  return Boolean(filters.search || filters.engineerId || filters.siteId || filters.workTypeCode || filters.priority
+    || filters.guarantee || filters.periodFrom || filters.periodTo || filters.drillTitle || filters.createdFrom
+    || filters.createdTo || filters.openOnly || filters.reasonCode || filters.equipmentId);
+}
+
+/**
+ * Плашка «Требуют внимания» (ТЗ, блок 1): новые, просроченные, на проверке. Нажатие открывает
+ * список этих задач, повторное — снимает отбор.
+ */
+function TaskAttentionStrip({ applied, counts, onPick }: {
+  readonly applied: TaskRegistryFilters;
+  readonly counts: TaskAttentionCounts;
+  readonly onPick: (key: TaskAttentionKey, active: boolean) => void;
+}) {
+  const items = taskAttentionItems(counts, { status: applied.status, overdue: applied.overdue, otherFilters: hasOtherTaskFilters(applied) });
+  return (
+    <section aria-label="Требуют внимания" className="task-attention">
+      <span className="task-attention__title">Требуют внимания</span>
+      <div className="task-attention__items">
+        {items.map((item) => (
+          <button
+            aria-label={item.ariaLabel}
+            aria-pressed={item.active}
+            className={`task-attention__item task-attention__item--${item.key}${item.active ? " task-attention__item--on" : ""}${item.count === 0 ? " task-attention__item--zero" : ""}`}
+            key={item.key}
+            onClick={() => onPick(item.key, item.active)}
+            type="button"
+          >
+            <i aria-hidden="true" />
+            <span>{item.label}</span>
+            <strong>{item.count}</strong>
+          </button>
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /** Отбор задач для запроса: одно место на список, доску и выгрузку, чтобы они не расходились. */
 function taskPageQuery(filters: TaskRegistryFilters) {
   return {
@@ -1744,6 +1785,13 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
   const formDataPromise = useRef<Promise<void> | null>(null);
   const [listLoaded, setListLoaded] = useState(false);
   const [boardRefresh, setBoardRefresh] = useState(0);
+  // Плашка «Требуют внимания»: числа по всем задачам, обновляются вместе с доской и списком.
+  const [attention, setAttention] = useState<TaskAttentionCounts | null>(null);
+  useEffect(() => {
+    let alive = true;
+    void m2Api.taskAttention().then((counts) => { if (alive) setAttention(counts); }).catch(() => undefined);
+    return () => { alive = false; };
+  }, [boardRefresh]);
   const [workTypes, setWorkTypes] = useState<readonly ReferenceCatalogValue[]>([]);
   const [taskStatuses, setTaskStatuses] = useState<readonly ReferenceCatalogValue[]>([]);
   const [engineers, setEngineers] = useState<readonly { readonly id: string; readonly fullName: string }[]>([]);
@@ -2019,6 +2067,13 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
         await refreshTasks(); await openTask(task.id);
       }} open={formOpen} workTypes={workTypes} />
 
+      {registryView !== "mail" && attention ? <TaskAttentionStrip applied={appliedFilters} counts={attention} onPick={(key, active) => {
+        if (active) { void applyFilters(EMPTY_TASK_FILTERS); return; }
+        const picked = attentionFilter(key);
+        // Счётчик открывает список: на доске колонка этапа и так видна, а просроченные разбросаны по колонкам.
+        setRegistryView("list"); setShowCompletedBoard(false);
+        void applyFilters({ ...EMPTY_TASK_FILTERS, status: picked.status, overdue: picked.overdue, sort: key === "overdue" ? "deadline_asc" : EMPTY_TASK_FILTERS.sort });
+      }} /> : null}
       {registryView !== "mail" && appliedFilters.drillTitle ? <section aria-label="Отбор из отчёта" className="task-next-step task-drill">
         <div className="task-next-step__text">
           <strong>Из отчёта: {appliedFilters.drillTitle}</strong>
