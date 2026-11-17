@@ -5,7 +5,7 @@
  * и сверяем со строками: если расходится, человеку надо сказать, а не показать молча.
  */
 import { formatIsoCalendarDate } from "./date-format.js";
-import { MAX_PRICE, roundToKopecks } from "./price-list.js";
+import { formatMoney, roundToKopecks } from "./price-list.js";
 import { companyDay } from "./task-dates.js";
 
 export type InvoiceStatus = "cancelled" | "draft" | "issued" | "transferred_to_1c";
@@ -98,13 +98,34 @@ export function invoiceLineSource(item: {
  * Что сделать со строками без цены — у работы и у запчасти это разные люди:
  * цену работы задают в прайсе, цену запчасти кладовщик вписывает при приходе.
  */
-export function invoiceMissingPriceHint(items: readonly { readonly itemType: "part" | "work"; readonly unitPrice: number }[]): string {
+export function invoiceMissingPriceHint(
+  items: readonly { readonly itemType: "part" | "work"; readonly unitPrice: number }[],
+  draft = true
+): string {
   const works = items.filter((item) => item.itemType === "work" && item.unitPrice === 0).length;
   const parts = items.filter((item) => item.itemType === "part" && item.unitPrice === 0).length;
   const steps: string[] = [];
   if (works > 0) steps.push(`у ${works === 1 ? "работы" : `${works} работ`} — задайте цену в прайсе`);
   if (parts > 0) steps.push(`у ${parts === 1 ? "запчасти" : `${parts} запчастей`} — пусть кладовщик впишет цену прихода`);
-  return steps.length === 0 ? "" : `Нет цены ${steps.join(", ")}. Потом нажмите «Обновить по прайсу».`;
+  if (steps.length === 0) return "";
+  // «Обновить по прайсу» есть только у черновика: после выставления подсказка вела бы к кнопке, которой нет.
+  return draft
+    ? `Нет цены ${steps.join(", ")}. Потом нажмите «Обновить по прайсу».`
+    : `Нет цены ${works + parts === 1 ? "у одной строки" : `у ${works + parts} строк`}: счёт уже выставлен, строки не пересобираются. Исправить — отменить счёт и выставить новый.`;
+}
+
+/**
+ * Предупреждение перед «Выставить» и «Передать в 1С»: строка без цены уйдёт клиенту
+ * бесплатно, а после передачи в 1С счёт не поменять. Пусто — предупреждать не о чем.
+ */
+export function invoiceZeroPriceWarning(items: readonly { readonly description: string; readonly unitPrice: number }[]): string {
+  const free = items.filter((item) => item.unitPrice === 0);
+  if (free.length === 0) return "";
+  const names = free.slice(0, 3).map((item) => `«${item.description}»`).join(", ");
+  const more = free.length > 3 ? ` и ещё ${free.length - 3}` : "";
+  return free.length === 1
+    ? `В счёте строка без цены: ${names}. Клиент получит её бесплатно, и так же она уйдёт в 1С.`
+    : `В счёте ${free.length} строки без цены: ${names}${more}. Клиент получит их бесплатно, и так же они уйдут в 1С.`;
 }
 
 export function invoiceItemTypeLabel(itemType: string): string {
@@ -292,12 +313,44 @@ export function invoiceHistorySteps(
  * Сумма корректировки из поля ввода: со знаком, «−500» и «-500» одинаково, до копеек.
  * Ноль не принимаем: корректировка на ноль ничего не меняет, но требует причины.
  */
+/** Больше миллиарда в одной скидке или надбавке не бывает: это опечатка в разрядах. */
+export const MAX_INVOICE_ADJUSTMENT = 1_000_000_000;
+
+/** Сумма корректировки со знаком. Ноль — убрать скидку или надбавку. */
 export function parseInvoiceAdjustment(value: string): number | null {
   const normalized = value.replace(/[\s ]/gu, "").replace("−", "-").replace(",", ".");
   if (!/^[+-]?\d+(?:\.\d+)?$/u.test(normalized)) return null;
   const parsed = roundToKopecks(Number(normalized));
-  if (parsed === 0 || Math.abs(parsed) > MAX_PRICE) return null;
-  return parsed;
+  if (Math.abs(parsed) > MAX_INVOICE_ADJUSTMENT) return null;
+  return parsed === 0 ? 0 : parsed;
+}
+
+/**
+ * Что не так с корректировкой — те же правила, что в базе (correct_invoice, 0040),
+ * чтобы отказ пришёл в окне, а не общим сообщением после отправки. Пусто — можно сохранять.
+ */
+export function invoiceAdjustmentProblem(input: {
+  readonly subtotal: number;
+  readonly currentAdjustment: number;
+  readonly currentReason?: string;
+  readonly next: number | null;
+  readonly reason: string;
+}): string {
+  if (input.next === null) {
+    return `Укажите сумму числом со знаком: «−500» уменьшит счёт, «500» увеличит, «0» уберёт скидку или надбавку. Не больше ${formatMoney(MAX_INVOICE_ADJUSTMENT)}`;
+  }
+  if (roundToKopecks(input.currentAdjustment) === input.next) {
+    return input.next === 0 ? "Скидки и надбавки и так нет: менять нечего" : `Корректировка уже ${formatMoney(input.next)}: менять нечего`;
+  }
+  if (roundToKopecks(input.subtotal + input.next) < 0) {
+    return `Скидка ${formatMoney(-input.next)} больше суммы позиций ${formatMoney(input.subtotal)}: итог не может быть меньше нуля. Наибольшая скидка — ${formatMoney(input.subtotal)}`;
+  }
+  const reason = input.reason.trim();
+  if (!reason) return "Напишите причину: она останется в счёте";
+  if (input.currentReason && reason === input.currentReason.trim()) {
+    return "Напишите новую причину: прошлая уже записана тем же текстом, и по журналу не понять, за что вторая корректировка";
+  }
+  return "";
 }
 
 /** Имя файла выгрузки: «Счёт СЧ-000042.xlsx». */

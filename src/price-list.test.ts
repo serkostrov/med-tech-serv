@@ -196,7 +196,9 @@ describe("прайс: пока цены нет", () => {
   });
 
   it("период цены в истории пишет с датой конца, а у действующей — без неё", () => {
-    assert.equal(priceRowPeriodText({ validFrom: "2025-01-01", validTo: "2026-03-01" }), "01.01.2025 — 01.03.2026");
+    assert.equal(priceRowPeriodText({ validFrom: "2025-01-01", validTo: "2026-03-01" }), "01.01.2025 — 28.02.2026");
+    assert.equal(priceRowPeriodText({ validFrom: "2026-01-01", validTo: "2026-07-01" }), "01.01.2026 — 30.06.2026", "1 июля — уже следующая цена");
+    assert.equal(priceRowPeriodText({ validFrom: "2026-03-01", validTo: "2026-03-02" }), "01.03.2026", "цена на один день");
     assert.equal(priceRowPeriodText({ validFrom: "2026-03-01", validTo: null }), "с 01.03.2026");
   });
 });
@@ -318,21 +320,14 @@ describe("прайс: пересчёт процентом и суммой", () =
     assert.deepEqual(bulkPriceItems(previewBulkPrices(lines, { mode: "fixed", value: -10 })), []);
   });
 
-  it("ноль разрешён, но его видно отдельно (находка 39)", () => {
+  it("ноль не применяется ни пачкой, ни процентом (находка 39)", () => {
     const lines = priceLines({ workTypes: WORK_TYPES, rows: ROWS, categories: CATEGORIES, on: "2026-11-16" });
     const zeroed = previewBulkPrices(lines, { mode: "fixed", value: 0 });
-    // Ноль применяется: бывает работа, которая в счёт не попадает.
-    assert.deepEqual(zeroed.map((change) => [change.after, change.skipReason]), [
-      [0, undefined],
-      [0, undefined],
-      [0, undefined],
-      [0, undefined]
-    ]);
-    assert.equal(zeroPriceCount(zeroed), 4);
-    assert.equal(bulkPriceItems(zeroed).length, 4);
-    // Минус 100 процентов — тот же ноль, и предупреждение такое же.
-    assert.equal(zeroPriceCount(previewBulkPrices(lines, { mode: "percent", value: -100 })), 3);
-    // Там, где нулей нет, предупреждать не о чем.
+    assert.ok(zeroed.every((change) => change.skipReason === "Цена стала бы нулём: так нельзя, работа без цены уйдёт клиенту бесплатно"));
+    assert.deepEqual(bulkPriceItems(zeroed), []);
+    const minus100 = previewBulkPrices(lines, { mode: "percent", value: -100 });
+    assert.equal(bulkPriceItems(minus100).length, 0);
+    assert.equal(zeroPriceCount(minus100), 0);
     assert.equal(zeroPriceCount(previewBulkPrices(lines, { mode: "percent", value: 10 })), 0);
   });
 });

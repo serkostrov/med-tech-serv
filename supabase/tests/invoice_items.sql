@@ -176,12 +176,13 @@ BEGIN
   INSERT INTO equipment (serial_number, manufacturer_id, model_id, current_site_id, current_payer_id, guarantee_category_id)
   VALUES ('ITEMS-3', man, model, site, payer, cat_std) RETURNING id INTO eq3;
 
-  -- Прайс: общая цена ремонта с давних пор, своя по стандартной категории — позже.
+  -- Прайс: цена ремонта 1000 с давних пор и 1500 — позже. Цен по категориям гарантии
+  -- нет (0063): категория прибора на цену не влияет.
   -- «Прочие работы» считаются по часам, и гарантийная работа по ним оплачивается.
-  INSERT INTO price_list (work_type_code, guarantee_category_id, valid_from, amount, include_guarantee_work)
-  VALUES ('repair', NULL, (SELECT d FROM days WHERE k = 'common_from'), 1000, false),
-         ('repair', cat_std, (SELECT d FROM days WHERE k = 'cat_from'), 1500, false),
-         ('other', NULL, (SELECT d FROM days WHERE k = 'common_from'), 500, true);
+  INSERT INTO price_list (work_type_code, guarantee_category_id, valid_from, valid_to, amount, include_guarantee_work)
+  VALUES ('repair', NULL, (SELECT d FROM days WHERE k = 'common_from'), (SELECT d FROM days WHERE k = 'cat_from'), 1000, false),
+         ('repair', NULL, (SELECT d FROM days WHERE k = 'cat_from'), NULL, 1500, false),
+         ('other', NULL, (SELECT d FROM days WHERE k = 'common_from'), NULL, 500, true);
 
   INSERT INTO parts (article_number, name) VALUES ('ART-A', 'Клапан') RETURNING id INTO part_a;
   INSERT INTO parts (article_number, name) VALUES ('ART-B', 'Шланг') RETURNING id INTO part_b;
@@ -263,11 +264,11 @@ SET session_replication_role = origin;
 -- ---------------------------------------------------------------- Позиции собираются сами
 SELECT pg_temp.act_as(pg_temp.uid('coordinator'));
 
--- Правило 1: на каждую задачу счёта строка работы. Цена — из прайса по категории гарантии
--- прибора на дату окончания работ. Без правила счёт остался бы пустым.
+-- Правило 1: на каждую задачу счёта строка работы. Цена — из прайса на дату окончания
+-- работ. Без правила счёт остался бы пустым.
 SELECT pg_temp.check(pg_temp.invoice_for('inv_cat', 't_cat') IS NOT NULL, 'счёт по закрытой задаче создаётся');
 SELECT pg_temp.check(pg_temp.items(pg_temp.uid('inv_cat')) = '1×1500=1500/N',
-  'строка работы: количество 1, цена по категории гарантии прибора');
+  'строка работы: количество 1, цена из прайса');
 SELECT pg_temp.check(pg_temp.sums(pg_temp.uid('inv_cat')) = '1500+0=1500', 'суммы счёта заполнены сразу при создании');
 SELECT pg_temp.check((SELECT count(*) FROM invoice_items
    WHERE invoice_id = pg_temp.uid('inv_cat') AND item_type = 'work'
@@ -275,13 +276,13 @@ SELECT pg_temp.check((SELECT count(*) FROM invoice_items
   'строка работы привязана к задаче и виду работ');
 
 -- Правило 2: цена берётся на дату окончания работ, а не на сегодня. У задачи, законченной
--- до появления цены по категории, цена общая. Без правила счёт пересчитался бы «по-новому».
+-- до новой цены, цена прежняя. Без правила счёт пересчитался бы «по-новому».
 SELECT pg_temp.check(pg_temp.invoice_for('inv_old', 't_old') IS NOT NULL, 'счёт по старой задаче создаётся');
 SELECT pg_temp.check(pg_temp.items(pg_temp.uid('inv_old')) = '1×1000=1000/N',
-  'на дату, когда цены по категории ещё не было, берётся общая');
+  'на дату окончания работ действовала прежняя цена');
 SELECT pg_temp.check(pg_temp.invoice_for('inv_common', 't_common') IS NOT NULL, 'счёт по прибору другой категории создаётся');
-SELECT pg_temp.check(pg_temp.items(pg_temp.uid('inv_common')) = '1×1000=1000/N',
-  'у категории без своей цены берётся общая цена прайса');
+SELECT pg_temp.check(pg_temp.items(pg_temp.uid('inv_common')) = '1×1500=1500/N',
+  'категория гарантии прибора на цену не влияет (0063)');
 
 -- Правило 3: гарантийная работа «Г» попадает строкой, но не в сумму, пока в прайсе
 -- include_guarantee_work = false. Без правила гарантия выставилась бы заказчику.
@@ -393,7 +394,7 @@ SELECT pg_temp.check(pg_temp.sums(pg_temp.uid('inv_parts')) = '2550-300=2250', '
 
 -- Правило 8: пересборка черновика подхватывает новую цену прайса.
 SELECT pg_temp.act_as_nobody();
-UPDATE price_list SET amount = 1700 WHERE work_type_code = 'repair' AND scope_key <> '*';
+UPDATE price_list SET amount = 1700 WHERE work_type_code = 'repair' AND valid_to IS NULL;
 SELECT pg_temp.act_as(pg_temp.uid('coordinator'));
 SELECT pg_temp.check(public.rebuild_invoice_items(pg_temp.uid('inv_cat')) = 1, 'пересборка возвращает число строк');
 SELECT pg_temp.check(pg_temp.items(pg_temp.uid('inv_cat')) = '1×1700=1700/N', 'пересборка берёт новую цену прайса');
@@ -542,7 +543,7 @@ SELECT pg_temp.check(
      FROM public.equipment_spend(pg_temp.uid('eq3'), pg_temp.d('tomorrow'), pg_temp.d('after'))) = '0/0/0',
   'за период без счетов по прибору выходят нули');
 SELECT pg_temp.check(
-  (SELECT trim_scale(total_amount) FROM public.equipment_spend(pg_temp.uid('eq2'), pg_temp.d('today'), pg_temp.d('today'))) = 1000,
+  (SELECT trim_scale(total_amount) FROM public.equipment_spend(pg_temp.uid('eq2'), pg_temp.d('today'), pg_temp.d('today'))) = 1500,
   'по другому прибору считаются только его счета');
 
 -- ---------------------------------------------------------------- Выгрузка для 1С

@@ -27,7 +27,9 @@ import {
   invoiceLineAmount,
   invoiceLineSource,
   invoiceLinesWithoutPrice,
+  invoiceAdjustmentProblem,
   invoiceMissingPriceHint,
+  invoiceZeroPriceWarning,
   invoiceModifierLabel,
   invoicePreviewTotal,
   invoiceStatusLabel,
@@ -123,7 +125,9 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
   const items = card?.items ?? [];
   const groups = invoiceItemGroups(items);
   const amounts = invoiceAmounts(card ?? { items: [], subtotal: 0, adjustmentAmount: 0, totalAmount: 0 });
-  const withoutPrice = invoiceLinesWithoutPrice(items);
+  // Гарантийные строки в сумму не идут: их «нет цены» клиенту ничего не стоит.
+  const withoutPrice = invoiceLinesWithoutPrice(groups.billable);
+  const zeroPriceWarning = invoiceZeroPriceWarning(withoutPrice);
   const steps = invoiceHistorySteps(card?.statusHistory ?? []);
   const actions = invoiceCardActions({ status, canWrite });
   const adjustment = parseInvoiceAdjustment(adjustmentDraft);
@@ -148,19 +152,22 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
 
   const correct = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (adjustment === null) {
-      setFormError("Укажите сумму корректировки числом со знаком: «−500» уменьшит счёт, «500» увеличит");
-      return;
-    }
-    if (!reasonDraft.trim()) {
-      setFormError("Напишите причину корректировки: она останется в счёте");
+    const problem = invoiceAdjustmentProblem({
+      subtotal: amounts.subtotal,
+      currentAdjustment: amounts.adjustment,
+      currentReason: card?.correctionReason ?? "",
+      next: adjustment,
+      reason: reasonDraft
+    });
+    if (problem || adjustment === null) {
+      setFormError(problem || "Укажите сумму числом со знаком");
       return;
     }
     setSaving(true);
     setFormError(null);
     try {
       await m2Api.correctInvoice(invoiceId, adjustment, reasonDraft);
-      toast.success(`Счёт ${number}: ${formatMoney(adjustment)}`, { title: "Корректировка сохранена" });
+      toast.success(adjustment === 0 ? `Счёт ${number}: скидки и надбавки больше нет` : `Счёт ${number}: ${formatMoney(adjustment)}`, { title: "Корректировка сохранена" });
       setCorrecting(false);
       await reload();
       onChanged?.();
@@ -197,7 +204,8 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
   const openCorrection = () => {
     setFormError(null);
     setAdjustmentDraft(card && card.adjustmentAmount !== 0 ? String(card.adjustmentAmount).replace(".", ",") : "");
-    setReasonDraft(card?.correctionReason ?? "");
+    // Причину каждый раз пишут новую: база не примет ту же самую второй раз (0040).
+    setReasonDraft("");
     setCorrecting(true);
   };
 
@@ -213,13 +221,23 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
     readonly cancelLabel?: string;
     readonly tone?: "danger" | "primary";
   }>> = {
-    issue: {
+    issue: zeroPriceWarning ? {
+      title: `Выставить счёт ${number} со строкой без цены?`,
+      description: `${zeroPriceWarning} Лучше сначала задать цену и нажать «Обновить по прайсу»: после выставления строки не пересобираются.`,
+      confirmLabel: "Выставить без цены",
+      cancelLabel: "Не выставлять"
+    } : {
       title: `Выставить счёт ${number}?`,
       description: "Счёт перейдёт в «Выставлен», дату выставления запишет база. Пересобрать позиции после этого уже нельзя.",
       confirmLabel: "Выставить",
       tone: "primary"
     },
-    transfer: {
+    transfer: zeroPriceWarning ? {
+      title: `Передать в 1С счёт ${number} со строкой без цены?`,
+      description: `${zeroPriceWarning} После передачи счёт не поменять и не отменить.`,
+      confirmLabel: "Передать без цены",
+      cancelLabel: "Не передавать"
+    } : {
       title: `Передать счёт ${number} в 1С?`,
       description: "После передачи счёт не меняют: ни сумм, ни корректировок. Отменить его тоже будет нельзя.",
       confirmLabel: "Передать в 1С",
@@ -290,16 +308,18 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
           </header>
           {groups.billable.length === 0
             ? <ResourceState
-              description={status === "draft"
-                ? "Позиции заполняются при создании счёта: работа по задаче и установленные запчасти. Если их нет, счёт создан до обновления базы на сервере — после обновления нажмите «Обновить по прайсу»."
-                : "В счёте нет строк, которые идут в сумму."}
+              description={groups.guarantee.length > 0
+                ? "Все работы этого счёта гарантийные: они ниже, в блоке «По гарантии», и в сумму не входят."
+                : status === "draft"
+                  ? "Строки собираются из задач счёта: работы по прайсу и установленные запчасти. Если строк нет, нажмите «Обновить по прайсу» — они соберутся заново."
+                  : "В счёте нет строк, которые идут в сумму."}
               status="empty"
-              title="Позиций пока нет"
+              title={groups.guarantee.length > 0 ? "Платных позиций нет" : "Позиций пока нет"}
             />
             : <>
               <InvoiceItemsTable items={groups.billable} />
               {withoutPrice.length > 0
-                ? <p className="form-hint">{invoiceMissingPriceHint(withoutPrice)}</p>
+                ? <p className="form-hint">{invoiceMissingPriceHint(withoutPrice, status === "draft")}</p>
                 : null}
             </>}
         </section>
@@ -384,21 +404,26 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
           required
           value={adjustmentDraft}
         />
-          <span className="form-hint">Со знаком: «−500» уменьшит счёт, «500» увеличит.</span>
+          <span className="form-hint">Со знаком: «−500» уменьшит счёт, «500» увеличит{amounts.adjustment !== 0 ? ", «0» уберёт" : ""}.</span>
+          {amounts.adjustment !== 0
+            ? <button className="link-button" onClick={() => setAdjustmentDraft("0")} type="button">Убрать скидку или надбавку</button>
+            : null}
         </label>
         <label className="dialog-form-grid__wide">Причина *<AutoTextarea
           maxLength={500}
           onChange={(event) => setReasonDraft(event.target.value)}
-          placeholder="Например: скидка по договору"
+          placeholder={amounts.adjustment !== 0 && adjustment === 0 ? "Например: скидка поставлена по ошибке" : "Например: скидка по договору"}
           required
           rows={2}
           value={reasonDraft}
-        /></label>
+        />{card?.correctionReason ? <span className="form-hint">Прошлая причина: «{card.correctionReason}». Напишите новую — каждая корректировка остаётся в счёте со своей причиной.</span> : null}</label>
         <p className="form-hint dialog-form-grid__wide">
           {adjustment === null
             ? "Укажите сумму — и здесь появится новый итог счёта."
-            : <>Было {formatMoney(amounts.total)} → станет <strong>{formatMoney(invoicePreviewTotal(amounts.subtotal, adjustment))}</strong>.
-              {amounts.subtotal + adjustment < 0 ? " Ниже нуля итог не опускается." : ""}</>}
+            : amounts.subtotal + adjustment < 0
+              ? <>Скидка больше суммы позиций {formatMoney(amounts.subtotal)}: так нельзя, итог не может быть меньше нуля.</>
+              : <>Было {formatMoney(amounts.total)} → станет <strong>{formatMoney(invoicePreviewTotal(amounts.subtotal, adjustment))}</strong>.
+                {adjustment > 0 && amounts.subtotal > 0 && adjustment > amounts.subtotal ? " Надбавка больше суммы позиций — проверьте сумму." : ""}</>}
         </p>
       </div>
     </DialogForm>

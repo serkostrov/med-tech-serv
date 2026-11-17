@@ -271,11 +271,15 @@ SELECT pg_temp.check(pg_temp.timeline('packaging', '*') = format('%s..%s=100 | %
                        pg_temp.d('today'), pg_temp.d('f1'), pg_temp.d('f1'), pg_temp.d('f2'), pg_temp.d('f2')),
   'после правки будущей цены её конец по следующей цене сохранился');
 
--- Цена по категории гарантии живёт своей историей, общей не мешает.
-SELECT pg_temp.check(pg_temp.set_price('d_cat', 'diagnostics', pg_temp.uid('cat_standard'), 1500, pg_temp.d('p2')) IS NOT NULL,
-  'цена по категории гарантии');
-SELECT pg_temp.check(pg_temp.timeline('diagnostics', pg_temp.uid('cat_standard')::text) = format('%s..∞=1500', pg_temp.d('p2')),
-  'у категории гарантии своя история, общие периоды не тронуты');
+-- Цен по категориям гарантии больше нет (0063): категорию не ведут в паспорте прибора.
+SELECT pg_temp.expect_message(
+  format('SELECT * FROM public.set_work_price(%L, %L, 1500, %L)', 'diagnostics', pg_temp.uid('cat_standard'), pg_temp.d('p2')),
+  'Цены по категориям гарантии не ведутся: категорию гарантии не отмечают в паспорте прибора, цена одна для всех приборов',
+  'цена по категории гарантии не заводится');
+SELECT pg_temp.expect_message(
+  format('SELECT * FROM public.set_work_price(%L, NULL, 0, %L)', 'repair', pg_temp.d('f1')),
+  'Цена должна быть больше нуля: работу, за которую клиент не платит, отмечают гарантией в задаче, а не нулевой ценой',
+  'нулевая цена не заводится (находка 39)');
 SELECT pg_temp.act_as_nobody();
 
 SELECT pg_temp.check((SELECT created_by = pg_temp.uid('supervisor') AND currency = 'RUB'
@@ -295,12 +299,12 @@ SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('today'
 SELECT pg_temp.check(public.work_price_on('diagnostics', NULL, pg_temp.d('f1')) = 1800
                  AND public.work_price_on('diagnostics', NULL, pg_temp.d('f2')) = 2000,
   'на будущие даты действуют заведённые вперёд цены');
-SELECT pg_temp.check(public.work_price_on('diagnostics', pg_temp.uid('cat_standard'), pg_temp.d('today')) = 1500,
-  'по категории гарантии берётся её собственная цена');
-SELECT pg_temp.check(public.work_price_on('diagnostics', pg_temp.uid('cat_supplier'), pg_temp.d('today')) = 1300,
-  'по категории без своей цены берётся общая');
+-- Категория прибора на цену не влияет (0063): берётся цена «для всех».
+SELECT pg_temp.check(public.work_price_on('diagnostics', pg_temp.uid('cat_standard'), pg_temp.d('today')) = 1300
+                 AND public.work_price_on('diagnostics', pg_temp.uid('cat_supplier'), pg_temp.d('today')) = 1300,
+  'категория прибора на цену не влияет');
 SELECT pg_temp.check(public.work_price_on('diagnostics', pg_temp.uid('cat_standard'), pg_temp.d('p1')) = 1000,
-  'на дату, когда цены по категории ещё не было, берётся общая');
+  'на прошлую дату — общая цена того дня');
 SELECT pg_temp.check(public.work_price_on('repair', NULL, pg_temp.d('today')) IS NULL,
   'по виду работ без цены возвращается пусто');
 SELECT pg_temp.act_as_nobody();
@@ -409,15 +413,24 @@ SELECT pg_temp.check(
   public.bulk_update_work_prices(
     jsonb_build_array(
       jsonb_build_object('work_type_code', 'diagnostics', 'guarantee_category_id', NULL, 'amount', 1430, 'include_guarantee_work', true),
-      jsonb_build_object('work_type_code', 'repair', 'guarantee_category_id', NULL, 'amount', 550, 'include_guarantee_work', false),
-      jsonb_build_object('work_type_code', 'diagnostics', 'guarantee_category_id', pg_temp.uid('cat_standard'), 'amount', 1650)
-    ), pg_temp.d('tomorrow')) = 3,
-  'массовое изменение применило все три позиции');
+      jsonb_build_object('work_type_code', 'repair', 'guarantee_category_id', NULL, 'amount', 550, 'include_guarantee_work', false)
+    ), pg_temp.d('tomorrow')) = 2,
+  'массовое изменение применило обе позиции');
 SELECT pg_temp.check(pg_temp.timeline('diagnostics', '*') = format('%s..%s=1000 | %s..%s=1300+г | %s..∞=1430+г',
                        pg_temp.d('p1'), pg_temp.d('today'), pg_temp.d('today'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
   'массовое изменение закрыло прошлый период так же, как правка по одной цене');
-SELECT pg_temp.check(pg_temp.timeline('diagnostics', pg_temp.uid('cat_standard')::text) = format('%s..%s=1500 | %s..∞=1650', pg_temp.d('p2'), pg_temp.d('tomorrow'), pg_temp.d('tomorrow')),
-  'в массовом изменении позиция по категории гарантии живёт отдельно от общей');
+SELECT pg_temp.expect_message(
+  format('SELECT public.bulk_update_work_prices(%L, %L)',
+    jsonb_build_array(jsonb_build_object('work_type_code', 'diagnostics', 'guarantee_category_id', pg_temp.uid('cat_standard'), 'amount', 1650)),
+    pg_temp.d('f1')),
+  'Цены по категориям гарантии не ведутся: категорию гарантии не отмечают в паспорте прибора, цена одна для всех приборов',
+  'массово цену по категории гарантии тоже не завести');
+SELECT pg_temp.expect_message(
+  format('SELECT public.bulk_update_work_prices(%L, %L)',
+    jsonb_build_array(jsonb_build_object('work_type_code', 'repair', 'guarantee_category_id', NULL, 'amount', 0)),
+    pg_temp.d('f1')),
+  'Цена должна быть больше нуля: работу, за которую клиент не платит, отмечают гарантией в задаче, а не нулевой ценой',
+  'массово ноль тоже не применяется');
 SELECT pg_temp.check(
   public.bulk_update_work_prices(
     jsonb_build_array(

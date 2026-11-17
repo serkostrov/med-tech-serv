@@ -210,6 +210,7 @@ export interface BulkPriceChange {
 const NO_BASE_PRICE_REASON = "Цены ещё нет: процентом и прибавкой считать не из чего";
 const SAME_PRICE_REASON = "Цена и так такая";
 const TOO_LARGE_REASON = "Цена слишком большая";
+const ZERO_PRICE_REASON = "Цена стала бы нулём: так нельзя, работа без цены уйдёт клиенту бесплатно";
 
 /** Почему строка с отрицательным результатом не изменится: причина зависит от способа счёта. */
 const NEGATIVE_PRICE_REASON: Readonly<Record<BulkPriceMode, string>> = {
@@ -232,7 +233,8 @@ export function previewBulkPrices(lines: readonly PriceLine[], input: BulkPriceI
     const skipReason = after === undefined
       ? NO_BASE_PRICE_REASON
       : after < 0 ? NEGATIVE_PRICE_REASON[input.mode]
-        : after === before ? SAME_PRICE_REASON : after > MAX_PRICE ? TOO_LARGE_REASON : undefined;
+        : after === 0 ? ZERO_PRICE_REASON
+          : after === before ? SAME_PRICE_REASON : after > MAX_PRICE ? TOO_LARGE_REASON : undefined;
     return {
       key: line.key,
       workTypeCode: line.workTypeCode,
@@ -257,8 +259,8 @@ export interface BulkPriceItem {
 }
 
 /**
- * Сколько строк из применяемых станут нулевыми. Ноль разрешён — бывает работа, которая
- * в счёт не попадает, — но пачкой он должен быть осознанным, поэтому о нём предупреждаем.
+ * Сколько строк из применяемых станут нулевыми. С 17.11 ноль не применяется вовсе
+ * (находка аудита 39): такие строки пропускаются с причиной, и здесь всегда ноль.
  */
 export function zeroPriceCount(changes: readonly BulkPriceChange[]): number {
   return changes.filter((change) => !change.skipReason && change.after === 0).length;
@@ -334,11 +336,33 @@ export function guaranteeWorkLabel(includeGuaranteeWork: boolean): string {
   return includeGuaranteeWork ? "Гарантия в счёт" : "Без гарантии";
 }
 
-/** Срок действия цены для истории: «с 01.01.2026», «01.01.2026 — 31.03.2026». */
+/** День накануне: в базе конец периода цены не входит в период (valid_to — день начала следующей). */
+function dayBefore(iso: string): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  if (Number.isNaN(date.getTime())) return iso;
+  date.setUTCDate(date.getUTCDate() - 1);
+  return date.toISOString().slice(0, 10);
+}
+
+/**
+ * Срок действия цены для истории: «с 01.01.2026», «01.01.2026 — 30.06.2026».
+ * Пишем последний день действия, а не день начала следующей цены: иначе 1 июля
+ * стояло бы в двух периодах сразу, и непонятно, какая цена у работы этого дня.
+ */
 export function priceRowPeriodText(row: Pick<PriceListRow, "validFrom" | "validTo">): string {
   const from = formatIsoCalendarDate(row.validFrom);
-  return row.validTo ? `${from} — ${formatIsoCalendarDate(row.validTo)}` : `с ${from}`;
+  if (!row.validTo) return `с ${from}`;
+  const last = dayBefore(row.validTo);
+  return last <= row.validFrom ? from : `${from} — ${formatIsoCalendarDate(last)}`;
 }
+
+/** Цена задним числом: дата начала раньше сегодняшнего дня. Её подтверждают отдельно. */
+export function isBackdatedPrice(validFrom: string, today: string): boolean {
+  return Boolean(validFrom) && validFrom < today;
+}
+
+/** Нулевая цена не бывает: бесплатную работу отмечают гарантией в задаче, а не ценой. */
+export const ZERO_PRICE_MESSAGE = "Цена должна быть больше нуля: работу, за которую клиент не платит, отмечают гарантией в задаче, а не нулевой ценой";
 
 /** Будущая цена, о которой стоит предупредить в строке: «с 01.01.2027 — 1 200,00 ₽». */
 export function priceLineNextText(line: Pick<PriceLine, "next">): string | undefined {

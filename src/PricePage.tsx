@@ -18,8 +18,8 @@ import { formatIsoCalendarDate } from "./date-format.js";
 import { formatRussianCount, russianCountForm } from "./equipment-changes.js";
 import { companyToday } from "./task-dates.js";
 import {
-  ALL_CATEGORIES_LABEL,
   MAX_PRICE,
+  ZERO_PRICE_MESSAGE,
   PRICE_NOT_SET_HINT,
   PRICE_NOT_SET_LABEL,
   bulkPriceItems,
@@ -27,6 +27,7 @@ import {
   filterPriceLines,
   formatMoney,
   guaranteeWorkLabel,
+  isBackdatedPrice,
   nextPriceAfter,
   parseAmount,
   parseSignedNumber,
@@ -39,9 +40,7 @@ import {
   priceLines,
   priceRowActiveOn,
   priceRowPeriodText,
-  priceScopeKey,
   type BulkPriceMode,
-  type PriceGuaranteeCategory,
   type PriceLine,
   type PriceListRow,
   type PriceWorkType
@@ -67,12 +66,6 @@ function workTypeOptions(values: readonly ReferenceCatalogValue[], rows: readonl
     .map((value) => ({ code: value.code ?? value.id, name: value.name }));
 }
 
-function categoryOptions(values: readonly ReferenceCatalogValue[], rows: readonly PriceRowApiRecord[]): readonly PriceGuaranteeCategory[] {
-  const priced = new Set(rows.map((row) => row.guaranteeCategoryId).filter((id): id is string => Boolean(id)));
-  return values
-    .filter((value) => value.isActive || priced.has(value.id))
-    .map((value) => ({ id: value.id, name: value.name }));
-}
 
 /**
  * История цен строки — в отдельном окне, а не раскрытием строки таблицы: в раскрытой
@@ -138,7 +131,6 @@ export function PricePage() {
   const today = companyToday();
   const [rows, setRows] = useState<readonly PriceRowApiRecord[]>([]);
   const [workTypes, setWorkTypes] = useState<readonly PriceWorkType[]>([]);
-  const [categories, setCategories] = useState<readonly PriceGuaranteeCategory[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [canWrite, setCanWrite] = useState(false);
@@ -151,7 +143,8 @@ export function PricePage() {
   // Правка одной цены: строка списка и поля окна.
   const [editing, setEditing] = useState<PriceLine | null>(null);
   const [amountDraft, setAmountDraft] = useState("");
-  const [categoryDraft, setCategoryDraft] = useState("");
+  // Цена задним числом меняет то, что получат черновики счетов за прошлое: её подтверждают.
+  const [backdateConfirmed, setBackdateConfirmed] = useState(false);
   const [guaranteeDraft, setGuaranteeDraft] = useState(false);
   const [validFromDraft, setValidFromDraft] = useState(today);
   // Массовое изменение выбранных строк.
@@ -165,14 +158,12 @@ export function PricePage() {
     setLoading(true);
     setLoadError(null);
     try {
-      const [priceRows, workTypeValues, categoryValues] = await Promise.all([
+      const [priceRows, workTypeValues] = await Promise.all([
         m2Api.listPriceList(),
-        m2Api.listCatalogValues("work-types"),
-        m2Api.listCatalogValues("guarantee-categories")
+        m2Api.listCatalogValues("work-types")
       ]);
       setRows(priceRows);
       setWorkTypes(workTypeOptions(workTypeValues, priceRows));
-      setCategories(categoryOptions(categoryValues, priceRows));
     } catch (error) {
       setLoadError(message(error, "Не получилось загрузить прайс"));
     } finally {
@@ -185,7 +176,10 @@ export function PricePage() {
     void m2Api.hasPermission("price.write").then(setCanWrite).catch(() => setCanWrite(false));
   }, []);
 
-  const lines = useMemo(() => priceLines({ workTypes, rows, categories, on: today }), [workTypes, rows, categories, today]);
+  // Цены по категориям гарантии не ведём: категорию с 17.11 не отмечают в паспорте прибора
+  // (встреча 16.11), а счёт берёт цену «для всех» (0063). Старые строки категорий не показываем.
+  const commonRows = useMemo(() => rows.filter((row) => !row.guaranteeCategoryId), [rows]);
+  const lines = useMemo(() => priceLines({ workTypes, rows: commonRows, on: today }), [workTypes, commonRows, today]);
   const visible = useMemo(() => filterPriceLines(lines, search), [lines, search]);
   // Строка могла исчезнуть после обновления списка: выбор держим только по существующим.
   useEffect(() => {
@@ -196,7 +190,7 @@ export function PricePage() {
   // Процент и прибавку считаем от цены, действующей на выбранную дату начала: именно её
   // закроет база. На сегодняшнюю цену смотреть нельзя — на ту дату может действовать другая.
   const bulkOn = bulkFrom || today;
-  const bulkLines = useMemo(() => priceLines({ workTypes, rows, categories, on: bulkOn }), [workTypes, rows, categories, bulkOn]);
+  const bulkLines = useMemo(() => priceLines({ workTypes, rows: commonRows, on: bulkOn }), [workTypes, commonRows, bulkOn]);
   const selectedLines = bulkLines.filter((line) => selected.has(line.key));
   const bulkNumber = bulkMode === "fixed" ? parseAmount(bulkValue) : parseSignedNumber(bulkValue);
   const changes = bulkNumber === null ? [] : previewBulkPrices(selectedLines, { mode: bulkMode, value: bulkNumber });
@@ -223,7 +217,7 @@ export function PricePage() {
     setFormError(null);
     setEditing(line);
     setAmountDraft(line.current ? String(line.current.amount).replace(".", ",") : "");
-    setCategoryDraft(line.guaranteeCategoryId ?? "");
+    setBackdateConfirmed(false);
     setGuaranteeDraft(line.current?.includeGuaranteeWork === true);
     setValidFromDraft(today);
   };
@@ -247,6 +241,14 @@ export function PricePage() {
       setFormError("Укажите дату, с которой действует цена");
       return;
     }
+    if (amount === 0) {
+      setFormError(ZERO_PRICE_MESSAGE);
+      return;
+    }
+    if (isBackdatedPrice(validFromDraft, today) && !backdateConfirmed) {
+      setFormError("Цена задним числом: отметьте ниже, что так и нужно");
+      return;
+    }
     if (amount > MAX_PRICE) {
       setFormError(`Цена слишком большая: не больше ${formatMoney(MAX_PRICE)}`);
       return;
@@ -263,7 +265,7 @@ export function PricePage() {
     try {
       await m2Api.setWorkPrice({
         workTypeCode: editing.workTypeCode,
-        guaranteeCategoryId: categoryDraft || null,
+        guaranteeCategoryId: null,
         amount,
         validFrom: validFromDraft,
         includeGuaranteeWork: guaranteeDraft
@@ -307,11 +309,10 @@ export function PricePage() {
     }
   };
 
-  // История берётся по выбранной в окне категории, а не по той, с которой окно открыли:
-  // категорию в окне меняют, и подсказка про будущую цену должна смотреть на нужную историю.
+  // История цены «для всех»: только по ней считает счёт.
   const editingHistory = editing
     ? rows.filter((row) => row.workTypeCode === editing.workTypeCode
-        && priceScopeKey(row.guaranteeCategoryId) === priceScopeKey(categoryDraft || null))
+        && !row.guaranteeCategoryId)
     : [];
   // Цена, действующая на выбранную дату: по ней видно, что менять нечего.
   const editingActive = editing && validFromDraft
@@ -421,7 +422,7 @@ export function PricePage() {
 
     <DialogForm
       busy={saving}
-      description="Цена начнёт действовать с указанной даты. Прошлую цену база закроет сама, история останется."
+      description="Цена начнёт действовать с указанной даты, прошлая закроется днём раньше. Обе останутся в истории."
       error={formError}
       onOpenChange={(open) => { if (!open) setEditing(null); }}
       onSubmit={saveOne}
@@ -438,18 +439,15 @@ export function PricePage() {
           required
           value={amountDraft}
         />
-          {parseAmount(amountDraft) === 0 ? <span className="form-hint form-hint--warning">Ноль — работа бесплатная: в счёт такая работа не попадёт. Если это не так, укажите цену.</span> : null}
+          {parseAmount(amountDraft) === 0 ? <span className="form-hint form-hint--warning">{ZERO_PRICE_MESSAGE}.</span> : null}
         </label>
         <label>Действует с *<DatePicker aria-label="Дата начала действия цены" onChange={setValidFromDraft} required value={validFromDraft} />
           {laterPrice ? <span className="form-hint">Позже уже есть цена {formatMoney(laterPrice.amount)} с {formatIsoCalendarDate(laterPrice.validFrom)}: новая будет действовать только до неё.</span> : null}
         </label>
-        <label className="dialog-form-grid__wide">Категория гарантии
-          <Select onChange={(event) => setCategoryDraft(event.target.value)} value={categoryDraft}>
-            <option value="">{ALL_CATEGORIES_LABEL}</option>
-            {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-          </Select>
-          <span className="form-hint">Цена «{ALL_CATEGORIES_LABEL}» действует там, где у категории нет своей цены.</span>
-        </label>
+        {isBackdatedPrice(validFromDraft, today) ? <label className="field-check dialog-form-grid__wide">
+          <input checked={backdateConfirmed} onChange={(event) => setBackdateConfirmed(event.target.checked)} type="checkbox" />
+          <span>Да, цена задним числом, с {formatIsoCalendarDate(validFromDraft)}<small className="form-hint">Прошлая цена закроется этим днём. Черновики счетов за работы с этой даты после «Обновить по прайсу» пересчитаются по новой цене; выставленные и переданные в 1С счета не изменятся.</small></span>
+        </label> : null}
         <label className="field-check dialog-form-grid__wide">
           <input checked={guaranteeDraft} onChange={(event) => setGuaranteeDraft(event.target.checked)} type="checkbox" />
           <span>Включать работу по гарантии в счёт</span>

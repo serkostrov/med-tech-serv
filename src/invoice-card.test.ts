@@ -5,7 +5,9 @@ import {
   canExportInvoice,
   invoiceCardActions,
   invoiceLineSource,
+  invoiceAdjustmentProblem,
   invoiceMissingPriceHint,
+  invoiceZeroPriceWarning,
   invoiceModifierLabel,
   invoiceWorkDate,
   invoiceAmounts,
@@ -194,10 +196,39 @@ describe("карточка счёта", () => {
     assert.equal(parseInvoiceAdjustment("−1 500,50"), -1500.5);
     assert.equal(parseInvoiceAdjustment("-1500.50"), -1500.5);
     assert.equal(parseInvoiceAdjustment("2000"), 2000);
-    assert.equal(parseInvoiceAdjustment("0"), null);
+    assert.equal(parseInvoiceAdjustment("0"), 0);
     assert.equal(parseInvoiceAdjustment(""), null);
     assert.equal(parseInvoiceAdjustment("минус тысяча"), null);
     assert.equal(parseInvoiceAdjustment("1000000000000000"), null);
+    assert.equal(parseInvoiceAdjustment("999999999999"), null, "надбавка на триллион — опечатка в разрядах");
+  });
+
+  it("проверяет корректировку по тем же правилам, что база", () => {
+    const base = { subtotal: 5200, currentAdjustment: 0, currentReason: "", reason: "Скидка по договору" };
+    assert.equal(invoiceAdjustmentProblem({ ...base, next: -500 }), "");
+    assert.match(invoiceAdjustmentProblem({ ...base, next: -10000 }), /больше суммы позиций 5\s200,00\s₽.*Наибольшая скидка — 5\s200,00\s₽/u);
+    assert.equal(invoiceAdjustmentProblem({ ...base, next: -5200 }), "", "скидка на всю сумму допустима: итог ноль");
+    assert.match(invoiceAdjustmentProblem({ ...base, next: 0 }), /и так нет/u);
+    assert.match(invoiceAdjustmentProblem({ ...base, next: null }), /«0» уберёт/u);
+    assert.match(invoiceAdjustmentProblem({ ...base, next: -500, reason: "  " }), /Напишите причину/u);
+    const corrected = { ...base, currentAdjustment: -500, currentReason: "Скидка по договору" };
+    assert.equal(invoiceAdjustmentProblem({ ...corrected, next: 0, reason: "Скидка поставлена по ошибке" }), "", "скидку можно убрать");
+    assert.match(invoiceAdjustmentProblem({ ...corrected, next: -700 }), /новую причину/u);
+    assert.match(invoiceAdjustmentProblem({ ...corrected, next: -500, reason: "Другая" }), /уже −500,00\s₽/u);
+  });
+
+  it("предупреждает о строках без цены перед выставлением", () => {
+    assert.equal(invoiceZeroPriceWarning([{ description: "Ремонт", unitPrice: 5200 }]), "");
+    assert.equal(invoiceZeroPriceWarning([{ description: "Фильтр вентиляционный, Н", unitPrice: 0 }]),
+      "В счёте строка без цены: «Фильтр вентиляционный, Н». Клиент получит её бесплатно, и так же она уйдёт в 1С.");
+    assert.match(invoiceZeroPriceWarning([
+      { description: "А", unitPrice: 0 }, { description: "Б", unitPrice: 0 }, { description: "В", unitPrice: 0 }, { description: "Г", unitPrice: 0 }
+    ]), /4 строки без цены: «А», «Б», «В» и ещё 1/u);
+  });
+
+  it("после выставления не зовёт к «Обновить по прайсу»", () => {
+    assert.doesNotMatch(invoiceMissingPriceHint([{ itemType: "part", unitPrice: 0 }], false), /Обновить по прайсу/u);
+    assert.match(invoiceMissingPriceHint([{ itemType: "part", unitPrice: 0 }], false), /отменить счёт и выставить новый/u);
   });
 
   it("называет файл выгрузки номером счёта", () => {
