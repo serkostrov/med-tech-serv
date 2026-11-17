@@ -7824,6 +7824,15 @@ td .resource-state {
   .task-next-step__actions > * { width: 100%; }
 }
 
+/* Затраты в карточке прибора (ТЗ, блок 8) */
+.equipment-spend { margin-top: 14px; }
+.equipment-spend__periods { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 0 10px; }
+.equipment-spend__sum { display: grid; gap: 3px; }
+.equipment-spend__sum strong { color: var(--color-ink); font-size: 22px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.equipment-spend__sum span { color: var(--color-ink-soft); font-size: 13px; font-variant-numeric: tabular-nums; }
+.equipment-spend__sum small, .equipment-spend__empty { color: var(--color-muted); font-size: 12px; line-height: 1.45; }
+.equipment-spend__empty { margin: 0; }
+
 /* Каналы уведомлений сотрудника: событие × почта / Telegram (ТЗ, блок 5) */
 .notify-channels { display: grid; gap: 8px; min-width: 0; margin: 0; padding: 0; border: 0; }
 .notify-channels legend { margin-bottom: 6px; color: var(--color-ink); font-size: 14px; font-weight: 600; }

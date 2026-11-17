@@ -55,6 +55,7 @@ import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { MaintenancePlanPage } from "./MaintenancePlan.js";
 import { attentionFilter, taskAttentionItems, type TaskAttentionCounts, type TaskAttentionKey } from "./task-attention.js";
+import { EQUIPMENT_SPEND_PERIODS, equipmentSpendEmptyText, equipmentSpendLines, equipmentSpendRange, type EquipmentSpend, type EquipmentSpendPeriod } from "./equipment-spend.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate, taskPeriodProblem } from "./task-dates.js";
 import { clearClosureDraft, closureDraftChecked, closureDraftValue, closureDraftValues, readClosureDraft, saveClosureDraft } from "./closure-draft.js";
 import { pendingAfterRetry, pendingUploadNames, pendingUploadsText, type PendingUpload } from "./upload-retry.js";
@@ -2608,11 +2609,47 @@ function EquipmentCard({
               {record.notes ? <div><dt>Примечание</dt><dd>{record.notes}</dd></div> : null}
             </dl>
           </section>
+          {readOnly ? null : <EquipmentSpendSection equipmentId={record.id} />}
         </aside>
       </div>
       {changeKind ? <EquipmentAssignmentForm kind={changeKind} onApply={apply} onOpenChange={(open) => { if (!open) setChangeKind(null); }} open options={changeKind === "site_change" ? sites : payers} record={record} /> : null}
       <ManualEquipmentHistoryForm onAdd={async (draft) => { await onAddManual(draft); setManualOpen(false); }} onOpenChange={setManualOpen} open={manualOpen} record={record} />
     </div>
+  );
+}
+
+/**
+ * Затраты по прибору в его карточке (ТЗ, блок 8): итог за период, работы и запчасти, по скольким
+ * счетам. Считает база так же, как отчёт «Затраты по приборам». Кому деньги не видны, блока нет.
+ */
+function EquipmentSpendSection({ equipmentId }: { readonly equipmentId: string }) {
+  const [period, setPeriod] = useState<EquipmentSpendPeriod>("this_year");
+  const [state, setState] = useState<{ readonly kind: "loading" } | { readonly kind: "hidden" } | { readonly kind: "failed" } | { readonly kind: "loaded"; readonly spend: EquipmentSpend }>({ kind: "loading" });
+  useEffect(() => {
+    let active = true;
+    setState((current) => (current.kind === "hidden" ? current : { kind: "loading" }));
+    void m2Api.equipmentSpend(equipmentId, equipmentSpendRange(period, companyToday()))
+      .then((spend) => { if (active) setState(spend ? { kind: "loaded", spend } : { kind: "hidden" }); })
+      .catch(() => { if (active) setState({ kind: "failed" }); });
+    return () => { active = false; };
+  }, [equipmentId, period]);
+  if (state.kind === "hidden") return null;
+  const lines = state.kind === "loaded" ? equipmentSpendLines(state.spend) : null;
+  return (
+    <section aria-labelledby={`equipment-spend-${equipmentId}`} className="task-props equipment-spend">
+      <header className="task-props__head"><h2 id={`equipment-spend-${equipmentId}`}>Затраты</h2></header>
+      <div aria-label="Период затрат" className="equipment-spend__periods" role="group">
+        {EQUIPMENT_SPEND_PERIODS.map((item) => <button aria-pressed={period === item.value} className={`toggle-chip${period === item.value ? " toggle-chip--on" : ""}`} key={item.value} onClick={() => setPeriod(item.value)} type="button">{item.label}</button>)}
+      </div>
+      {state.kind === "loading" ? <div className="skeleton-row"><Skeleton className="skeleton-row__a" /><Skeleton className="skeleton-row__b" /></div> : null}
+      {state.kind === "failed" ? <p className="equipment-spend__empty">Не получилось посчитать затраты. Обновите страницу.</p> : null}
+      {state.kind === "loaded" && lines ? <div className="equipment-spend__sum">
+        <strong>{lines.total}</strong>
+        <span>{lines.split}</span>
+        <small>{lines.basis}. Неотменённые счета, как в отчёте «Затраты по приборам»</small>
+      </div> : null}
+      {state.kind === "loaded" && !lines ? <p className="equipment-spend__empty">{equipmentSpendEmptyText(period)}</p> : null}
+    </section>
   );
 }
 

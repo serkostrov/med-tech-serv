@@ -425,18 +425,37 @@ SELECT pg_temp.check(
   (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('long_ago'), pg_temp.d('long_ago') + 1)) = 0,
   'в периоде без счетов затраты пусты');
 
+-- Карточка прибора (0069): те же деньги, что в отчёте, по одному прибору.
+SELECT pg_temp.check(
+  (SELECT format('%s/%s/%s/%s/%s', task_count, invoice_count, trim_scale(work_amount), trim_scale(parts_amount), trim_scale(total_amount))
+     FROM public.equipment_spend_summary(pg_temp.uid('eq1'), pg_temp.d('from'), pg_temp.d('today'))) = '2/2/2000/0/2000',
+  'карточка прибора: затраты за период совпадают с отчётом');
+SELECT pg_temp.check(
+  (SELECT format('%s/%s', invoice_count, trim_scale(total_amount))
+     FROM public.equipment_spend_summary(pg_temp.uid('eq1'), NULL, NULL)) = '2/2000',
+  'карточка прибора: за всё время отменённый счёт тоже не считается');
+SELECT pg_temp.check(
+  (SELECT format('%s/%s/%s', invoice_count, trim_scale(total_amount), last_billing_at IS NULL)
+     FROM public.equipment_spend_summary(pg_temp.uid('eq1'), pg_temp.d('long_ago'), pg_temp.d('long_ago') + 1)) = '0/0/t',
+  'карточка прибора: в периоде без счетов — нули, а не пусто');
+SELECT pg_temp.check(
+  (SELECT trim_scale(total_amount) FROM public.equipment_spend_summary(pg_temp.uid('eq2'), NULL, NULL)) = 1000,
+  'карточка прибора: у второго прибора свой счёт');
+
 -- Инженер и кладовщик затрат не видят. Ни строки, ни нулей, из которых видно,
 -- по каким приборам счета вообще есть.
 SELECT pg_temp.act_as(pg_temp.uid('engineer'));
 SELECT pg_temp.check(
   (SELECT count(*) FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0
-  AND (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0,
-  'инженер затрат не видит');
+  AND (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0
+  AND (SELECT count(*) FROM public.equipment_spend_summary(pg_temp.uid('eq1'), NULL, NULL)) = 0,
+  'инженер затрат не видит, в карточке прибора тоже');
 SELECT pg_temp.act_as(pg_temp.uid('warehouse'));
 SELECT pg_temp.check(
   (SELECT count(*) FROM public.report_equipment_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0
-  AND (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0,
-  'кладовщик затрат не видит');
+  AND (SELECT count(*) FROM public.report_payer_spend(pg_temp.d('from'), pg_temp.d('today'))) = 0
+  AND (SELECT count(*) FROM public.equipment_spend_summary(pg_temp.uid('eq1'), NULL, NULL)) = 0,
+  'кладовщик затрат не видит, в карточке прибора тоже');
 
 -- Итог руководителя запоминаем, чтобы сверить с ним роль без прав на приборы:
 -- литерал в проверке пропустил бы регресс, сдвинувший обе цифры разом. Запоминаем

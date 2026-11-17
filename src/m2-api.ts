@@ -3,6 +3,7 @@ import { availableTaskActions, type AvailableTaskAction } from "./domain/task-ac
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import { companyDay, companyDayEnd, companyDayStart, companyToday, taskCalendarDate } from "./task-dates.js";
 import type { NotificationPreferenceRow } from "./notification-channels.js";
+import type { EquipmentSpend } from "./equipment-spend.js";
 import type { EquipmentHistoryEvent, EquipmentHistoryEventType, EquipmentHistoryPart } from "./domain/equipment-history.js";
 import { assertAnnualMaintenancePlan, maintenancePeriodOnYearTimeline } from "./domain/maintenance-plan.js";
 import { competencyMatchesEquipment, competencyPayload, sortCompetencies, type EngineerCompetency } from "./engineer-competencies.js";
@@ -2465,6 +2466,28 @@ export class M2ApiClient {
     this.equipmentTasksPrefetch.delete(id);
     if (prefetched && Date.now() - prefetched.at < 15_000) return prefetched.value;
     return this.tasksPage({ equipmentId: id, openOnly: true, limit: 20, sort: "deadline_asc" }).then((page) => page.items);
+  }
+
+  /**
+   * Затраты прибора за период для его карточки (0069), как в отчёте «Затраты по приборам».
+   * null — деньги не видны (нет finance.read) или в базе ещё нет функции: блок тогда не показываем.
+   */
+  public async equipmentSpend(equipmentId: string, range: { readonly from?: string; readonly to?: string }): Promise<EquipmentSpend | null> {
+    const { data, error } = await this.db().rpc("equipment_spend_summary", { p_equipment_id: equipmentId, p_from: range.from ?? null, p_to: range.to ?? null });
+    if (isMissingDatabaseFunction(error)) return null;
+    throwIfError(error, "Не получилось посчитать затраты по прибору");
+    const rows = (Array.isArray(data) ? data : data ? [data] : []) as readonly unknown[];
+    if (rows.length === 0) return null;
+    const row = asRow(rows[0]);
+    const lastBillingAt = optionalText(row, "last_billing_at");
+    return {
+      taskCount: numberValue(row.task_count) ?? 0,
+      invoiceCount: numberValue(row.invoice_count) ?? 0,
+      workAmount: numberValue(row.work_amount) ?? 0,
+      partsAmount: numberValue(row.parts_amount) ?? 0,
+      totalAmount: numberValue(row.total_amount) ?? 0,
+      ...(lastBillingAt ? { lastBillingAt } : {})
+    };
   }
 
   public async equipmentCard(id: string, options: { readonly prefetchOpenTasks?: boolean } = {}): Promise<EquipmentCardResponse> {
