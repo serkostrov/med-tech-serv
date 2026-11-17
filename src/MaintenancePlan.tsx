@@ -7,6 +7,7 @@ import { formatIsoCalendarDate } from "./date-format.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { equipmentOptionMeta, equipmentOptionTitle } from "./equipment-options.js";
 import { formatRussianCount } from "./equipment-changes.js";
+import { StatusBoard, localStatusPage } from "./StatusBoard.js";
 
 export const MAINTENANCE_MONTHS = [
   "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"
@@ -23,7 +24,23 @@ export function formatMaintenancePeriod(periodFrom: string, periodTo: string): s
   return `${formatIsoCalendarDate(periodFrom)} — ${formatIsoCalendarDate(periodTo)}`;
 }
 
-type View = MaintenancePlanListResponse["view"];
+type View = MaintenancePlanListResponse["view"] | "month";
+
+/** Месяц начала периода, 0–11: в этой колонке доски «По месяцам» лежит период ТО. */
+export function maintenanceMonthIndex(periodFrom: string): number {
+  return Number(periodFrom.slice(5, 7)) - 1;
+}
+
+/** Колонки «По месяцам»: прошедшие месяцы серые, текущий выделен, будущие — синие. */
+export function maintenanceMonthColumns(year: number, today = new Date()): readonly { readonly key: string; readonly title: string; readonly color: string }[] {
+  const nowYear = today.getFullYear();
+  const nowMonth = today.getMonth();
+  return MAINTENANCE_MONTHS.map((month, index) => {
+    const past = year < nowYear || (year === nowYear && index < nowMonth);
+    const current = year === nowYear && index === nowMonth;
+    return { key: String(index), title: month, color: current ? "#e07a2e" : past ? "#8a9aa3" : "#2f86c4" };
+  });
+}
 
 /** По периоду уже создана задача: такой период план не меняет. */
 export function periodHasTask(item: Pick<MaintenancePlanPeriodResponse, "generatedTaskId" | "status">): boolean {
@@ -118,7 +135,8 @@ function defaultPeriod(year: number, key: number, previousTo?: string): PeriodDr
 export function MaintenancePlanPage() {
   const initialYear = new Date().getUTCFullYear();
   const [year, setYear] = useState(initialYear);
-  const [view, setView] = useState<View>("equipment");
+  // По умолчанию — доска по месяцам (просьба 17.11: «по месяцам разбить, чтобы посмотреть»).
+  const [view, setView] = useState<View>("month");
   const [data, setData] = useState<MaintenancePlanListResponse | null>(null);
   const [engineers, setEngineers] = useState<readonly { readonly id: string; readonly fullName: string }[]>([]);
   const [selected, setSelected] = useState<readonly string[]>([]);
@@ -138,7 +156,8 @@ export function MaintenancePlanPage() {
     setLoading(true);
     try {
       const [plans, availableEngineers] = await Promise.all([
-        m2Api.maintenancePlans(targetYear, targetView), m2Api.listTaskEngineers()
+        // «По месяцам» раскладывает те же периоды сам; сервер отдаёт их сгруппированными по приборам.
+        m2Api.maintenancePlans(targetYear, targetView === "month" ? "equipment" : targetView), m2Api.listTaskEngineers()
       ]);
       setData(plans);
       setEngineers(availableEngineers);
@@ -288,7 +307,7 @@ export function MaintenancePlanPage() {
           <strong>{year}</strong>
           <button aria-label="Следующий год" onClick={() => changeYear(year + 1)} type="button">›</button>
         </div>
-        <ViewSwitch items={[{ value: "equipment", label: "По приборам" }, { value: "engineer", label: "По инженерам" }, { value: "organization", label: "По организациям" }]} label="Группировка плана" onValueChange={setView} value={view} />
+        <ViewSwitch items={[{ value: "month", label: "По месяцам" }, { value: "equipment", label: "По приборам" }, { value: "engineer", label: "По инженерам" }, { value: "organization", label: "По организациям" }]} label="Группировка плана" onValueChange={setView} value={view} />
       </>}
     />
     <ConfirmationDialog
@@ -393,7 +412,30 @@ export function MaintenancePlanPage() {
       </div>
     </DialogForm>
 
-    <section className="card card--table maintenance-schedule">
+    {view === "month" ? <StatusBoard<MaintenancePlanPeriodResponse>
+      columns={maintenanceMonthColumns(year)}
+      {...(year === new Date().getFullYear() ? { focusKey: String(new Date().getMonth()) } : {})}
+      emptyText="ТО в этом месяце нет."
+      itemKey={(item) => item.id}
+      label={`План ТО на ${year} год по месяцам`}
+      load={async (month, offset, limit) => localStatusPage([...items].sort((left, right) => left.periodFrom.localeCompare(right.periodFrom)), (item) => String(maintenanceMonthIndex(item.periodFrom)) === month, offset, limit)}
+      onOpen={(item) => {
+        // Карточка открывает план этого прибора: периоды, инженеры, комментарии.
+        openForm();
+        chooseEquipment({ id: item.equipmentId, serialNumber: item.equipment.serialNumber, manufacturer: item.equipment.manufacturer, model: item.equipment.model, status: "", ...(item.organization ? { organization: item.organization } : {}), ...(item.site ? { site: item.site } : {}) });
+      }}
+      queryKey={`${year}:${loading ? "loading" : "ready"}:${items.map((item) => `${item.id}=${item.status}`).join(",")}`}
+      renderCard={(item) => <>
+        <span className="task-board-card__top">S/N {item.equipment.serialNumber}</span>
+        <strong>{item.equipment.manufacturer} {item.equipment.model}</strong>
+        <small>{[formatMaintenancePeriod(item.periodFrom, item.periodTo), item.organization ?? item.site].filter(Boolean).join(" · ")}</small>
+        <span className="task-board-card__foot">
+          <span className="task-board-card__eng">{item.assignedEngineerName ?? "Инженер не назначен"}</span>
+          <span className={`task-board-card__due maintenance-status--${item.status}`}>{maintenancePlanStatusLabel[item.status]}</span>
+        </span>
+      </>}
+    /> : null}
+    {view !== "month" ? <section className="card card--table maintenance-schedule">
       <CardHeader
         headingId="maintenance-schedule-title"
         meta={`${formatRussianCount(items.length, ["период", "периода", "периодов"])} · задач создано: ${generatedCount} · ${formatRussianCount(organizations, ["организация", "организации", "организаций"])}`}
@@ -417,6 +459,6 @@ export function MaintenancePlanPage() {
       </article>;
       }) : null}
       {!loading && data?.groups.length === 0 ? <p className="maintenance-empty">На {year} год периоды ТО ещё не заданы. Нажмите «Настроить план», чтобы добавить обслуживание приборов.</p> : null}
-    </section>
+    </section> : null}
   </div>;
 }

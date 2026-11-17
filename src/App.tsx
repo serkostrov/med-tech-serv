@@ -121,6 +121,7 @@ import {
 } from "./ui.js";
 import { formatDisplayDate, parseDisplayTime, todayIsoDate } from "./date-format.js";
 import { drillPeriodText, type TaskDrillDown } from "./task-drilldown.js";
+import { StatusBoard, localStatusPage, type StatusBoardColumn } from "./StatusBoard.js";
 import { EngineerCalendar } from "./EngineerCalendar.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { toTechnicalCode } from "./slug.js";
@@ -2684,8 +2685,15 @@ function EquipmentCardLoading({ record, onBack }: { readonly record?: Pick<Equip
   </div>;
 }
 
+/** Цвет колонки статуса прибора на доске; новые статусы из справочника — нейтральные. */
+const EQUIPMENT_STATUS_COLORS: Readonly<Record<string, string>> = {
+  in_use: "#1f8a52", needs_repair: "#e07a2e", in_repair: "#2f86c4", written_off: "#8a9aa3"
+};
+
 function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engineer?: boolean; readonly initialEquipmentId?: string | undefined }) {
   const { pageSize, setPageSize } = usePageSize(engineer ? "my-equipment" : "equipment");
+  // Доска по статусам (просьба 17.11); у инженера — только список своих приборов.
+  const [registryView, setRegistryView] = useState<"board" | "list">(engineer ? "list" : "board");
   const [records, setRecords] = useState<readonly EquipmentUiRecord[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
@@ -2967,6 +2975,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
         </>}
         description={engineer ? "Приборы с ваших заявок и их история обслуживания." : "Найдите прибор, откройте паспорт или добавьте новый."}
         title={engineer ? "Мои приборы" : "Приборы"}
+        {...(engineer ? {} : { titleAside: <ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать приборы" onValueChange={setRegistryView} value={registryView} /> })}
       />
       {!engineer ? <EquipmentPassportForm key={editingId ?? "new"} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
       {!engineer && siteChangeRecord ? <EquipmentAssignmentForm kind="site_change" onApply={async (change) => { await applyAssignmentTo(siteChangeRecord, change); setSiteChangeId(null); }} onOpenChange={(open) => { if (!open) setSiteChangeId(null); }} open options={sites} record={siteChangeRecord} /> : null}
@@ -2983,7 +2992,31 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
           {filteredEmpty ? <Button onClick={() => { setFilters(EMPTY_EQUIPMENT_REGISTRY_FILTERS); setPageIndex(0); }} variant="ghost">Сбросить</Button> : null}
         </div>
       </section>
-      <section className="card card--table" aria-labelledby="equipment-table-title">
+      {registryView === "board" ? <StatusBoard<EquipmentUiRecord>
+        columns={references.statuses.map((status) => ({ key: status.code, title: status.name, color: EQUIPMENT_STATUS_COLORS[status.code] ?? "#5f7f99", outside: Boolean(filters.status) && filters.status !== status.code }))}
+        emptyText="Приборов с этим статусом нет."
+        itemKey={(record) => record.id}
+        label="Доска приборов"
+        load={async (status, offset, limit) => {
+          const page = await m2Api.equipmentPage({
+            limit, offset, status,
+            ...(filters.search ? { search: filters.search } : {}),
+            ...(filters.manufacturer ? { manufacturer: filters.manufacturer } : {}),
+            ...(filters.site ? { site: filters.site } : {}),
+            ...(filters.payer ? { payer: filters.payer } : {})
+          });
+          return { items: page.items.map((item) => equipmentUiRecord(item)), total: page.total };
+        }}
+        onOpen={(record) => void openCard(record.id)}
+        queryKey={JSON.stringify(filters)}
+        renderCard={(record) => <>
+          <span className="task-board-card__top">S/N {record.serial}</span>
+          <strong>{record.manufacturer} {record.model}</strong>
+          <small>{record.place}</small>
+          {record.payer !== "Не указан" ? <span className="task-board-card__foot"><span className="task-board-card__eng">{record.payer}</span></span> : null}
+        </>}
+      /> : null}
+      {registryView === "list" ? <section className="card card--table" aria-labelledby="equipment-table-title">
         <CardHeader headingId="equipment-table-title" {...(initialLoading ? {} : { meta: formatRussianCount(total, ["прибор", "прибора", "приборов"]) })} title={engineer ? "Приборы с ваших задач" : "Все приборы"} />
         {initialLoading
           ? <ResourceState description="Подождите, список приборов сейчас появится." status="loading" title="Загружаем приборы" />
@@ -3007,7 +3040,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
             </div>
             <RegistryPagination ariaLabel="Страницы списка приборов" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
           </>}
-      </section>
+      </section> : null}
     </>
   );
 }
@@ -3361,7 +3394,16 @@ function CustomersPage() {
   </>;
 }
 
+/** Колонки доски счетов: жизнь счёта слева направо (просьба 17.11 — счета по статусам). */
+const INVOICE_BOARD_COLUMNS: readonly StatusBoardColumn[] = [
+  { key: "draft", title: "Черновик", color: "#e07a2e" },
+  { key: "issued", title: "Выставлен", color: "#7c5cc4" },
+  { key: "transferred_to_1c", title: "Передан в 1С", color: "#1f8a52" },
+  { key: "cancelled", title: "Отменён", color: "#8a9aa3" }
+];
+
 function FinancePage() {
+  const [invoiceView, setInvoiceView] = useState<"board" | "list">("board");
   const [invoices, setInvoices] = useState<readonly InvoiceApiRecord[]>([]);
   const [tasks, setTasks] = useState<readonly TaskApiRecord[]>([]);
   const [equipment, setEquipment] = useState<readonly EquipmentApiRecord[]>([]);
@@ -3459,7 +3501,7 @@ function FinancePage() {
       onChanged={() => void reloadInvoiceTasks().catch(() => undefined)}
     />;
   }
-  return <><PageIntro actions={<Button icon="plus" onClick={openForm}>Выставить счёт</Button>} description="Выберите закрытые задачи — плательщик подставится из прибора. Если нужен другой, укажите причину." title="Счета" />
+  return <><PageIntro actions={<Button icon="plus" onClick={openForm}>Выставить счёт</Button>} description="Выберите закрытые задачи — плательщик подставится из прибора. Если нужен другой, укажите причину." title="Счета" titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать счета" onValueChange={setInvoiceView} value={invoiceView} />} />
     <DialogForm busy={saving} description="Счёт создастся по выбранным закрытым задачам. Плательщик подставится из прибора." error={formError} onOpenChange={(open) => { if (open) openForm(); else closeForm(); }} onSubmit={submit} open={formOpen} submitDisabled={!canCreateInvoice} submitLabel="Создать счёт" title="Новый счёт">
       <div className="invoice-form">
         <div className="invoice-form__section">
@@ -3487,7 +3529,22 @@ function FinancePage() {
       <MetricCard detail="ожидают передачи" icon="mail" label="Выставлено" tone="purple" value={String(invoices.filter((item) => item.status === "issued").length)} />
       <MetricCard detail="передано в 1С" icon="check" label="Закрыто" tone="green" value={String(invoices.filter((item) => item.status === "transferred_to_1c").length)} />
     </div>
-    <section className="card card--table"><CardHeader meta={formatRussianCount(invoices.length, ["документ", "документа", "документов"])} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th>{canCancelInvoices ? <th scope="col"><span className="sr-only">Действия</span></th> : null}</tr></thead><tbody>{invoices.map((invoice) => <tr className="data-table__selectable" key={invoice.id} onClick={() => setOpenInvoice(invoice)}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td>{canCancelInvoices ? <td onClick={(event) => event.stopPropagation()}>{invoice.status === "draft" || invoice.status === "issued" ? <div className="table-actions"><Button className="button--compact" onClick={() => setCancelling(invoice)} variant="ghost">Отменить счёт</Button></div> : null}</td> : null}</tr>)}</tbody></table></div>}</section>
+    {invoiceView === "board" ? <StatusBoard<InvoiceApiRecord>
+      columns={INVOICE_BOARD_COLUMNS}
+      emptyText="Счетов в этом статусе нет."
+      itemKey={(invoice) => invoice.id}
+      label="Доска счетов"
+      load={async (status, offset, limit) => localStatusPage(invoices, (invoice) => invoice.status === status, offset, limit)}
+      onOpen={(invoice) => setOpenInvoice(invoice)}
+      queryKey={`${loading ? "loading" : "ready"}:${invoices.map((invoice) => `${invoice.id}=${invoice.status}`).join(",")}`}
+      renderCard={(invoice) => <>
+        <span className="task-board-card__top">{invoice.number}</span>
+        <strong>{invoice.payer.name}</strong>
+        <small>{invoice.taskIds.length ? `Задачи: ${invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}` : "Без задач"}</small>
+        <span className="task-board-card__foot"><span className="task-board-card__due">от {formatTaskDate(invoice.createdAt)}</span></span>
+      </>}
+    /> : null}
+    {invoiceView === "list" ? <section className="card card--table"><CardHeader meta={formatRussianCount(invoices.length, ["документ", "документа", "документов"])} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th>{canCancelInvoices ? <th scope="col"><span className="sr-only">Действия</span></th> : null}</tr></thead><tbody>{invoices.map((invoice) => <tr className="data-table__selectable" key={invoice.id} onClick={() => setOpenInvoice(invoice)}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td>{canCancelInvoices ? <td onClick={(event) => event.stopPropagation()}>{invoice.status === "draft" || invoice.status === "issued" ? <div className="table-actions"><Button className="button--compact" onClick={() => setCancelling(invoice)} variant="ghost">Отменить счёт</Button></div> : null}</td> : null}</tr>)}</tbody></table></div>}</section> : null}
     {/* Счёт не удаляют, а отменяют (0024): он остаётся в списке, задачи можно выставить снова. */}
     <ConfirmationDialog cancelLabel="Не отменять" confirmLabel="Отменить счёт" description={cancelling ? <>Счёт {cancelling.number} останется в списке со статусом «Отменён», его задачи можно будет выставить в новый счёт. Вернуть отменённый счёт в работу нельзя.</> : null} onConfirm={async () => { if (!cancelling) return; await m2Api.cancelInvoice(cancelling.id); toast.success(`Счёт ${cancelling.number} отменён`); void reloadInvoiceTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Счёт отменён, но список не обновился. Обновите страницу.")); }} onOpenChange={(open) => { if (!open) setCancelling(null); }} open={Boolean(cancelling)} title={cancelling ? `Отменить счёт ${cancelling.number}?` : "Отменить счёт?"} /></>;
 }
