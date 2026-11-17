@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey } from "./access-admin.js";
+import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey, roleDisableText } from "./access-admin.js";
 
 describe("роль в форме сотрудника", () => {
   it("у нового сотрудника роль не выбрана", () => {
@@ -69,3 +69,23 @@ describe("права роли", () => {
     assert.equal(canChangeRolePermissions("admin", undefined), true);
   });
 });
+
+describe("отключение роли называет, кто потеряет вход (аудит 17.11, № 90)", () => {
+  const employees = [
+    { fullName: "Соколов Денис Олегович", isActive: true, role: "admin", accessRoleKey: "sysadmin" },
+    { fullName: "Морозова Елена", isActive: true, role: "coordinator", accessRoleKey: "coordinator" },
+    { fullName: "Петров Иван", isActive: true, role: "coordinator", accessRoleKey: "coordinator" },
+    { fullName: "Уволенный", isActive: false, role: "coordinator", accessRoleKey: "coordinator" }
+  ];
+  it("имя единственного сотрудника роли", () => {
+    assert.equal(roleDisableText("Системный администратор", "sysadmin", employees),
+      "Системный администратор: Соколов Денис Олегович сразу потеряет вход. Если доступ нужен, сначала переведите сотрудника на другую роль в «Сотрудниках».");
+  });
+  it("число и имена, неактивных не считает", () => {
+    assert.match(roleDisableText("Координатор", "coordinator", employees), /^Координатор: 2 сотрудника сразу потеряют вход — Морозова Елена, Петров Иван\./u);
+  });
+  it("роль без людей", () => {
+    assert.match(roleDisableText("Склад", "warehouse", employees), /никто вход не потеряет/u);
+  });
+});
+

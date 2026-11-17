@@ -1,3 +1,4 @@
+import { formatRussianCount } from "./equipment-changes.js";
 /** Правила формы «Сотрудники и роли», которые не должны зависеть от порядка строк в списке. */
 
 export interface EmployeeRoleSource {
@@ -87,3 +88,24 @@ export function canChangeRolePermissions(roleKey: string, viewerRoleKey: string 
 export function activeAdminCount(employees: readonly DisableCandidate[]): number {
   return employees.filter((employee) => employee.isActive && employee.role === "admin").length;
 }
+
+/**
+ * Что сказать перед отключением роли: кто именно потеряет вход (аудит 17.11, № 90).
+ * Роль отключают одним нажатием, а без неё сотрудники роли не входят вовсе —
+ * человек должен видеть имена, а не общее «повлияет на вход».
+ */
+export function roleDisableText(
+  roleLabel: string,
+  roleKey: string,
+  employees: readonly { readonly fullName: string; readonly isActive: boolean; readonly role: string; readonly accessRoleKey?: string | null }[]
+): string {
+  const affected = employees.filter((employee) => employee.isActive && (employee.accessRoleKey ?? employee.role) === roleKey);
+  if (affected.length === 0) return `${roleLabel}: активных сотрудников с этой ролью нет, никто вход не потеряет.`;
+  if (affected.length === 1) {
+    return `${roleLabel}: ${affected[0]?.fullName ?? "сотрудник"} сразу потеряет вход. Если доступ нужен, сначала переведите сотрудника на другую роль в «Сотрудниках».`;
+  }
+  const names = affected.slice(0, 5).map((employee) => employee.fullName).join(", ");
+  const more = affected.length > 5 ? ` и ещё ${affected.length - 5}` : "";
+  return `${roleLabel}: ${formatRussianCount(affected.length, ["сотрудник", "сотрудника", "сотрудников"])} сразу потеряют вход — ${names}${more}. Если доступ им нужен, сначала переведите их на другую роль в «Сотрудниках».`;
+}
+

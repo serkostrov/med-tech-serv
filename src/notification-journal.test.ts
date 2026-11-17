@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { canReadWholeNotificationJournal, visibleNotificationJournal } from "./notification-journal.js";
+import { notificationTemplateProblem, canReadWholeNotificationJournal, visibleNotificationJournal } from "./notification-journal.js";
 
 const journal = [
   { id: "n1", recipientUserId: undefined, recipientAddress: "a.smirnova@gkb1.example" },
@@ -38,3 +38,18 @@ describe("журнал уведомлений", () => {
     assert.deepEqual(visibleNotificationJournal(journal, { id: "u-nobody" }), []);
   });
 });
+
+describe("шаблон письма проверяется до сохранения (аудит 17.11, № 50)", () => {
+  const allowed = ["taskNumber", "taskTitle"];
+  it("без темы не сохраняется", () => {
+    assert.match(notificationTemplateProblem({ subject: " ", body: "Текст", allowedVariables: allowed }), /тему письма/u);
+  });
+  it("неизвестное поле называется по имени", () => {
+    assert.equal(notificationTemplateProblem({ subject: "Задача {{taskNumber}}", body: "Привет {{foo}} и {{ taskTitle }}", allowedVariables: allowed }),
+      "Таких полей система не знает: {{foo}}. Их получатель увидит как есть. Можно вставить: {{taskNumber}}, {{taskTitle}}");
+  });
+  it("знакомые поля проходят", () => {
+    assert.equal(notificationTemplateProblem({ subject: "Задача {{taskNumber}}", body: "{{taskTitle}}", allowedVariables: allowed }), "");
+  });
+});
+

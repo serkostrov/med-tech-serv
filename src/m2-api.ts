@@ -2099,7 +2099,7 @@ export class M2ApiClient {
   }
 
   public async notificationTemplates(): Promise<readonly NotificationTemplateResponse[]> {
-    const { data, error } = await this.db().from("notification_templates").select("code, name, subject_template, body_template, is_active, updated_at").order("name");
+    const { data, error } = await this.db().from("notification_templates").select("code, name, subject_template, body_template, allowed_variables, is_active, updated_at").order("name");
     throwIfError(error);
     return (data ?? []).map((item) => {
       const row = asRow(item);
@@ -2108,7 +2108,7 @@ export class M2ApiClient {
         name: text(row, "name"),
         subjectTemplate: text(row, "subject_template"),
         bodyTemplate: text(row, "body_template"),
-        allowedVariables: [],
+        allowedVariables: Array.isArray(row.allowed_variables) ? row.allowed_variables.map(String) : [],
         isActive: row.is_active !== false,
         updatedAt: iso(row.updated_at)
       };
@@ -2120,7 +2120,7 @@ export class M2ApiClient {
       subject_template: input.subjectTemplate,
       body_template: input.bodyTemplate,
       is_active: input.isActive
-    }).eq("code", code).select("code, name, subject_template, body_template, is_active, updated_at").single();
+    }).eq("code", code).select("code, name, subject_template, body_template, allowed_variables, is_active, updated_at").single();
     throwIfError(error);
     const row = asRow(data);
     return {
@@ -2128,7 +2128,7 @@ export class M2ApiClient {
       name: text(row, "name"),
       subjectTemplate: text(row, "subject_template"),
       bodyTemplate: text(row, "body_template"),
-      allowedVariables: [],
+      allowedVariables: Array.isArray(row.allowed_variables) ? row.allowed_variables.map(String) : [],
       isActive: row.is_active !== false,
       updatedAt: iso(row.updated_at)
     };
