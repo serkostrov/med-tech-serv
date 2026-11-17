@@ -1,4 +1,5 @@
 import React, { useState, type DragEvent } from "react";
+import { BoardScroller } from "./BoardScroller.js";
 import type { StockReservationRecord, StockReservationStatus } from "./m2-api.js";
 import { toast } from "./ui.js";
 import {
@@ -56,7 +57,7 @@ export function ReservationBoard({ items, canWrite, busyId, loading, onAction }:
     onAction(reservation, decision.action);
   };
 
-  return <div className="task-board reservation-board" aria-label="Доска резервов">{RESERVATION_BOARD_STATUSES.map((status) => {
+  return <BoardScroller><div className="task-board reservation-board" aria-label="Доска резервов">{RESERVATION_BOARD_STATUSES.map((status) => {
     const cards = items.filter((item) => item.status === status);
     // Колонка не примет перетаскиваемую карточку: показываем её бледной, как на доске задач.
     const blocked = dragged !== undefined && dragged.status !== status && reservationDropDecision(dragged, status).kind === "no";
@@ -100,5 +101,5 @@ export function ReservationBoard({ items, canWrite, busyId, loading, onAction }:
         {!loading && cards.length === 0 ? <p className="task-board__empty">В этом состоянии резервов нет.</p> : null}
       </div>
     </section>;
-  })}</div>;
+  })}</div></BoardScroller>;
 }

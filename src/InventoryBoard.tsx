@@ -1,4 +1,5 @@
 import React from "react";
+import { BoardScroller } from "./BoardScroller.js";
 import type { InventoryPartRecord } from "./m2-api.js";
 import { partQuantityText } from "./TaskReservations.js";
 import { conditionTotalsText, conditionTotalsTitle } from "./stock-movements.js";
@@ -46,7 +47,7 @@ export function InventoryBoard({ parts, loading, onOpen }: {
   /** Открыть карточку позиции: остатки по состояниям, артикулы поставщиков и история движений. */
   readonly onOpen?: (part: InventoryPartRecord) => void;
 }) {
-  return <div className="task-board inventory-board" aria-label="Доска склада">{STOCK_GROUPS.map((group) => {
+  return <BoardScroller><div className="task-board inventory-board" aria-label="Доска склада">{STOCK_GROUPS.map((group) => {
     const cards = parts.filter((part) => inventoryStockGroup(part) === group.id);
     return <section className={`task-board__column task-board__column--stock-${group.id}`} key={group.id}>
       <header>
@@ -76,5 +77,5 @@ export function InventoryBoard({ parts, loading, onOpen }: {
         {!loading && cards.length === 0 ? <p className="task-board__empty">Таких позиций нет.</p> : null}
       </div>
     </section>;
-  })}</div>;
+  })}</div></BoardScroller>;
 }

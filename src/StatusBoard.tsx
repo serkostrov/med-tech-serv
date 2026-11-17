@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState, type ReactNode } from "react";
+import { BoardScroller } from "./BoardScroller.js";
 
 /**
  * Доска по статусам для разделов без перетаскивания: счета, приборы, план ТО по месяцам.
@@ -84,7 +85,7 @@ export function StatusBoard<Item>({ columns, load, queryKey, itemKey, renderCard
     }
   };
 
-  return <div aria-label={label} className="task-board status-board" ref={boardRef}>{columns.map((column) => {
+  return <BoardScroller><div aria-label={label} className="task-board status-board" ref={boardRef}>{columns.map((column) => {
     const page = state[column.key];
     const items = page?.items ?? [];
     const total = page?.total ?? 0;
@@ -101,7 +102,7 @@ export function StatusBoard<Item>({ columns, load, queryKey, itemKey, renderCard
         {page && !page.loading && items.length < total ? <button className="task-board__more" onClick={() => void loadMore(column.key)} type="button">Показать ещё {Math.min(pageSize, total - items.length)}</button> : null}
       </div>
     </section>;
-  })}</div>;
+  })}</div></BoardScroller>;
 }
 
 /** Локальный список как страницы колонок: для счетов, которые и так загружены целиком. */

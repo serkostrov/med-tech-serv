@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type UIEvent } from "react";
+import { BoardScroller } from "./BoardScroller.js";
 import type { EquipmentApiRecord, ReferenceCatalogValue, TaskApiRecord } from "./m2-api.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES, TASK_STATUS_TRANSITIONS } from "./domain/task-status.js";
 import { toast, type StatusTone } from "./ui.js";
@@ -607,7 +608,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
     </article>;
   };
 
-  return <div className="task-board" aria-label="Доска задач">{columns.map((status) => {
+  return <BoardScroller><div className="task-board" aria-label="Доска задач">{columns.map((status) => {
     const code = status.code ?? status.id;
     const items = itemsFor(code);
     const total = totalFor(code);
@@ -649,5 +650,5 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
         {!page?.loading && items.length < total ? <button className="task-board__more" onClick={() => void loadMore(code)} type="button">Показать ещё {Math.min(COLUMN_PAGE_SIZE, total - items.length)}</button> : null}
       </div>
     </section>;
-  })}</div>;
+  })}</div></BoardScroller>;
 }
