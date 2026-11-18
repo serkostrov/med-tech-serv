@@ -9631,6 +9631,11 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .dialog-form .multi-select__label, .work-types-picker .multi-select__label { color: var(--color-ink); font-size: 12px; font-weight: 600; }
 .dialog-form .multi-select__trigger { min-height: var(--control-height); font-size: 13px; border-radius: var(--radius-md); background: #fff; }
 .dialog-form .multi-select__option input[type="checkbox"] { width: 16px; height: 16px; min-height: 0; padding: 0; }
+/* В окне строка списка — та же, что в фильтрах: галочка слева от названия (общее правило «label в форме» делало их столбиком). */
+.dialog-form label.multi-select__option { display: flex; align-items: center; gap: 8px; padding: 7px 8px; font-size: 13px; font-weight: 500; }
+/* В окне список раскрывается в самом окне, а не поверх его края: иначе нижние строки обрезаются. */
+.dialog-form .multi-select__panel { position: static; width: 100%; margin-top: 6px; box-shadow: none; }
+.dialog-form .multi-select__options { max-height: 260px; overflow-y: auto; }
 
 /* Ответ клиенту: скрепка внизу, как в почте (18.11). */
 .mail-compose > .mail-compose__attached { padding: 0 16px 12px; }
