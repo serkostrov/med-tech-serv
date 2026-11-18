@@ -348,6 +348,22 @@ SELECT pg_temp.expect_denied('DELETE FROM public.login_events', 'запись о
 SELECT pg_temp.expect_denied('TRUNCATE public.login_events', 'журнал входов не очистить');
 SELECT pg_temp.act_as_nobody();
 
+-- 0074: журнал входов — только руководителю и администратору. Координатор журнал
+-- изменений видит, а журнал входов нет: ни функцией, ни строками таблицы.
+SELECT pg_temp.act_as(pg_temp.uid('coordinator'));
+SELECT pg_temp.check(public.app_has_permission('audit.read'), 'у координатора право «Просмотр аудита» осталось');
+SELECT pg_temp.check((SELECT count(*) FROM audit_log_journal) > 0, 'координатор видит журнал изменений');
+SELECT pg_temp.check(NOT public.app_can_read_login_journal(), 'координатору журнал входов закрыт');
+SELECT pg_temp.check((SELECT count(*) FROM public.login_events) = 0, 'координатор не видит строк журнала входов');
+SELECT pg_temp.expect_denied('SELECT public.login_journal()', 'координатор не читает журнал входов функцией');
+SELECT pg_temp.act_as_nobody();
+SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
+SELECT pg_temp.check(public.app_can_read_login_journal() AND (SELECT count(*) FROM public.login_events) > 0, 'руководитель видит журнал входов');
+SELECT pg_temp.act_as_nobody();
+SELECT pg_temp.act_as(pg_temp.uid('sysadmin'));
+SELECT pg_temp.check(public.app_can_read_login_journal() AND (public.login_journal() -> 'total')::bigint > 0, 'системный администратор видит журнал входов');
+SELECT pg_temp.act_as_nobody();
+
 -- ---------------------------------------------------------------- Журнал входов: чтение
 SELECT pg_temp.act_as(pg_temp.uid('supervisor'));
 SELECT pg_temp.check((public.login_journal() -> 'total')::bigint = (SELECT count(*) FROM login_events),

@@ -21,6 +21,7 @@ import {
   auditActionLabel,
   auditActorLabel,
   auditChangeLines,
+  canReadLoginJournal,
   auditEntityTitle,
   auditChangeSummary,
   auditEntityLabel,
@@ -273,6 +274,11 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
  */
 export function JournalsPage() {
   const [section, setSection] = useState<"changes" | "logins">("changes");
+  // Вкладка «Входы» — только руководителю и администратору (0074); базовую роль берём из сессии.
+  const [loginsAllowed, setLoginsAllowed] = useState(false);
+  useEffect(() => {
+    void m2Api.session().then((session) => setLoginsAllowed(canReadLoginJournal(session.role))).catch(() => setLoginsAllowed(false));
+  }, []);
   const [people, setPeople] = useState<readonly JournalPerson[]>([]);
   useEffect(() => {
     // Список сотрудников нужен фильтру «кто»: без него по человеку отбирать нечем.
@@ -283,12 +289,12 @@ export function JournalsPage() {
   return <>
     <PageIntro title="Журналы" />
     <PageTabs<"changes" | "logins">
-      items={[{ value: "changes", label: "Изменения" }, { value: "logins", label: "Входы" }]}
+      items={loginsAllowed ? [{ value: "changes", label: "Изменения" }, { value: "logins", label: "Входы" }] : [{ value: "changes", label: "Изменения" }]}
       label="Какой журнал смотреть"
       onValueChange={setSection}
-      value={section}
+      value={loginsAllowed ? section : "changes"}
     />
-    {section === "changes" ? <ChangesJournal people={people} /> : <LoginsJournal people={people} />}
+    {section === "logins" && loginsAllowed ? <LoginsJournal people={people} /> : <ChangesJournal people={people} />}
   </>;
 }
 

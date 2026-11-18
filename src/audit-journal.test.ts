@@ -236,3 +236,18 @@ describe("журнал: значения словами (аудит 17.11, № 7
   });
 });
 
+describe("журнал входов — руководителю и администратору (0074)", () => {
+  it("вкладку «Входы» видят только базовые роли руководителя и администратора", async () => {
+    const { canReadLoginJournal } = await import("./audit-journal.js");
+    assert.equal(canReadLoginJournal("supervisor"), true);
+    assert.equal(canReadLoginJournal("admin"), true);
+    assert.equal(canReadLoginJournal("coordinator"), false);
+    assert.equal(canReadLoginJournal("engineer"), false);
+    assert.equal(canReadLoginJournal(undefined), false);
+    const page = await readFile(new URL("./JournalsPage.tsx", import.meta.url), "utf8");
+    assert.match(page, /canReadLoginJournal\(session\.role\)/u);
+    const migration = await readFile(new URL("../supabase/migrations/0074_login_journal_supervisor_admin.sql", import.meta.url), "utf8");
+    assert.match(migration, /IN \('admin', 'supervisor'\)/u);
+    assert.match(migration, /CREATE POLICY role_read ON public\.login_events/u);
+  });
+});

@@ -474,3 +474,14 @@ export function loginFailureReason(error: { readonly status?: number; readonly m
   if (status === undefined || status === 0 || status >= 500 || /failed to fetch|network/u.test(message)) return "service_unavailable";
   return "unknown";
 }
+
+/**
+ * Журнал входов — только руководителю и администратору (18.11, миграция 0074). Журнал
+ * изменений по-прежнему по праву «Просмотр аудита», его видит и координатор. База
+ * проверяет то же самое (app_can_read_login_journal), экран лишь не показывает вкладку.
+ */
+export const LOGIN_JOURNAL_ROLES: readonly string[] = ["admin", "supervisor"];
+
+export function canReadLoginJournal(baseRole: string | undefined | null): boolean {
+  return Boolean(baseRole) && LOGIN_JOURNAL_ROLES.includes(baseRole as string);
+}
