@@ -2637,6 +2637,15 @@ function EquipmentCard({
   const [detailTab, setDetailTab] = useState<EquipmentCardTab>(initialTab ?? "history");
   // Запчасти, которые выдавали и ставили по задачам прибора (вкладка «Запчасти»).
   const [partUsage, setPartUsage] = useState<readonly PartUsageRecord[] | null>(null);
+  // Все задачи прибора (встреча 18.11: «в карточке прибора — все его заявки, задачи, с которыми он связан»).
+  const [allTasks, setAllTasks] = useState<readonly TaskApiRecord[] | null>(null);
+  const [allTasksTotal, setAllTasksTotal] = useState(0);
+  useEffect(() => {
+    if (detailTab !== "tasks" || allTasks !== null) return;
+    void m2Api.tasksPage({ equipmentId: record.id, limit: 200, sort: "updated_desc" })
+      .then((page) => { setAllTasks(page.items); setAllTasksTotal(page.total); })
+      .catch((loadError: unknown) => { setAllTasks([]); toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить задачи прибора"); });
+  }, [detailTab, record.id]);
   // Запчасти, которые склад отметил подходящими к модели этого прибора (0073).
   const [modelParts, setModelParts] = useState<readonly PartModelLink[] | null>(null);
   useEffect(() => {
@@ -2701,6 +2710,7 @@ function EquipmentCard({
           </section>
           <PageTabs items={[
             { value: "history", label: "История", ...(readOnly ? {} : { badge: record.historyTotal }) },
+            { value: "tasks", label: "Все задачи", ...(allTasks ? { badge: allTasksTotal } : {}) },
             { value: "meters", label: "Счётчик", badge: record.meterReadingsTotal },
             { value: "files", label: "Файлы", badge: record.fileRecords.length },
             { value: "movements", label: "Перемещения", badge: siteChanges.length + payerChanges.length },
@@ -2745,6 +2755,18 @@ function EquipmentCard({
             {/* Встреча 18.11: «что это за файлы и откуда берутся». */}
             <p className="equipment-tab-hint">Документы самого прибора: паспорт, фото шильдика, инструкции, сертификаты. Их прикрепляют в паспорте — кнопка «Изменить» справа. Фото с выездов и акты хранятся в задачах: открыть задачу можно во вкладке «История».</p>
             <FileGallery emptyText={readOnly ? "К прибору пока не прикреплены файлы." : "К прибору пока не прикреплены файлы. Их можно добавить в паспорте: «Изменить»."} files={record.fileRecords} />
+          </section> : null}
+          {detailTab === "tasks" ? <section className="task-section" aria-labelledby={`equipment-all-tasks-${record.id}`}>
+            <header className="task-section__head"><h3 id={`equipment-all-tasks-${record.id}`}>Все задачи прибора</h3><span className="muted">сначала свежие</span></header>
+            {allTasks === null ? <div className="task-section__empty"><p>Загружаем задачи…</p></div> : allTasks.length === 0 ? <div className="task-section__empty"><p>Задач по этому прибору ещё не было.</p></div> : <div className="table-scroll"><table className="data-table engineer-page__table"><thead><tr><th scope="col">Задача</th><th scope="col">Инженер</th><th scope="col">Срок</th><th scope="col">Этап</th></tr></thead><tbody>
+              {allTasks.map((task) => <tr key={task.id}>
+                <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
+                <td>{task.engineerId ? <EntityLink target={{ kind: "engineer", id: task.engineerId }}>{task.engineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>
+                <td className="cell-date">{task.status === "closed" ? formatTaskDate(task.completedAt ?? task.visitDate) : task.periodTo ? `до ${formatTaskDate(task.periodTo)}` : "—"}</td>
+                <td><StatusBadge tone={TASK_STATUS_TONES[task.status] ?? "warning"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
+              </tr>)}
+            </tbody></table></div>}
+            {allTasks && allTasksTotal > allTasks.length ? <p className="muted">Показаны последние {formatRussianCount(allTasks.length, ["задача", "задачи", "задач"])} из {allTasksTotal}.</p> : null}
           </section> : null}
           {detailTab === "plan" ? <EquipmentPlanTab device={{ id: record.id, serialNumber: record.serial, manufacturer: record.manufacturer, model: record.model, status: record.status, ...(record.organization ? { organization: record.organization } : {}), ...(record.place ? { site: record.place } : {}) }} readOnly={readOnly} /> : null}
           {detailTab === "parts" ? <section className="task-section" aria-labelledby={`equipment-model-parts-${record.id}`}>
