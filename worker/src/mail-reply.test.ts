@@ -98,6 +98,53 @@ test("ответ координатора уходит с заголовками
   assert.ok(!calls.some((call) => call.text.includes("fail_task_mail_reply")));
 });
 
+const QUEUED_REPLY = {
+  id: "44444444-4444-4444-4444-444444444444",
+  to_address: "kdl@clinic.example",
+  subject: "Re: Ошибка",
+  body: "Фото после ремонта во вложении.",
+  message_id: "<reply-44444444@medtechservice>",
+  in_reply_to: "<client-1@clinic.example>",
+  reference_ids: [],
+  task_number: "З-000013"
+};
+
+test("файлы, приложенные к ответу, уходят вложениями письма", async () => {
+  const { database, calls } = fakeDatabase((text) => text.includes("claim_task_mail_replies") ? [QUEUED_REPLY]
+    : text.includes("task_mail_reply_files") ? [{ storage_key: "tasks/t/photo.jpg", file_name: "фото.jpg", content_type: "image/jpeg", byte_size: 3 }] : []);
+  const sent: Array<Omit<SmtpMessage, "fromAddress" | "fromName">> = [];
+  const files = { async get(key: string) { return key === "tasks/t/photo.jpg" ? new Uint8Array([1, 2, 3]) : undefined; } };
+  const result = await sendTaskMailReplies(database, { async send(message) { sent.push(message); } }, 20, files);
+  assert.deepEqual(result, { sent: 1, failed: 0 });
+  assert.equal(sent[0]!.attachments?.length, 1);
+  assert.equal(sent[0]!.attachments?.[0]?.fileName, "фото.jpg");
+  assert.ok(calls.some((call) => call.text.includes("mark_task_mail_reply_sent")));
+});
+
+test("файл ответа не взялся из хранилища — письмо не уходит, ответ вернётся в очередь", async () => {
+  const { database, calls } = fakeDatabase((text) => text.includes("claim_task_mail_replies") ? [QUEUED_REPLY]
+    : text.includes("task_mail_reply_files") ? [{ storage_key: "tasks/t/lost.jpg", file_name: "потерян.jpg", content_type: "image/jpeg", byte_size: 3 }] : []);
+  const sent: unknown[] = [];
+  const result = await sendTaskMailReplies(database, { async send(message) { sent.push(message); } }, 20, { async get() { return undefined; } });
+  assert.deepEqual(result, { sent: 0, failed: 1 });
+  assert.equal(sent.length, 0);
+  const fail = calls.find((call) => call.text.includes("fail_task_mail_reply"))!;
+  assert.deepEqual(fail.values, [QUEUED_REPLY.id, "reply_attachment_unavailable", true]);
+});
+
+test("база ещё без файлов ответа (до 0072) — ответ уходит как раньше", async () => {
+  const database: OutboxSqlExecutor = {
+    async executeSql(text) {
+      if (text.includes("task_mail_reply_files")) throw Object.assign(new Error("function does not exist"), { code: "42883" });
+      return { rows: text.includes("claim_task_mail_replies") ? [QUEUED_REPLY] : [] };
+    }
+  };
+  const sent: Array<Omit<SmtpMessage, "fromAddress" | "fromName">> = [];
+  const result = await sendTaskMailReplies(database, { async send(message) { sent.push(message); } });
+  assert.deepEqual(result, { sent: 1, failed: 0 });
+  assert.equal(sent[0]!.attachments, undefined);
+});
+
 test("ошибка отправки ответа сохраняется кодом, без текста SMTP", async () => {
   const { database, calls } = fakeDatabase((text) => text.includes("claim_task_mail_replies")
     ? [{

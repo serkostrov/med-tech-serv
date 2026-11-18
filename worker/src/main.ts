@@ -162,6 +162,8 @@ if (intakeSettings) {
 // настроена только под заявки (канал уведомлений e-mail выключен), ответы всё равно
 // уходят: иначе они копились бы в очереди молча.
 let taskReplySender: TaskMailReplySender | undefined;
+// Файлы, приложенные к ответу клиенту (0072), служба берёт из хранилища ключом сервиса.
+const replyFiles = supabaseFileReader(process.env);
 if (enabled.email || intakeSettings) {
   taskReplySender = mailSender({ letter: "ответ клиенту", disabled: "Ответы клиентам по задачам выключены" }, intakeSettings?.onlyTo);
 }
@@ -217,7 +219,7 @@ async function sendReplies(): Promise<void> {
     // Ответы координатора из карточки задачи: отдельно от автоответов, чтобы сбой
     // одной очереди не останавливал другую.
     if (taskReplySender) {
-      const answers = await sendTaskMailReplies(database, taskReplySender);
+      const answers = await sendTaskMailReplies(database, taskReplySender, 20, replyFiles);
       if (answers.sent || answers.failed) console.log(`Ответы клиентам: отправлено ${answers.sent}, ошибок ${answers.failed}`);
     }
   } catch (error) {
