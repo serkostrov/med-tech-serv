@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type UIEvent } from "react";
 import { BoardScroller } from "./BoardScroller.js";
 import { filterValues } from "./filter-values.js";
+import { EntityLink } from "./entity-links.js";
 import type { EquipmentApiRecord, ReferenceCatalogValue, TaskApiRecord } from "./m2-api.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES, TASK_STATUS_TRANSITIONS } from "./domain/task-status.js";
 import { toast, type StatusTone } from "./ui.js";
@@ -621,14 +622,16 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
         <span className="task-board-card__top">{task.number}{task.workModifier === "G" ? <b className="task-guarantee-mark" title="Гарантийный случай">Гарантия</b> : null}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>
         <strong>{task.title}</strong>
         <small>{[task.customer?.siteName ?? "Площадка не выбрана", task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · ${device.serialNumber}` : null].filter(Boolean).join(" · ")}</small>
-        <span className="task-board-card__foot">
-          {hideEngineer ? null : (() => {
-            const name = task.engineerName ?? engineer?.fullName;
-            return name ? <><span aria-hidden="true" className="task-board-card__ava">{initials(name)}</span><span className="task-board-card__eng" title={name}>{shortName(name)}</span></> : <><span aria-hidden="true" className="task-board-card__ava task-board-card__ava--none">?</span><span className="task-board-card__eng task-board-card__eng--none">Не назначен</span></>;
-          })()}
-          {task.periodTo ? <span className={`task-board-card__due${task.isOverdue ? " task-board-card__due--late" : ""}`}>{task.isOverdue ? "просрочена" : `до ${shortDate(task.periodTo)}`}</span> : null}
-        </span>
       </button>
+      {/* Низ карточки вне кнопки: ФИО инженера — ссылка на его страницу (встреча 18.11),
+          а кнопка в кнопке не работает. Клик мимо ссылки открывает задачу, как раньше. */}
+      <div className="task-board-card__foot task-board-card__foot--outside" onClick={() => onOpen(task.id)}>
+        {hideEngineer ? null : (() => {
+          const name = task.engineerName ?? engineer?.fullName;
+          return name ? <><span aria-hidden="true" className="task-board-card__ava">{initials(name)}</span><EntityLink className="task-board-card__eng" target={task.engineerId ? { kind: "engineer", id: task.engineerId } : undefined} title={name}>{shortName(name)}</EntityLink></> : <><span aria-hidden="true" className="task-board-card__ava task-board-card__ava--none">?</span><span className="task-board-card__eng task-board-card__eng--none">Не назначен</span></>;
+        })()}
+        {task.periodTo ? <span className={`task-board-card__due${task.isOverdue ? " task-board-card__due--late" : ""}`}>{task.isOverdue ? "просрочена" : `до ${shortDate(task.periodTo)}`}</span> : null}
+      </div>
     </article>;
   };
 

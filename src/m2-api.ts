@@ -457,6 +457,16 @@ export interface PartUsageRecord {
   readonly date: string;
 }
 
+/** Запчасть подходит к модели прибора (0073): отмечает склад на странице запчасти. */
+export interface PartModelLink {
+  readonly partId: string;
+  readonly modelId: string;
+  readonly modelName: string;
+  readonly manufacturer?: string;
+  readonly articleNumber?: string;
+  readonly partName?: string;
+}
+
 /** Движение по позиции склада из истории (функция inventory_part_movements, миграция 0048). */
 export interface StockMovementRecord {
   readonly id: string;
@@ -2420,27 +2430,26 @@ export class M2ApiClient {
   } = {}): Promise<ApiPage<EquipmentApiRecord>> {
     const limit = query.limit ?? 50;
     const offset = query.offset ?? 0;
-    let siteId: string | undefined;
-    let payerId: string | undefined;
-    let manufacturerId: string | undefined;
-    if (query.site) {
-      siteId = await this.resolveFilterId("sites", query.site);
-      if (!siteId) return paged([], 0, limit, offset);
-    }
-    if (query.payer) {
-      payerId = await this.resolveFilterId("payers", query.payer);
-      if (!payerId) return paged([], 0, limit, offset);
-    }
-    if (query.manufacturer) {
-      manufacturerId = await this.resolveFilterId("manufacturers", query.manufacturer);
-      if (!manufacturerId) return paged([], 0, limit, offset);
-    }
+    // Фильтры с несколькими значениями (встреча 18.11): строка через запятую, каждое — id или название.
+    const resolveAll = async (table: "manufacturers" | "sites" | "payers", raw: string | undefined): Promise<readonly string[] | null | undefined> => {
+      const values = filterValues(raw);
+      if (values.length === 0) return undefined;
+      const ids = (await Promise.all(values.map((value) => this.resolveFilterId(table, value)))).filter((id): id is string => Boolean(id));
+      return ids.length ? [...new Set(ids)] : null;
+    };
+    const [siteIds, payerIds, manufacturerIds] = await Promise.all([resolveAll("sites", query.site), resolveAll("payers", query.payer), resolveAll("manufacturers", query.manufacturer)]);
+    if (siteIds === null || payerIds === null || manufacturerIds === null) return paged([], 0, limit, offset);
+    const statuses = filterValues(query.status);
     const pageRequest = (source: "equipment" | "equipment_search") => {
       let request = this.db().from(source).select(EQUIPMENT_SELECT, { count: "exact" }).order("serial_number").range(offset, offset + limit - 1);
-      if (query.status) request = request.eq("status_code", query.status);
-      if (siteId) request = request.eq("current_site_id", siteId);
-      if (payerId) request = request.eq("current_payer_id", payerId);
-      if (manufacturerId) request = request.eq("manufacturer_id", manufacturerId);
+      const oneOrMany = (column: string, values: readonly string[] | undefined) => {
+        if (!values?.length) return;
+        request = values.length === 1 ? request.eq(column, values[0]!) : request.in(column, [...values]);
+      };
+      oneOrMany("status_code", statuses);
+      oneOrMany("current_site_id", siteIds);
+      oneOrMany("current_payer_id", payerIds);
+      oneOrMany("manufacturer_id", manufacturerIds);
       return request;
     };
     const tokens = searchTokens(query.search);
@@ -4794,6 +4803,61 @@ export class M2ApiClient {
       rows.push(...chunk);
     }
     return rows;
+  }
+
+  /** Таблицы 0073 нет в базе: привязки к моделям пусты, изменить их нельзя. */
+  private partModelsAvailable = true;
+
+  private partModelRows(rows: readonly unknown[]): PartModelLink[] {
+    return rows.map((item) => {
+      const row = asRow(item);
+      const model = related(row, "model");
+      const part = related(row, "part");
+      return {
+        partId: text(row, "part_id"),
+        modelId: text(row, "model_id"),
+        modelName: optionalText(model, "name") ?? "Модель",
+        ...(optionalText(related(model, "maker"), "name") ? { manufacturer: optionalText(related(model, "maker"), "name") } : {}),
+        ...(optionalText(part, "article_number") ? { articleNumber: optionalText(part, "article_number") } : {}),
+        ...(optionalText(part, "name") ? { partName: optionalText(part, "name") } : {})
+      };
+    });
+  }
+
+  private async partModelQuery(filter: { readonly partId?: string; readonly modelId?: string }): Promise<PartModelLink[]> {
+    if (!this.partModelsAvailable) return [];
+    let request = this.db().from("part_equipment_models").select("part_id, model_id, model:equipment_models(name, maker:manufacturers(name)), part:parts(article_number, name)");
+    if (filter.partId) request = request.eq("part_id", filter.partId);
+    if (filter.modelId) request = request.eq("model_id", filter.modelId);
+    const { data, error } = await request.limit(500);
+    if (error && (isMissingSchemaObject(error, "part_equipment_models") || /part_equipment_models/u.test(error.message ?? ""))) {
+      this.partModelsAvailable = false;
+      return [];
+    }
+    throwIfError(error, "Не получилось загрузить, к каким моделям подходит запчасть");
+    return this.partModelRows(data ?? []).sort((left, right) => `${left.manufacturer ?? ""} ${left.modelName}`.localeCompare(`${right.manufacturer ?? ""} ${right.modelName}`, "ru"));
+  }
+
+  /** К каким моделям приборов подходит запчасть (0073). */
+  public async partModels(partId: string): Promise<readonly PartModelLink[]> {
+    return this.partModelQuery({ partId });
+  }
+
+  /** Какие запчасти подходят к модели прибора (0073): вкладка «Запчасти» в карточке прибора. */
+  public async modelParts(modelId: string): Promise<readonly PartModelLink[]> {
+    return this.partModelQuery({ modelId });
+  }
+
+  public async addPartModel(partId: string, modelId: string): Promise<void> {
+    if (!this.partModelsAvailable) throw new M2ApiError(501, "Привязка к моделям заработает после обновления базы на сервере");
+    const { error } = await this.db().from("part_equipment_models").insert({ part_id: partId, model_id: modelId });
+    if (error && (error as { readonly code?: string }).code === "23505") throw new M2ApiError(409, "Эта модель уже отмечена");
+    throwIfError(error, "Не получилось отметить модель");
+  }
+
+  public async removePartModel(partId: string, modelId: string): Promise<void> {
+    const { error } = await this.db().from("part_equipment_models").delete().eq("part_id", partId).eq("model_id", modelId);
+    throwIfError(error, "Не получилось убрать модель");
   }
 
   /** Одна позиция склада: страница запчасти, открытая ссылкой (встреча 18.11). */

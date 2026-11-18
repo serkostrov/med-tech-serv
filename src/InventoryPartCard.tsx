@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { m2Api, type InventoryPartRecord, type PartAliasRecord, type PartUsageRecord, type StockMovementRecord, type StockReservationRecord } from "./m2-api.js";
+import { m2Api, type InventoryPartRecord, type PartAliasRecord, type PartModelLink, type PartUsageRecord, type StockMovementRecord, type StockReservationRecord } from "./m2-api.js";
 import { Button, Dialog, EntityDetailToolbar, IconButton, Notice, PageTabs, ResourceState, Select, StatusBadge, toast } from "./ui.js";
 import { EntityLink } from "./entity-links.js";
 import { formatDisplayDate } from "./date-format.js";
@@ -98,6 +98,34 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
     void m2Api.partEquipmentUsage(partId).then(setUsage).catch(() => setUsage([]));
   }, [partId, Boolean(asPage)]);
   const usageByEquipment = useMemo(() => partUsageByEquipment(usage ?? []), [usage]);
+  // К каким моделям подходит (0073): отмечает склад, видно и в карточке прибора.
+  const [models, setModels] = useState<readonly PartModelLink[] | null>(null);
+  const [modelChoices, setModelChoices] = useState<readonly { readonly id: string; readonly label: string }[]>([]);
+  const [modelDraft, setModelDraft] = useState("");
+  const [modelBusy, setModelBusy] = useState(false);
+  const loadModels = async () => {
+    if (!partId) return;
+    try { setModels(await m2Api.partModels(partId)); } catch (loadError) { setModels([]); toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить модели"); }
+  };
+  useEffect(() => {
+    if (!asPage || !partId) return;
+    void loadModels();
+    if (canWrite) void m2Api.passportReferences().then((refs) => setModelChoices(refs.models.map((model) => ({ id: model.id, label: `${refs.manufacturers.find((maker) => maker.id === model.manufacturerId)?.name ?? ""} ${model.name}`.trim() })).sort((left, right) => left.label.localeCompare(right.label, "ru")))).catch(() => setModelChoices([]));
+  }, [partId, Boolean(asPage), canWrite]);
+  const addModel = async () => {
+    if (!modelDraft || !partId) return;
+    setModelBusy(true);
+    try { await m2Api.addPartModel(partId, modelDraft); setModelDraft(""); await loadModels(); }
+    catch (addError) { toast.error(addError instanceof Error ? addError.message : "Не получилось отметить модель"); }
+    finally { setModelBusy(false); }
+  };
+  const removeModel = async (modelId: string) => {
+    if (!partId) return;
+    setModelBusy(true);
+    try { await m2Api.removePartModel(partId, modelId); await loadModels(); }
+    catch (removeError) { toast.error(removeError instanceof Error ? removeError.message : "Не получилось убрать модель"); }
+    finally { setModelBusy(false); }
+  };
 
   const loadMovements = async (offset = 0) => {
     const turn = ++loadTurn.current;
@@ -351,7 +379,7 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
       { value: "stock" as const, label: "Остатки" },
       { value: "history" as const, label: "История движений", ...(movementsTotal ? { badge: movementsTotal } : {}) },
       { value: "engineers" as const, label: "У инженеров", ...(atEngineers ? { badge: atEngineers.length } : {}) },
-      { value: "equipment" as const, label: "Приборы", ...(usage ? { badge: new Set(usage.map((item) => item.equipmentId).filter(Boolean)).size } : {}) },
+      { value: "equipment" as const, label: "Приборы и модели", ...(models ? { badge: models.length + new Set((usage ?? []).map((item) => item.equipmentId).filter(Boolean)).size } : {}) },
       { value: "aliases" as const, label: "Артикулы поставщиков", ...(aliases.length ? { badge: aliases.length } : {}) }
     ];
     return <div className="part-page">
@@ -383,7 +411,24 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
           </tbody></table></div>}
         </section> : null}
         {pageTab === "equipment" ? <section className="part-card__section">
-          <h3 className="part-card__heading">Приборы</h3>
+          <h3 className="part-card__heading">Подходит к моделям</h3>
+          <p className="part-card__hint">Отмечает склад. Запчасть будет видна во вкладке «Запчасти» у каждого прибора этих моделей — даже если её ещё ни разу не ставили.</p>
+          {models === null ? <p className="part-card__empty">Загружаем…</p> : models.length ? <ul className="tag-list part-card__aliases">
+            {models.map((link) => <li className="tag" key={link.modelId}>
+              {[link.manufacturer, link.modelName].filter(Boolean).join(" ")}
+              {canWrite ? <IconButton disabled={modelBusy} icon="close" label={`Убрать модель ${link.modelName}`} onClick={() => void removeModel(link.modelId)} /> : null}
+            </li>)}
+          </ul> : <p className="part-card__empty">Модели не отмечены.</p>}
+          {canWrite ? <div className="part-card__alias-form">
+            <Select aria-label="Модель прибора" onChange={(event) => setModelDraft(event.target.value)} value={modelDraft}>
+              <option value="">Выберите модель прибора</option>
+              {modelChoices.filter((choice) => !(models ?? []).some((link) => link.modelId === choice.id)).map((choice) => <option key={choice.id} value={choice.id}>{choice.label}</option>)}
+            </Select>
+            <Button busy={modelBusy} busyLabel="Сохраняем…" className="button--compact" disabled={!modelDraft} onClick={() => void addModel()} variant="secondary">Отметить</Button>
+          </div> : null}
+        </section> : null}
+        {pageTab === "equipment" ? <section className="part-card__section">
+          <h3 className="part-card__heading">Ставили на приборы</h3>
           <p className="part-card__hint">На какие приборы эту запчасть выдавали и ставили по задачам — так видно, к каким приборам она подходит.</p>
           {usage === null ? <ResourceState description="Подождите." status="loading" title="Загружаем" /> : usageByEquipment.length === 0 ? <p className="part-card__empty">По задачам эту запчасть ещё не выдавали.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Прибор</th><th className="numeric">Выдано</th><th className="numeric">Установлено</th><th>Последняя задача</th></tr></thead><tbody>
             {usageByEquipment.map((row) => <tr key={row.equipmentId}>

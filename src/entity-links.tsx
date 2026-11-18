@@ -12,7 +12,8 @@ export type EntityTarget =
   | { readonly kind: "task"; readonly id: string }
   | { readonly kind: "engineer"; readonly id: string; readonly tab?: EngineerPageTab }
   | { readonly kind: "equipment"; readonly id: string; readonly tab?: EquipmentCardTab }
-  | { readonly kind: "part"; readonly id: string };
+  | { readonly kind: "part"; readonly id: string }
+  | { readonly kind: "site"; readonly id: string };
 
 export type EngineerPageTab = "tasks" | "equipment" | "competencies" | "stock";
 export type EquipmentCardTab = "history" | "meters" | "files" | "movements" | "plan" | "parts";
@@ -40,7 +41,7 @@ export function EntityLink({ target, children, className = "", title }: {
   readonly title?: string;
 }) {
   const nav = useEntityNav();
-  if (!target || !target.id || !nav?.can(target.kind)) return <span className={className}>{children}</span>;
+  if (!target || !target.id || !nav?.can(target.kind)) return <span className={className} {...(title ? { title } : {})}>{children}</span>;
   return <button className={`entity-link ${className}`.trim()} onClick={(event) => { event.stopPropagation(); nav.open(target); }} title={title ?? entityLinkTitle(target.kind)} type="button">{children}</button>;
 }
 
@@ -49,6 +50,7 @@ export function entityLinkTitle(kind: EntityTarget["kind"]): string {
     case "engineer": return "Открыть страницу инженера";
     case "equipment": return "Открыть карточку прибора";
     case "part": return "Открыть страницу запчасти";
+    case "site": return "Открыть страницу клиента";
     default: return "Открыть задачу";
   }
 }

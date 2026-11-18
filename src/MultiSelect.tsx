@@ -14,8 +14,10 @@ export const MULTI_SELECT_SEARCH_FROM = 11;
  * Список раскрывается под кнопкой внутри страницы (не поверх неё), поэтому работает
  * и в панели «Фильтры», и в мобильной шторке.
  */
-export function MultiSelect({ label, options, value, onChange, emptyLabel = "Все", searchPlaceholder = "Найти" }: {
+export function MultiSelect({ label, options, value, onChange, emptyLabel = "Все", searchPlaceholder = "Найти", compact = false }: {
   readonly label: string;
+  /** Подпись над кнопкой не показывать (строка фильтров без подписей, как у приборов). */
+  readonly compact?: boolean;
   readonly options: readonly MultiSelectOption[];
   readonly value: readonly string[];
   readonly onChange: (next: readonly string[]) => void;
@@ -51,8 +53,8 @@ export function MultiSelect({ label, options, value, onChange, emptyLabel = "В�
   const shown = searchable && query.trim() ? options.filter((option) => norm(option.label).includes(norm(query.trim()))) : options;
   const toggle = (code: string) => onChange(value.includes(code) ? value.filter((item) => item !== code) : [...value, code]);
 
-  return <div className="multi-select" data-filter-active={value.length > 0 ? "true" : "false"} ref={wrap}>
-    <span className="multi-select__label" id={labelId}>{label}</span>
+  return <div className={`multi-select${compact ? " multi-select--compact" : ""}`} data-filter-active={value.length > 0 ? "true" : "false"} ref={wrap}>
+    <span className={compact ? "sr-only" : "multi-select__label"} id={labelId}>{label}</span>
     <button aria-controls={listId} aria-expanded={open} aria-labelledby={labelId} className={`multi-select__trigger${value.length ? " multi-select__trigger--active" : ""}`} onClick={() => setOpen((current) => !current)} title={value.length ? value.map(labelOf).join(", ") : undefined} type="button">
       <span>{filterSummary(value, labelOf, emptyLabel)}</span>
       <svg aria-hidden="true" height="14" viewBox="0 0 24 24" width="14"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" /></svg>

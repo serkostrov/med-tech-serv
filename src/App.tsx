@@ -39,6 +39,7 @@ import {
   type ApiSessionUser,
   type AssignmentSuggestionRecord,
   type EquipmentApiRecord,
+  type PartModelLink,
   type PartUsageRecord,
   type EquipmentCardResponse,
   type EquipmentPassportReferences,
@@ -55,6 +56,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { EquipmentPlanTab, MaintenancePlanPage } from "./MaintenancePlan.js";
+import { SitePage } from "./SitePage.js";
 import { attentionFilter, taskAttentionItems, type TaskAttentionCounts, type TaskAttentionKey } from "./task-attention.js";
 import { EQUIPMENT_SPEND_PERIODS, equipmentSpendEmptyText, equipmentSpendLines, equipmentSpendRange, type EquipmentSpend, type EquipmentSpendPeriod } from "./equipment-spend.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate, taskPeriodProblem } from "./task-dates.js";
@@ -88,7 +90,7 @@ import { EquipmentTreePage } from "./EquipmentTreePage.js";
 import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { preselectedEngineerId } from "./engineer-competencies.js";
 import { rankAssignmentCandidates } from "./engineer-calendar.js";
-import { EngineerPicker } from "./EngineerPicker.js";
+import { EngineerPicker, EngineerSelectField } from "./EngineerPicker.js";
 import { MultiSelect, WorkTypesPicker } from "./MultiSelect.js";
 import { filterValues, joinFilterValues } from "./filter-values.js";
 import { MAIL_BOXES, type MailBox } from "./mail-boxes.js";
@@ -259,10 +261,10 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
                   цветом ссылки, остальные колонки идут обычным начертанием. */}
               <td><button className="text-button" onClick={(event) => { event.stopPropagation(); onOpen(task.id); }} type="button">{task.number}</button></td>
               <td><strong>{task.title}</strong></td>
-              <td>{task.customer?.siteName ?? "Не выбрана"}</td>
-              <td>{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · S/N ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · S/N ${device.serialNumber}` : task.equipmentId ? "Прибор" : "Не выбран"}</td>
+              <td>{task.customer?.siteName ? <EntityLink target={task.siteId ? { kind: "site", id: task.siteId } : undefined}>{task.customer.siteName}</EntityLink> : "Не выбрана"}</td>
+              <td>{task.equipmentId ? <EntityLink target={{ kind: "equipment", id: task.equipmentId }}>{task.equipmentLabel ? `${task.equipmentLabel.model ?? "Прибор"} · S/N ${task.equipmentLabel.serialNumber}` : device ? `${device.model} · S/N ${device.serialNumber}` : "Прибор"}</EntityLink> : "Не выбран"}</td>
               <td>{formatTaskDate(task.periodTo)}{task.priority === "urgent" ? <span className="task-registry-row__flag">срочно</span> : null}{task.workModifier === "G" ? <span className="task-registry-row__flag task-registry-row__flag--guarantee">гарантия</span> : null}{task.isOverdue ? <span className="task-registry-row__flag">просрочена</span> : null}</td>
-              <td>{task.engineerName ?? engineers.find((engineer) => engineer.id === task.engineerId)?.fullName ?? (task.engineerId ? "Инженер" : "Не назначен")}</td>
+              <td>{task.engineerId ? <EntityLink target={{ kind: "engineer", id: task.engineerId }}>{task.engineerName ?? engineers.find((engineer) => engineer.id === task.engineerId)?.fullName ?? "Инженер"}</EntityLink> : "Не назначен"}</td>
               <td><StatusBadge tone={taskStatusTone(task.status)}>{TASK_STATUS_LABELS[task.status] ?? "Статус"}</StatusBadge></td>
             </tr>
           );})}
@@ -664,7 +666,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
         <label>Выполнить с *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodFrom(value); }} required value={periodFrom} /></label>
         <label>Выполнить до *<DatePicker onChange={(value) => { setPeriodTouched(true); setPeriodTo(value); }} required value={periodTo} /></label>
       </div>
-      {canAssignEngineer && engineers.length ? <label className="field-wide">Инженер (можно назначить позже)<Select onChange={(event) => setEngineerId(event.target.value)} value={engineerId}><option value="">Назначу позже</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label> : null}
+      {canAssignEngineer && engineers.length ? <EngineerSelectField emptyLabel="Назначу позже" engineers={engineers} label="Инженер (можно назначить позже)" onChange={setEngineerId} value={engineerId} /> : null}
       {partsOpen || selectedParts.length > 0 ? <div className="equipment-picker field-wide">
         <span className="equipment-picker__label">Запчасти для выезда</span>
         <PartsMultiPicker
@@ -1528,7 +1530,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
           </dl>
           <dl>
             <div><dt>Прибор</dt><dd>{card.equipment ? <><EntityLink target={{ kind: "equipment", id: card.equipment.id }}>{card.equipment.manufacturer} {card.equipment.model}</EntityLink><small>S/N {card.equipment.serialNumber}{card.equipment.statusName || card.equipment.status ? ` · ${card.equipment.statusName ?? card.equipment.status}` : ""}</small></> : <span className="is-empty">Не выбран</span>}</dd></div>
-            <div><dt>Площадка</dt><dd>{task.customer?.siteName ?? <span className="is-empty">Не указана</span>}{task.customer?.address ? <small>{task.customer.address}</small> : null}</dd></div>
+            <div><dt>Площадка</dt><dd>{task.customer?.siteName ? <EntityLink target={task.siteId ? { kind: "site", id: task.siteId } : undefined}>{task.customer.siteName}</EntityLink> : <span className="is-empty">Не указана</span>}{task.customer?.address ? <small>{task.customer.address}</small> : null}</dd></div>
             {task.customer?.contactFullName || contactDetails ? <div><dt>Контакт</dt><dd>{task.customer?.contactFullName ?? ""}{contactDetails ? <small className="task-contact-links">{task.customer?.contactPhone ? <a href={`tel:${task.customer.contactPhone.replace(/[^\d+]/gu, "")}`}>{task.customer.contactPhone}</a> : null}{task.customer?.contactEmail ? <a href={`mailto:${task.customer.contactEmail}`}>{task.customer.contactEmail}</a> : null}</small> : null}</dd></div> : null}
             {task.initiator?.fullName || task.initiatorName ? <div><dt>Обратился</dt><dd>{task.initiator?.fullName ?? task.initiatorName}</dd></div> : null}
             {showFinance && task.customer?.payerName ? <div><dt>Плательщик</dt><dd>{task.customer.payerName}</dd></div> : null}
@@ -2221,7 +2223,7 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
       </section> : null}
       {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><MultiSelect label="Статус" onChange={(next) => setFilters((current) => ({ ...current, status: joinFilterValues(next), overdue: false }))} options={taskStatuses.filter((item) => item.isActive).map((item) => ({ value: item.code ?? item.id, label: item.name }))} value={filterValues(filters.status)} /><MultiSelect label="Инженер" onChange={(next) => setFilters((current) => ({ ...current, engineerId: joinFilterValues(next) }))} options={[{ value: "none", label: "Без инженера" }, ...engineers.map((engineer) => ({ value: engineer.id, label: engineer.fullName }))]} searchPlaceholder="Фамилия инженера" value={filterValues(filters.engineerId)} /><MultiSelect label="Площадка" onChange={(next) => setFilters((current) => ({ ...current, siteId: joinFilterValues(next) }))} options={siteNames.map((site) => ({ value: site.id, label: site.name }))} searchPlaceholder="Название площадки" value={filterValues(filters.siteId)} /><MultiSelect label="Вид работ" onChange={(next) => setFilters((current) => ({ ...current, workTypeCode: joinFilterValues(next) }))} options={workTypes.map((item) => ({ value: item.code ?? item.id, label: item.name }))} value={filterValues(filters.workTypeCode)} /><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Гарантия<Select onChange={(event) => setFilters((current) => ({ ...current, guarantee: event.target.value }))} value={filters.guarantee}><option value="">Все</option><option value="G">Гарантийные</option><option value="none">Не гарантия</option><option value="N">Вина клиента</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
 
-      {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
+      {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><EngineerSelectField ariaLabel="Инженер для выбранных задач" emptyLabel="Выберите инженера" engineers={engineers} label="Инженер" onChange={setBulkEngineerId} value={bulkEngineerId} /><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
       <DialogForm busy={boardAssignBusy} description="Задача встанет в «Назначена» на то место, куда вы её перенесли. Инженер получит уведомление." error={boardAssignError} onOpenChange={(open) => { if (!open) cancelBoardAssign(); }} onSubmit={(event) => void submitBoardAssign(event)} open={boardAssign !== null} submitLabel="Назначить" title={boardAssign ? `Назначить инженера · ${boardAssign.task.number}` : "Назначить инженера"}>
         {boardAssign ? <p className="form-hint">{boardAssign.task.title}</p> : null}
@@ -2634,9 +2636,13 @@ function EquipmentCard({
   const [detailTab, setDetailTab] = useState<EquipmentCardTab>(initialTab ?? "history");
   // Запчасти, которые выдавали и ставили по задачам прибора (вкладка «Запчасти»).
   const [partUsage, setPartUsage] = useState<readonly PartUsageRecord[] | null>(null);
+  // Запчасти, которые склад отметил подходящими к модели этого прибора (0073).
+  const [modelParts, setModelParts] = useState<readonly PartModelLink[] | null>(null);
   useEffect(() => {
     if (detailTab !== "parts" || partUsage !== null) return;
     void m2Api.equipmentPartUsage(record.id).then(setPartUsage).catch((loadError: unknown) => { setPartUsage([]); toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить запчасти прибора"); });
+    if (record.modelId) void m2Api.modelParts(record.modelId).then(setModelParts).catch(() => setModelParts([]));
+    else setModelParts([]);
   }, [detailTab, record.id]);
   const [openTasks, setOpenTasks] = useState<readonly TaskApiRecord[] | null>(null);
   // Инженер не видит плательщиков, в том числе в истории прибора.
@@ -2698,7 +2704,7 @@ function EquipmentCard({
             { value: "files", label: "Файлы", badge: record.fileRecords.length },
             { value: "movements", label: "Перемещения", badge: siteChanges.length + payerChanges.length },
             { value: "plan", label: "План ТО" },
-            { value: "parts", label: "Запчасти", ...(partUsage ? { badge: new Set(partUsage.map((item) => item.partId)).size } : {}) }
+            { value: "parts", label: "Запчасти", ...(partUsage && modelParts ? { badge: new Set([...partUsage.map((item) => item.partId), ...modelParts.map((item) => item.partId)]).size } : {}) }
           ]} label="Разделы карточки прибора" onValueChange={setDetailTab} value={detailTab} />
           {detailTab === "history" ? <section className="task-section equipment-history" aria-labelledby="equipment-history-title">
             <header className="task-section__head">
@@ -2740,8 +2746,14 @@ function EquipmentCard({
             <FileGallery emptyText={readOnly ? "К прибору пока не прикреплены файлы." : "К прибору пока не прикреплены файлы. Их можно добавить в паспорте: «Изменить»."} files={record.fileRecords} />
           </section> : null}
           {detailTab === "plan" ? <EquipmentPlanTab device={{ id: record.id, serialNumber: record.serial, manufacturer: record.manufacturer, model: record.model, status: record.status, ...(record.organization ? { organization: record.organization } : {}), ...(record.place ? { site: record.place } : {}) }} readOnly={readOnly} /> : null}
+          {detailTab === "parts" ? <section className="task-section" aria-labelledby={`equipment-model-parts-${record.id}`}>
+            <header className="task-section__head"><h3 id={`equipment-model-parts-${record.id}`}>Подходят к {record.manufacturer} {record.model}</h3><span className="muted">отмечает склад на странице запчасти</span></header>
+            {modelParts === null ? <div className="task-section__empty"><p>Загружаем…</p></div> : modelParts.length === 0 ? <div className="task-section__empty"><p>Склад ещё не отметил запчасти для этой модели. Это делается на странице запчасти: «Приборы и модели» → «Отметить».</p></div> : <ul className="equipment-model-parts">
+              {modelParts.map((link) => <li key={link.partId}><EntityLink target={{ kind: "part", id: link.partId }}><span className="engineer-page__number">{link.articleNumber}</span> {link.partName}</EntityLink></li>)}
+            </ul>}
+          </section> : null}
           {detailTab === "parts" ? <section className="task-section" aria-labelledby={`equipment-parts-${record.id}`}>
-            <header className="task-section__head"><h3 id={`equipment-parts-${record.id}`}>Запчасти прибора</h3><span className="muted">что выдавали и ставили по его задачам</span></header>
+            <header className="task-section__head"><h3 id={`equipment-parts-${record.id}`}>Ставили на этот прибор</h3><span className="muted">что выдавали и ставили по его задачам</span></header>
             {partUsage === null ? <div className="task-section__empty"><p>Загружаем запчасти…</p></div> : partUsage.length === 0 ? <div className="task-section__empty"><p>По задачам этого прибора запчасти ещё не выдавали.</p></div> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Запчасть</th><th className="numeric" scope="col">Кол-во</th><th scope="col">Состояние</th><th scope="col">Задача</th><th scope="col">Когда</th></tr></thead><tbody>
               {partUsage.map((item, index) => <tr key={`${item.partId}-${item.taskId}-${index}`}>
                 <td><EntityLink target={{ kind: "part", id: item.partId }}><span className="engineer-page__number">{item.articleNumber}</span> {item.partName}</EntityLink></td>
@@ -2767,7 +2779,7 @@ function EquipmentCard({
               <div><dt>Статус</dt><dd><StatusBadge tone={record.tone}>{record.status}</StatusBadge></dd></div>
             </dl>
             <dl>
-              <div><dt>Площадка</dt><dd>{placeUnset ? <span className="is-empty">Не указана</span> : record.place}{readOnly ? null : <button className="text-button" onClick={() => setChangeKind("site_change")} type="button">{placeUnset ? "Указать" : "Сменить"}</button>}</dd></div>
+              <div><dt>Площадка</dt><dd>{placeUnset ? <span className="is-empty">Не указана</span> : <EntityLink target={record.siteId ? { kind: "site", id: record.siteId } : undefined}>{record.place}</EntityLink>}{readOnly ? null : <button className="text-button" onClick={() => setChangeKind("site_change")} type="button">{placeUnset ? "Указать" : "Сменить"}</button>}</dd></div>
               <div><dt>Организация</dt><dd>{organizationUnset ? <span className="is-empty">Не указана</span> : record.organization}</dd></div>
               {readOnly ? null : <div><dt>Плательщик</dt><dd>{payerUnset ? <span className="is-empty">Не указан</span> : record.payer}<button className="text-button" onClick={() => setChangeKind("payer_change")} type="button">{payerUnset ? "Указать" : "Сменить"}</button></dd></div>}
             </dl>
@@ -3139,15 +3151,16 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
           <input id="equipment-search" onChange={(event) => changeFilter("search", event.target.value)} placeholder="S/N, модель или организация" title={engineer ? "Ищет по S/N, модели, производителю, площадке и организации. Можно несколько слов сразу, например модель и площадку." : "Ищет по S/N, модели, производителю, площадке, организации и плательщику. Можно несколько слов сразу, например модель и площадку."} type="search" value={filters.search} />
         </label>
         <div className="registry-toolbar__filters" aria-label="Фильтры списка приборов">
-          <Select aria-label="Производитель" onChange={(event) => changeFilter("manufacturer", event.target.value)} value={filters.manufacturer}><option value="">Все производители</option>{references.manufacturers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select>
-          <Select aria-label="Статус" onChange={(event) => changeFilter("status", event.target.value)} value={filters.status}><option value="">Все статусы</option>{references.statuses.map((value) => <option key={value.code} value={value.code}>{value.name}</option>)}</Select>
-          <Select aria-label="Площадка" onChange={(event) => changeFilter("site", event.target.value)} value={filters.site}><option value="">Все площадки</option>{sites.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select>
-          {engineer ? null : <Select aria-label="Плательщик" onChange={(event) => changeFilter("payer", event.target.value)} value={filters.payer}><option value="">Все плательщики</option>{payers.map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select>}
+          {/* Встреча 18.11: в фильтрах можно выбрать несколько значений, как в задачах. */}
+          <MultiSelect compact emptyLabel="Все производители" label="Производитель" onChange={(next) => changeFilter("manufacturer", joinFilterValues(next))} options={references.manufacturers.map((value) => ({ value: value.id, label: value.name }))} value={filterValues(filters.manufacturer)} />
+          <MultiSelect compact emptyLabel="Все статусы" label="Статус" onChange={(next) => changeFilter("status", joinFilterValues(next))} options={references.statuses.map((value) => ({ value: value.code, label: value.name }))} value={filterValues(filters.status)} />
+          <MultiSelect compact emptyLabel="Все площадки" label="Площадка" onChange={(next) => changeFilter("site", joinFilterValues(next))} options={sites.map((value) => ({ value: value.id, label: value.name }))} searchPlaceholder="Название площадки" value={filterValues(filters.site)} />
+          {engineer ? null : <MultiSelect compact emptyLabel="Все плательщики" label="Плательщик" onChange={(next) => changeFilter("payer", joinFilterValues(next))} options={payers.map((value) => ({ value: value.id, label: value.name }))} searchPlaceholder="Название плательщика" value={filterValues(filters.payer)} />}
           {filteredEmpty ? <Button onClick={() => { setFilters(EMPTY_EQUIPMENT_REGISTRY_FILTERS); setPageIndex(0); }} variant="ghost">Сбросить</Button> : null}
         </div>
       </section>
       {registryView === "board" ? <StatusBoard<EquipmentUiRecord>
-        columns={references.statuses.map((status) => ({ key: status.code, title: status.name, color: EQUIPMENT_STATUS_COLORS[status.code] ?? "#5f7f99", outside: Boolean(filters.status) && filters.status !== status.code }))}
+        columns={references.statuses.map((status) => ({ key: status.code, title: status.name, color: EQUIPMENT_STATUS_COLORS[status.code] ?? "#5f7f99", outside: filterValues(filters.status).length > 0 && !filterValues(filters.status).includes(status.code) }))}
         emptyText="Приборов с этим статусом нет."
         itemKey={(record) => record.id}
         label="Доска приборов"
@@ -3563,7 +3576,9 @@ function ReferencesWorkspace({ notificationTemplates = false }: { readonly notif
   </>;
 }
 
-function CustomersPage() {
+function CustomersPage({ initialSiteId }: { readonly initialSiteId?: string | undefined }) {
+  // Страница клиента по ссылке (площадка в задаче, приборе, «Клиентах»), «Назад» — шагом истории.
+  if (initialSiteId) return <SitePage onBack={() => window.history.back()} siteId={initialSiteId} />;
   return <>
     <PageIntro title="Клиенты" />
     <CustomerReferencesPage />
@@ -3746,7 +3761,7 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, entityRoute
     case "notifications": return <NotificationsPage />;
     case "journals": return <JournalsPage />;
     case "reports": return <OperationsReportsPage {...(onOpenTasks ? { onOpenTasks } : {})} />;
-    case "customers": return <CustomersPage />;
+    case "customers": return <CustomersPage initialSiteId={entityRoute.siteId} />;
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
     case "price": return <PricePage />;
@@ -4108,6 +4123,7 @@ type RouteState = {
   readonly engineerId?: string;
   readonly engineerTab?: EngineerPageTab;
   readonly partId?: string;
+  readonly siteId?: string;
 };
 
 /** Карточка внутри раздела, открытая ссылкой: страница инженера, запчасти, вкладка прибора. */
@@ -4115,6 +4131,7 @@ interface EntityRoute {
   readonly engineerId?: string;
   readonly engineerTab?: EngineerPageTab;
   readonly partId?: string;
+  readonly siteId?: string;
   readonly equipmentTab?: EquipmentCardTab;
 }
 
@@ -4123,6 +4140,7 @@ function entityRouteFromState(state: RouteState | null): EntityRoute {
   return {
     ...(state.view === "engineers" && state.engineerId ? { engineerId: state.engineerId, ...(state.engineerTab ? { engineerTab: state.engineerTab } : {}) } : {}),
     ...(state.view === "warehouse" && state.partId ? { partId: state.partId } : {}),
+    ...(state.view === "customers" && state.siteId ? { siteId: state.siteId } : {}),
     ...(state.view === "equipment" && state.equipmentTab ? { equipmentTab: state.equipmentTab } : {})
   };
 }
@@ -4183,6 +4201,7 @@ function App() {
         : equipmentRouteId && nextNavigation.some((item) => item.id === "equipment") ? "equipment"
           : entityRoute.engineerId && nextNavigation.some((item) => item.id === "engineers") ? "engineers"
             : entityRoute.partId && nextNavigation.some((item) => item.id === "warehouse") ? "warehouse"
+              : entityRoute.siteId && nextNavigation.some((item) => item.id === "customers") ? "customers"
           // Вернулись в приложение кнопкой «Назад» с другого сайта: открываем раздел этого шага.
           : stateView && nextNavigation.some((item) => item.id === stateView) ? stateView
             : nextNavigation[0]?.id ?? getDefaultView(nextRole));
@@ -4243,13 +4262,13 @@ function App() {
     const state = currentRouteState();
     // У первого шага и после обновления страницы меток нет: на нём раздел по умолчанию.
     const shownView = state?.view ?? routeContext.current.defaultView;
-    if (window.location.pathname === "/" && shownView === id && !state?.equipmentId && !state?.engineerId && !state?.partId) return;
+    if (window.location.pathname === "/" && shownView === id && !state?.equipmentId && !state?.engineerId && !state?.partId && !state?.siteId) return;
     window.history.pushState({ view: id }, "", "/");
   };
 
   // Ссылки между карточками (встреча 18.11): каждый переход — новый шаг истории, «Назад» возвращает.
   const viewIds = navigation.map((item) => item.id);
-  const entityViews: Readonly<Record<EntityTarget["kind"], NavigationId>> = { task: "tasks", engineer: "engineers", equipment: "equipment", part: "warehouse" };
+  const entityViews: Readonly<Record<EntityTarget["kind"], NavigationId>> = { task: "tasks", engineer: "engineers", equipment: "equipment", part: "warehouse", site: "customers" };
   const entityNav: EntityNavigation = {
     can: (kind) => viewIds.includes(entityViews[kind]),
     open: (target) => {
@@ -4274,6 +4293,10 @@ function App() {
         setEquipmentRouteId(undefined);
         setEntityRoute({ engineerId: target.id, ...(target.tab ? { engineerTab: target.tab } : {}) });
         window.history.pushState({ view: "engineers", engineerId: target.id, ...(target.tab ? { engineerTab: target.tab } : {}) }, "", "/");
+      } else if (target.kind === "site") {
+        setEquipmentRouteId(undefined);
+        setEntityRoute({ siteId: target.id });
+        window.history.pushState({ view: "customers", siteId: target.id }, "", "/");
       } else {
         setEquipmentRouteId(undefined);
         setEntityRoute({ partId: target.id });

@@ -9588,3 +9588,22 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 @media (min-width: 761px) {
   .engineer-calendar__head { position: sticky; top: 0; z-index: 3; background: var(--color-surface); }
 }
+
+/* Низ карточки доски вне кнопки открытия: ФИО инженера — ссылка (встреча 18.11). */
+.task-board-card__foot--outside { margin: -9px 13px 0; padding: 8px 0 13px; cursor: pointer; }
+.task-board-card__foot--outside .entity-link.task-board-card__eng { flex: 0 1 auto; color: var(--color-ink-soft); font-size: 12.5px; }
+.task-board-card__foot--outside .entity-link.task-board-card__eng:hover { color: var(--color-accent-dark); }
+.engineer-select-field { display: grid; gap: 6px; }
+.engineer-select-field__label { color: var(--color-ink); font-size: 12px; font-weight: 600; }
+.task-bulk-actions__grid .engineer-select-field { grid-column: auto; }
+.registry-toolbar__filters .multi-select { width: 190px; }
+.customer-site-card__open { font-size: 13px; font-weight: 600; white-space: nowrap; }
+.site-page__people { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.site-page__people li { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--color-border-soft); border-radius: 9px; }
+.site-page__people li span { color: var(--color-muted); font-size: 13px; }
+.site-page__people li.is-inactive { opacity: 0.6; }
+.site-page__people small { color: var(--color-muted); font-weight: 500; }
+.equipment-model-parts { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.equipment-model-parts li { padding: 8px 12px; border: 1px solid var(--color-border-soft); border-radius: 9px; }
+.part-card__alias-form .ui-select { flex: 1 1 260px; min-width: 220px; }
+

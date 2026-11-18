@@ -108,7 +108,9 @@ describe("Supabase row mapping", () => {
     // остаются на месте — движения склада не удаляются ни одним запросом (0014).
     // quote_items (0071) — строка черновика КП: её убирают, пока КП не отправлено клиенту.
     // Само КП не удаляется (0024), а отправленное запирает страж базы.
-    assert.deepEqual(deleted, ["access_role_permissions", "maintenance_plans", "part_aliases", "quote_items", "site_payers", "task_parts"]);
+    // part_equipment_models (0073) — отметка «запчасть подходит к модели»: её снимают на странице
+    // запчасти, сама запчасть и модель остаются.
+    assert.deepEqual(deleted, ["access_role_permissions", "maintenance_plans", "part_aliases", "part_equipment_models", "quote_items", "site_payers", "task_parts"]);
     assert.ok(!/from\("stock_movements"\)\.delete\(\)/u.test(source), "движения склада не удаляются");
     assert.match(source, /public async removeSite\(id: string\)[^\n]*\n\s*return \{ mode: "deactivated", after: await this\.updateSite\(id, \{ isActive: false \}\) \};/u);
     assert.match(source, /public async removeContact\([^\n]*\n\s*return \{ mode: "deactivated", after: await this\.updateContact\(siteId, contactId, \{ isActive: false \}\) \};/u);
@@ -134,7 +136,9 @@ describe("Supabase row mapping", () => {
 
   it("resolves equipment filters by id or name and does not crash on bad uuid", async () => {
     const source = await readFile(new URL("./m2-api.ts", import.meta.url), "utf8");
-    assert.match(source, /resolveFilterId\("manufacturers"/u);
+    // Несколько значений через запятую (встреча 18.11): каждое — id или название.
+    assert.match(source, /resolveAll\("manufacturers", query\.manufacturer\)/u);
+    assert.match(source, /this\.resolveFilterId\(table, value\)/u);
     assert.match(source, /normalizeFilterValue/u);
     assert.match(source, /isFilterUuid/u);
     assert.match(source, /escapeIlikePattern/u);

@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import type { AssignmentSuggestionRecord } from "./m2-api.js";
 import { periodLoadText } from "./engineer-calendar.js";
-import { ResourceState } from "./ui.js";
+import { ResourceState, Select } from "./ui.js";
 
 /**
  * Выбор инженера с подсказкой: компетенция по прибору и занятость в дни задачи.
@@ -66,5 +66,32 @@ export function EngineerPicker({ items, value, onChange, state = "ready" }: {
   return <div className="engineer-picker-search">
     <input aria-label="Найти инженера" autoComplete="off" className="engineer-picker-search__input" onChange={(event) => setQuery(event.target.value)} placeholder={`Найти по фамилии · всего ${items.length}`} type="search" value={query} />
     {list}
+  </div>;
+}
+
+/**
+ * Выбор инженера выпадающим списком (новая задача, назначение выбранным задачам).
+ * Когда инженеров больше 10 — над списком поиск по фамилии (встреча 18.11). Выбранный
+ * инженер остаётся в списке, даже если не подходит под поиск.
+ */
+export function EngineerSelectField({ label, engineers, value, onChange, emptyLabel, ariaLabel }: {
+  readonly label: string;
+  readonly engineers: readonly { readonly id: string; readonly fullName: string }[];
+  readonly value: string;
+  readonly onChange: (engineerId: string) => void;
+  readonly emptyLabel: string;
+  readonly ariaLabel?: string;
+}) {
+  const [query, setQuery] = useState("");
+  const searchable = engineers.length >= ENGINEER_SEARCH_FROM;
+  const shown = searchable ? engineers.filter((engineer) => engineer.id === value || matchesEngineerQuery(engineer.fullName, query)) : engineers;
+  return <div className="engineer-select-field field-wide">
+    <span className="engineer-select-field__label">{label}</span>
+    {searchable ? <input aria-label={`${label}: поиск`} autoComplete="off" className="engineer-picker-search__input" onChange={(event) => setQuery(event.target.value)} placeholder={`Найти по фамилии · всего ${engineers.length}`} type="search" value={query} /> : null}
+    <Select aria-label={ariaLabel ?? label} onChange={(event) => onChange(event.target.value)} value={value}>
+      <option value="">{emptyLabel}</option>
+      {shown.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}
+    </Select>
+    {searchable && query && shown.length === (value ? 1 : 0) ? <small className="form-hint">Никого не нашли. Проверьте фамилию.</small> : null}
   </div>;
 }

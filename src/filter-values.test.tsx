@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { filterSummary, filterValues, joinFilterValues, matchesFilter } from "./filter-values.js";
-import { EngineerPicker, matchesEngineerQuery } from "./EngineerPicker.js";
+import { EngineerPicker, EngineerSelectField, matchesEngineerQuery } from "./EngineerPicker.js";
 import { MultiSelect, WorkTypesPicker } from "./MultiSelect.js";
 import type { AssignmentSuggestionRecord } from "./m2-api.js";
 
@@ -57,5 +57,13 @@ describe("поиск инженера", () => {
     const eleven = Array.from({ length: 11 }, (_, index) => engineer(index));
     assert.doesNotMatch(renderToStaticMarkup(<EngineerPicker items={ten} onChange={() => undefined} value="" />), /Найти инженера/);
     assert.match(renderToStaticMarkup(<EngineerPicker items={eleven} onChange={() => undefined} value="" />), /Найти инженера/);
+  });
+});
+
+describe("выбор инженера списком", () => {
+  const list = (count: number) => Array.from({ length: count }, (_, index) => ({ id: `e${index}`, fullName: `Инженер ${index}` }));
+  it("в новой задаче и при назначении выбранным: поиск от 11 инженеров", () => {
+    assert.doesNotMatch(renderToStaticMarkup(<EngineerSelectField emptyLabel="Назначу позже" engineers={list(10)} label="Инженер" onChange={() => undefined} value="" />), /Найти по фамилии/);
+    assert.match(renderToStaticMarkup(<EngineerSelectField emptyLabel="Назначу позже" engineers={list(11)} label="Инженер" onChange={() => undefined} value="" />), /Найти по фамилии · всего 11/);
   });
 });

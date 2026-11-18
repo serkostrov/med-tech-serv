@@ -1,3 +1,4 @@
+import { matchesFilter } from "./filter-values.js";
 import type { StockReservationRecord, StockReservationStatus, StockReservationStep } from "./m2-api.js";
 import type { TaskPartPosition } from "./types.js";
 import { companyDateTimeText } from "./task-dates.js";
@@ -306,10 +307,11 @@ function matchesSearch(reservation: StockReservationRecord, search: string): boo
 
 /** Резервы по условиям окна: все условия вместе, пустое поле ничего не отсекает. */
 export function filterReservations(items: readonly StockReservationRecord[], filters: ReservationFilters): readonly StockReservationRecord[] {
-  return items.filter((item) => (!filters.status || item.status === filters.status)
-    && (!filters.engineer || reservationEngineerName(item) === filters.engineer)
-    && (!filters.taskNumber || item.taskNumber === filters.taskNumber)
-    && (!filters.partId || item.partId === filters.partId)
+  // Несколько значений через запятую (встреча 18.11), одно — как раньше.
+  return items.filter((item) => matchesFilter(filters.status, item.status)
+    && matchesFilter(filters.engineer, reservationEngineerName(item))
+    && matchesFilter(filters.taskNumber, item.taskNumber)
+    && matchesFilter(filters.partId, item.partId)
     && matchesSearch(item, filters.search));
 }
 

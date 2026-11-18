@@ -1,3 +1,5 @@
+import { MultiSelect } from "./MultiSelect.js";
+import { filterValues, joinFilterValues } from "./filter-values.js";
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { m2Api, type StockReservationRecord } from "./m2-api.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
@@ -267,10 +269,10 @@ export function ReservationsPage() {
     <FilterBar loading={loading} onReset={() => applyFilters(EMPTY_RESERVATION_FILTERS)} onSubmit={() => applyFilters()}>
       <label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Резерв, любой артикул, запчасть, задача" type="search" value={filters.search} /></label>
       {/* На вкладке «У инженеров» все резервы выданы: выбирать состояние там не из чего. */}
-      {view === "list" && tab === "engineers" ? null : <label>Состояние<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))} value={filters.status}><option value="">Все</option>{options.statuses.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>}
-      <label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineer: event.target.value }))} value={filters.engineer}><option value="">Все</option>{options.engineers.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
-      <label>Задача<Select onChange={(event) => setFilters((current) => ({ ...current, taskNumber: event.target.value }))} value={filters.taskNumber}><option value="">Все</option>{options.tasks.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
-      <label>Запчасть<Select onChange={(event) => setFilters((current) => ({ ...current, partId: event.target.value }))} value={filters.partId}><option value="">Все</option>{options.parts.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</Select></label>
+      {view === "list" && tab === "engineers" ? null : <MultiSelect label="Состояние" onChange={(next) => setFilters((current) => ({ ...current, status: joinFilterValues(next) }))} options={options.statuses} value={filterValues(filters.status)} />}
+      <MultiSelect label="Инженер" onChange={(next) => setFilters((current) => ({ ...current, engineer: joinFilterValues(next) }))} options={options.engineers} searchPlaceholder="Фамилия инженера" value={filterValues(filters.engineer)} />
+      <MultiSelect label="Задача" onChange={(next) => setFilters((current) => ({ ...current, taskNumber: joinFilterValues(next) }))} options={options.tasks} searchPlaceholder="Номер задачи" value={filterValues(filters.taskNumber)} />
+      <MultiSelect label="Запчасть" onChange={(next) => setFilters((current) => ({ ...current, partId: joinFilterValues(next) }))} options={options.parts} searchPlaceholder="Артикул или название" value={filterValues(filters.partId)} />
     </FilterBar>
     {view === "board" ? <>
       {loadError ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Резервы не загрузились" />

@@ -1,3 +1,4 @@
+import { EntityLink } from "./entity-links.js";
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import { m2Api } from "./m2-api.js";
@@ -237,6 +238,8 @@ export function CustomerReferencesPage() {
                   </span>
                 </button>
                 <div className="customer-site-card__meta">
+                  {/* Встреча 18.11: страница клиента — заявки, приборы, люди. */}
+                  <EntityLink className="customer-site-card__open" target={{ kind: "site", id: site.id }}>Заявки и приборы →</EntityLink>
                   <StatusBadge tone={site.isActive ? "success" : "neutral"}>{site.isActive ? "Активна" : "Неактивна"}</StatusBadge>
                   <span className="customer-site-card__count">{peopleCountLabel(activePeople)}</span>
                   <div className="table-actions">
