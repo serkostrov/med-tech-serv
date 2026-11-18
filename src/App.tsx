@@ -2611,6 +2611,11 @@ function AssignmentHistorySection({
   );
 }
 
+/** Откуда показание счётчика без задачи: служба переноса из 1С пишет его от «Системы», остальное внесено руками. */
+function meterReadingSource(reading: EquipmentMeterReading): string {
+  return reading.author.name === "Система" || !reading.author.id ? "Перенос из 1С" : "Внесено вручную";
+}
+
 function EquipmentCard({
   initialTab,
   record,
@@ -2645,19 +2650,27 @@ function EquipmentCard({
   // Все задачи прибора (встреча 18.11: «в карточке прибора — все его заявки, задачи, с которыми он связан»).
   const [allTasks, setAllTasks] = useState<readonly TaskApiRecord[] | null>(null);
   const [allTasksTotal, setAllTasksTotal] = useState(0);
+  // Числа на вкладках видны сразу, а не после нажатия (18.11: «написано „Запчасти“, а там пусто»).
   useEffect(() => {
-    if (detailTab !== "tasks" || allTasks !== null) return;
+    if (allTasks !== null) return;
     void m2Api.tasksPage({ equipmentId: record.id, limit: 200, sort: "updated_desc" })
       .then((page) => { setAllTasks(page.items); setAllTasksTotal(page.total); })
       .catch((loadError: unknown) => { setAllTasks([]); toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить задачи прибора"); });
-  }, [detailTab, record.id]);
+  }, [record.id]);
   // Запчасти, которые склад отметил подходящими к модели этого прибора (0073).
   const [modelParts, setModelParts] = useState<readonly PartModelLink[] | null>(null);
   useEffect(() => {
-    if (detailTab !== "parts" || partUsage !== null) return;
+    if (partUsage !== null) return;
     void m2Api.equipmentPartUsage(record.id).then(setPartUsage).catch((loadError: unknown) => { setPartUsage([]); toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить запчасти прибора"); });
     if (record.modelId) void m2Api.modelParts(record.modelId).then(setModelParts).catch(() => setModelParts([]));
     else setModelParts([]);
+  }, [record.id]);
+  // Вкладка помнится в шаге истории: «Назад» вернёт на неё же.
+  useEffect(() => {
+    const state = currentRouteState();
+    if (window.location.pathname === "/" && state?.equipmentId === record.id && state.equipmentTab !== detailTab) {
+      window.history.replaceState({ ...state, equipmentTab: detailTab }, "");
+    }
   }, [detailTab, record.id]);
   const [openTasks, setOpenTasks] = useState<readonly TaskApiRecord[] | null>(null);
   // Инженер не видит плательщиков, в том числе в истории прибора.
@@ -2744,21 +2757,17 @@ function EquipmentCard({
           </section> : null}
           {detailTab === "meters" ? <section className="task-section" aria-labelledby={`equipment-meters-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-meters-${record.id}`}>Показания счётчика</h3><span className="muted">{record.meterReadings.length} из {record.meterReadingsTotal}</span></header>
-            {/* Встреча 18.11: «откуда они берутся, кто и когда записывает». */}
-            <p className="equipment-tab-hint">Счётчик — число исследований, которое показывает сам прибор. Инженер переписывает его с экрана прибора в результате работ по задаче (поле «Показание счётчика»), в историю прибора оно попадает, когда координатор принимает закрытие задачи. Счётчик только растёт: меньше прошлого значения система не примет. Старые показания приходят при переносе из 1С.</p>
-            {record.meterReadings.length > 0 ? <div className="table-scroll"><table className="data-table equipment-meters-table"><thead><tr><th scope="col">Дата</th><th className="numeric" scope="col">Показание</th><th className="numeric" scope="col">Прирост</th><th scope="col">Кто записал</th><th scope="col">Задача</th></tr></thead><tbody>
+            {record.meterReadings.length > 0 ? <div className="table-scroll"><table className="data-table equipment-meters-table"><thead><tr><th scope="col">Дата</th><th className="numeric" scope="col">Показание</th><th className="numeric" scope="col">Прирост</th><th scope="col">Кто записал</th><th scope="col">Откуда</th></tr></thead><tbody>
               {record.meterReadings.map((reading, index) => {
                 const previous = record.meterReadings[index + 1];
                 const delta = previous ? reading.reading - previous.reading : undefined;
-                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td><td>{reading.taskId ? <EntityLink target={{ kind: "task", id: reading.taskId }}>Открыть</EntityLink> : <span className="muted">—</span>}</td></tr>;
+                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td><td>{reading.taskId ? <EntityLink target={{ kind: "task", id: reading.taskId }}>Акт задачи</EntityLink> : <span className="muted">{meterReadingSource(reading)}</span>}</td></tr>;
               })}
             </tbody></table></div> : <div className="task-section__empty"><p>Показаний пока нет. Они появятся после принятого закрытия задачи.</p></div>}
             {record.meterReadings.length < record.meterReadingsTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreMeterReadings()} variant="secondary">Показать ещё показания</Button> : null}
           </section> : null}
           {detailTab === "files" ? <section className="task-section" aria-labelledby={`equipment-files-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-files-${record.id}`}>Файлы прибора</h3></header>
-            {/* Встреча 18.11: «что это за файлы и откуда берутся». */}
-            <p className="equipment-tab-hint">Документы самого прибора: паспорт, фото шильдика, инструкции, сертификаты. Их прикрепляют в паспорте — кнопка «Изменить» справа. Фото с выездов и акты хранятся в задачах: открыть задачу можно во вкладке «История».</p>
             <FileGallery emptyText={readOnly ? "К прибору пока не прикреплены файлы." : "К прибору пока не прикреплены файлы. Их можно добавить в паспорте: «Изменить»."} files={record.fileRecords} />
           </section> : null}
           {detailTab === "tasks" ? <section className="task-section" aria-labelledby={`equipment-all-tasks-${record.id}`}>
@@ -3040,9 +3049,10 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
         ? items.map((item) => item.id === id ? detailed : item)
         : [detailed, ...items]);
       setSelectedId(id);
-      // Шаг истории помнил другой паспорт: теперь он ведёт в открытый.
+      // Шаг истории ведёт в открытый паспорт: «Назад» со страницы запчасти, инженера или задачи
+      // возвращает в этот прибор, а не в список приборов (18.11).
       const state = currentRouteState();
-      if (state?.equipmentId && state.equipmentId !== id) window.history.replaceState({ view: "equipment", equipmentId: id }, "");
+      if (window.location.pathname === "/" && state?.equipmentId !== id) window.history.replaceState({ view: "equipment", equipmentId: id }, "");
     } catch (error) {
       if (request !== openCardRequest.current) return;
       toast.error(error instanceof Error ? error.message : "Не получилось открыть паспорт прибора");
