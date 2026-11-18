@@ -18,6 +18,11 @@ export interface IncomingMail {
   readonly raw: Uint8Array;
   /** Автоответ или рассылка (Auto-Submitted, «нет на месте»): заявкой не считаем. */
   readonly automatic?: boolean;
+  /**
+   * Массовая рассылка: в письме есть отписка (List-Unsubscribe, List-Id) или Precedence: bulk.
+   * Письмо сохраняем — оно видно во «Всех письмах», — но в потенциальные задачи не ставим.
+   */
+  readonly bulk?: boolean;
   readonly attachments: ReadonlyArray<{ readonly fileName: string; readonly contentType: string; readonly data: Uint8Array }>;
 }
 
@@ -77,8 +82,13 @@ export async function toIncomingMail(raw: Uint8Array, fallbackDate: Date): Promi
   const autoSubmitted = String(parsed.headers.get("auto-submitted") ?? "").trim().toLowerCase();
   // Только автоответы («нет на месте»). Письма веб-форм бывают auto-generated, их не пропускаем.
   const automatic = autoSubmitted.startsWith("auto-replied") || parsed.headers.has("x-autoreply") || parsed.headers.has("x-autorespond");
+  const precedence = String(parsed.headers.get("precedence") ?? "").trim().toLowerCase();
+  // mailparser собирает заголовки List-* в один «list», поэтому смотрим исходные строки заголовков.
+  const listHeader = (parsed.headerLines ?? []).some((line) => /^list-(?:unsubscribe|id)$/iu.test(line.key));
+  const bulk = listHeader || ["bulk", "list", "junk"].includes(precedence);
   return {
     ...(automatic ? { automatic: true } : {}),
+    ...(bulk ? { bulk: true } : {}),
     messageId: safeText(parsed.messageId?.trim() ?? "") || fallbackId,
     ...(parsed.inReplyTo ? { inReplyTo: safeText(parsed.inReplyTo.trim()) } : {}),
     references: references.map((item) => safeText(item.trim())).filter(Boolean),
@@ -137,6 +147,12 @@ export async function processIncomingMail(
   if (threadReply) return "reply";
 
   try {
+    // Рассылку и рекламу не разбираем как заявку (встреча 18.11: «мусорные письма отсеять»).
+    if (mail.bulk) {
+      const payload = { summary: mail.subject, notRequest: true, notRequestReason: "Рассылка: в письме есть ссылка «отписаться»", source: "rules" };
+      await database.executeSql("SELECT public.set_mail_parse_result($1::uuid, $2::jsonb, $3, 'parsed')", [mailId, safeText(JSON.stringify(payload)), 0]);
+      return "parsed";
+    }
 
     const rules = parseMailByRules(mail.subject, mail.text);
     let aiResult;
@@ -167,6 +183,8 @@ export async function processIncomingMail(
       engineerName: result.draft.engineerName ?? null,
       partNumbers: result.draft.partNumbers ?? [],
       source: result.source,
+      // Нейросеть решила, что это не заявка (реклама, счёт, спам): письмо уходит во «Не заявки».
+      ...(result.isServiceRequest === false ? { notRequest: true, notRequestReason: "Разбор: не похоже на заявку на ремонт или обслуживание" } : {}),
       ...(filesFailed ? { filesFailed: true } : {}),
       // При низкой уверенности координатор видит черновик с пустыми полями и текст письма.
       lowConfidence: confidence < 0.5

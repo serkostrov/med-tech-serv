@@ -133,6 +133,30 @@ test("автоответы и «нет на месте» заявками не �
   assert.equal(calls.length, 0);
 });
 
+test("рассылка с «отписаться» сохраняется, но заявкой не считается", async () => {
+  const raw = ["From: news@shop.ru", "To: b@y.ru", "Subject: Скидки недели", "List-Unsubscribe: <https://shop.ru/unsub>", "Message-ID: <news-1@shop.ru>", "", "Только сегодня", ""].join("\r\n");
+  const mail = await toIncomingMail(new TextEncoder().encode(raw), new Date());
+  assert.equal(mail.bulk, true);
+  const { database, calls } = fakeDatabase((text) => text.includes("ingest_mail_message") ? [{ id: "m-news", created: true, needs_parse: true, has_files: true, is_reply: false }] : []);
+  assert.equal(await processIncomingMail(mail, database, undefined, undefined), "parsed");
+  const result = calls.find((call) => call.text.includes("set_mail_parse_result"))!;
+  const payload = JSON.parse(String(result.values[1])) as Record<string, unknown>;
+  assert.equal(payload.notRequest, true);
+  assert.match(String(payload.notRequestReason), /Рассылка/u);
+});
+
+test("Precedence: bulk — тоже рассылка; обычное письмо — нет", async () => {
+  const bulk = ["From: a@x.ru", "To: b@y.ru", "Subject: Новости", "Precedence: bulk", "Message-ID: <b1@x.ru>", "", "текст", ""].join("\r\n");
+  assert.equal((await toIncomingMail(new TextEncoder().encode(bulk), new Date())).bulk, true);
+  assert.equal((await toIncomingMail(new TextEncoder().encode(EML), new Date())).bulk, undefined);
+});
+
+test("нейросеть отмечает письма не про ремонт, сомнение — в пользу заявки", () => {
+  assert.equal(draftFromAiJson({ isServiceRequest: false, confidence: 0.9 })?.isServiceRequest, false);
+  assert.equal(draftFromAiJson({ isServiceRequest: "true", confidence: 0.9 })?.isServiceRequest, true);
+  assert.equal(draftFromAiJson({ confidence: 0.9 })?.isServiceRequest, undefined);
+});
+
 test("автоответ: номер заявки, ответ в ту же переписку, ошибка сохраняется", async () => {
   const { database, calls } = fakeDatabase((text) => text.includes("claim_mail_autoreplies")
     ? [

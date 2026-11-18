@@ -21,6 +21,8 @@ export interface ParsedMailRequest {
   /** 0..1: насколько уверенно заполнен черновик. */
   readonly confidence: number;
   readonly source: "rules" | "ai" | "rules+ai";
+  /** Нейросеть: заявка на ремонт или обслуживание (true) или нет — реклама, счёт, рассылка (false). */
+  readonly isServiceRequest?: boolean;
 }
 
 const LABELS: ReadonlyArray<{ readonly field: keyof MailRequestDraft; readonly patterns: readonly RegExp[] }> = [
@@ -129,5 +131,5 @@ export function mergeDrafts(rules: ParsedMailRequest, ai: ParsedMailRequest | un
     // Заводской номер из правил надёжнее (точная метка в письме), остальное берём у нейросети, если пусто.
     if (draft[key] === undefined || (key !== "serialNumber" && key !== "partNumbers" && String(draft[key]).length < 3)) draft[key] = value;
   }
-  return { draft: draft as MailRequestDraft, confidence: Math.max(rules.confidence, ai.confidence), source: "rules+ai" };
+  return { draft: draft as MailRequestDraft, confidence: Math.max(rules.confidence, ai.confidence), source: "rules+ai", ...(ai.isServiceRequest === undefined ? {} : { isServiceRequest: ai.isServiceRequest }) };
 }

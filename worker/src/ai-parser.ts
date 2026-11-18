@@ -15,10 +15,12 @@ const FIELDS = ["client", "contactName", "contactPhone", "equipmentName", "seria
 
 const SYSTEM_PROMPT = `Ты разбираешь письма-заявки в сервисную компанию по ремонту медицинской лабораторной техники.
 Верни только JSON без пояснений: {"client": string|null, "contactName": string|null, "contactPhone": string|null,
-"equipmentName": string|null, "serialNumber": string|null, "description": string|null, "confidence": number}.
+"equipmentName": string|null, "serialNumber": string|null, "description": string|null, "confidence": number, "isServiceRequest": boolean}.
 client — наименование клиента (больница, лаборатория). contactName и contactPhone — ФИО и телефон для обратной связи.
 equipmentName — наименование оборудования. serialNumber — заводской (серийный) номер ровно как в письме.
 description — описание неисправности или работ. confidence — от 0 до 1, насколько ты уверен.
+isServiceRequest — true, если письмо про ремонт, обслуживание, поломку, выезд, запчасти или вопрос по технике;
+false — реклама, рассылка, спам, счёт или акт без просьбы о работах, письмо не по делу. Сомневаешься — true.
 Не выдумывай: если поля нет в письме, ставь null. Цитаты прошлых писем не учитывай.`;
 
 function extractJson(text: string): Record<string, unknown> | undefined {
@@ -42,7 +44,8 @@ export function draftFromAiJson(json: Record<string, unknown> | undefined): Pars
   }
   const rawConfidence = typeof json.confidence === "number" ? json.confidence : Number(json.confidence);
   const confidence = Number.isFinite(rawConfidence) ? Math.max(0, Math.min(1, rawConfidence)) : 0.5;
-  return { draft: draft as MailRequestDraft, confidence, source: "ai" };
+  const isServiceRequest = json.isServiceRequest === false || json.isServiceRequest === "false" ? false : json.isServiceRequest === true || json.isServiceRequest === "true" ? true : undefined;
+  return { draft: draft as MailRequestDraft, confidence, source: "ai", ...(isServiceRequest === undefined ? {} : { isServiceRequest }) };
 }
 
 function userPrompt(subject: string, body: string): string {
