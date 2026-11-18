@@ -237,7 +237,9 @@ export function EquipmentFolderPicker({
               setQuery(event.target.value);
               setOpen(true);
             }}
-            onFocus={() => setOpen(true)}
+            // Список открывается нажатием, набором S/N или стрелкой, а не фокусом: окно новой
+            // задачи само ставит курсор в это поле, и список раскрывался, хотя никто не нажимал (18.11).
+            onClick={() => setOpen(true)}
             onKeyDown={onKeyDown}
             placeholder="Нажмите и выберите прибор или введите S/N"
             role="combobox"

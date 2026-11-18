@@ -297,7 +297,9 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
   readonly onEquipmentAttached?: (device: EquipmentApiRecord) => void;
 }) {
   const activeWorkTypes = workTypes.filter((item) => item.isActive);
-  const defaultWorkType = initialWorkTypeCode || activeWorkTypes[0]?.code || activeWorkTypes[0]?.id || "diagnostics";
+  // Вид работ не подставляем сами (18.11: «стоит „Диагностика“, хотя я ничего не выбирал»):
+  // заранее выбран только тот, что распознан из письма.
+  const defaultWorkType = initialWorkTypeCode || "";
   const [equipmentId, setEquipmentId] = useState("");
   const [workTypeCode, setWorkTypeCode] = useState(defaultWorkType);
   const [extraWorkTypes, setExtraWorkTypes] = useState<readonly string[]>([]);
@@ -532,7 +534,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
     const periodProblem = taskPeriodProblem({ periodFrom, periodTo, ...(callDate ? { callDate } : {}) });
     if (periodProblem) return fail(periodProblem);
     if (callDate && isFutureCompanyDate(callDate)) return fail("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
-    if (!workTypeCode) return fail("Выберите вид работ: нажмите на один или несколько видов");
+    if (!workTypeCode) return fail("Выберите вид работ");
     const comment = String(data.get("comment") ?? "").trim();
     const workModifier = String(data.get("workModifier") ?? "");
     setBusy(true);
