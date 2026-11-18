@@ -1,3 +1,4 @@
+import { EntityLink } from "./entity-links.js";
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import { m2Api, type InventoryPartRecord, type StockReservationRecord } from "./m2-api.js";
 import type { TaskPartPosition } from "./types.js";
@@ -100,7 +101,7 @@ export function TaskReservationsSection({ taskId, taskInWork, reservations, load
         return <li className="task-reservations__item" key={reservation.id}>
           <div className="task-reservations__main">
             <span className="task-reservations__number">{reservation.number}</span>
-            <strong>{reservation.articleNumber}</strong>
+            <strong><EntityLink target={{ kind: "part", id: reservation.partId }}>{reservation.articleNumber}</EntityLink></strong>
             <span className="task-reservations__name">{reservation.partName}</span>
             <small>{partQuantityText(reservation.quantity)} · {RESERVATION_CONDITION_LABELS[reservation.condition]}</small>
           </div>

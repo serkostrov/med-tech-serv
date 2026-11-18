@@ -36,11 +36,13 @@ describe("сетка календаря загрузки", () => {
     assert.match(html, />ноя</u);
   });
 
-  it("многодневная задача подписана в первом дне и продолжается полосками", () => {
+  it("многодневная задача подписана в каждом своём дне: в первом — название, дальше — какой это день", () => {
     const html = markup();
-    // Номер стоит один раз, в первом дне задачи: в клетках-продолжениях подписи нет.
-    assert.equal(html.match(/calendar-task__number">З-000101</gu)?.length, 1);
+    // Встреча 18.11: пустые полоски продолжения были непонятны. Номер — в каждом дне задачи,
+    // название — один раз, в первом дне, в остальных — «день 2 из 3».
+    assert.equal(html.match(/calendar-task__number">З-000101</gu)?.length, 3);
     assert.equal(html.match(/calendar-task__title">ТО анализатора</gu)?.length, 1);
+    assert.match(html, /calendar-task__day">день 2 из 3</u);
     assert.match(html, /calendar-task--continued/u);
     // День выезда помечен, подсказка рассказывает про день 2 из 3 и площадку.
     assert.match(html, /calendar-task--visit/u);

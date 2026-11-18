@@ -7,6 +7,8 @@ import { StockDocumentsView } from "./StockDocuments.js";
 import { conditionTotalsText, conditionTotalsTitle } from "./stock-movements.js";
 import { EngineerCompetencyEditor, type CompetencyDraft, type CompetencyReferences } from "./EngineerCompetencyEditor.js";
 import { EngineerCalendar } from "./EngineerCalendar.js";
+import { EngineerPage } from "./EngineerPage.js";
+import { useEntityNav, type EngineerPageTab } from "./entity-links.js";
 import { competenciesToSave, competencyKey, competencyLabel, withManufacturerIds, type EngineerCompetency } from "./engineer-competencies.js";
 import { AutoTextarea, Button, CardHeader, ConfirmationDialog, DataTableShell, DatePicker, DialogForm, FilterBar, IconButton, MetricCard, PageIntro, ResourceState, StatusBadge, Select, ViewSwitch, toast } from "./ui.js";
 import { formatDisplayDate, isoCalendarDate, parseIsoCalendarDate } from "./date-format.js";
@@ -31,7 +33,14 @@ function CompetencyTags({ engineer }: { readonly engineer: EngineerOverview }) {
 
 const EMPTY_DRAFT: CompetencyDraft = { manufacturerId: "", modelLine: "" };
 
-export function EngineersPage() {
+export function EngineersPage({ initialEngineerId, initialTab }: {
+  /** Страница инженера, открытая ссылкой (ФИО в задаче, календаре, отчёте). */
+  readonly initialEngineerId?: string | undefined;
+  readonly initialTab?: EngineerPageTab | undefined;
+} = {}) {
+  const nav = useEntityNav();
+  const [selectedId, setSelectedId] = useState<string | undefined>(initialEngineerId);
+  const [pageRefresh, setPageRefresh] = useState(0);
   const [engineers, setEngineers] = useState<readonly EngineerOverview[]>([]);
   // Список или календарь загрузки. Календарь показываем тому, кто и так видит все задачи
   // (координатор, руководитель): у остальных ролей база его не отдаст, и предлагать
@@ -87,13 +96,15 @@ export function EngineersPage() {
     }
     setSaving(true); setFormError(null);
     try {
+      const hasOwnStock = form.get("hasOwnStock") === "on";
       await m2Api.updateEngineer(editing.id, {
         fullName: String(form.get("fullName") ?? "").trim(),
+        ...(hasOwnStock !== (editing.hasOwnStock === true) ? { hasOwnStock } : {}),
         ...(prepared.changed ? {
           competencies: prepared.items.map((item) => ({ manufacturerId: item.manufacturerId ?? "", manufacturer: item.manufacturer, modelLine: item.modelLine ?? "" }))
         } : {})
       });
-      setEditing(null); await reload();
+      setEditing(null); setPageRefresh((value) => value + 1); await reload();
     } catch (saveError) {
       const text = saveError instanceof Error ? saveError.message : "Инженер не сохранён";
       setFormError(text);
@@ -101,6 +112,30 @@ export function EngineersPage() {
     }
     finally { setSaving(false); }
   };
+  // Страница инженера — своим шагом истории (через общий переход), чтобы «Назад» браузера вернул к списку.
+  const openEngineer = (id: string) => { if (nav?.can("engineer")) nav.open({ kind: "engineer", id }); else setSelectedId(id); };
+  const editor = <DialogForm busy={saving} description="По компетенциям CRM подсказывает, кого назначить на прибор." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} submitLabel="Сохранить карточку" title="Изменить карточку инженера">
+      <label className="field-wide">ФИО<input autoFocus defaultValue={editing?.fullName} name="fullName" required /></label>
+      <div className="field-wide competency-field">
+        <span className="competency-field__label">Компетенции</span>
+        <EngineerCompetencyEditor
+          canAdd={editing?.isActive !== false}
+          draft={draft}
+          onChange={setCompetencies}
+          onDraftChange={setDraft}
+          references={references}
+          referencesState={referencesState === "idle" ? "loading" : referencesState}
+          value={withManufacturerIds(competencies, references.manufacturers)}
+        />
+      </div>
+      <label className="field-check field-wide engineer-own-stock"><input defaultChecked={editing?.hasOwnStock === true} name="hasOwnStock" type="checkbox" /><span><strong>Есть свой склад</strong><small>На странице инженера появится вкладка «Склад»: какие запчасти сейчас у него.</small></span></label>
+    </DialogForm>;
+  if (selectedId) {
+    return <>
+      <EngineerPage engineerId={selectedId} {...(initialTab ? { initialTab } : {})} onBack={() => { if ((window.history.state as { engineerId?: string } | null)?.engineerId) window.history.back(); else setSelectedId(undefined); }} onEdit={openEditor} refreshKey={pageRefresh} />
+      {editor}
+    </>;
+  }
   const active = engineers.filter((item) => item.isActive);
   const assigned = active.reduce((sum, item) => sum + item.assignedTaskCount, 0);
   const overdue = active.reduce((sum, item) => sum + item.overdueTaskCount, 0);
@@ -119,23 +154,9 @@ export function EngineersPage() {
       <MetricCard icon="tasks" label="Открытые задачи" tone="yellow" value={String(assigned)} />
       <MetricCard icon="clock" label="Просроченные" tone="orange" value={String(overdue)} />
     </div>
-    <DataTableShell meta={formatRussianCount(engineers.length, ["человек", "человека", "человек"])} title="Загрузка">{loading && engineers.length === 0 ? <ResourceState description="Подождите, список инженеров сейчас появится." status="loading" title="Загружаем инженеров" /> : engineers.length === 0 ? <ResourceState description="Когда появятся сотрудники с ролью инженера, они отобразятся здесь." status="empty" title="Инженеров пока нет" /> : <div className="table-scroll engineer-load-scroll"><table className="data-table engineer-load-table"><thead><tr><th>Инженер</th><th>Компетенции</th><th>Загрузка</th><th className="numeric">Открытые</th><th className="numeric">В работе</th><th className="numeric">Просрочено</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{engineers.map((engineer) => <tr className={engineer.isActive ? "" : "reference-admin-table__inactive"} key={engineer.id}><td className="engineer-load-table__wide" data-label="Инженер"><strong>{engineer.fullName}</strong></td><td className="engineer-load-table__wide" data-label="Компетенции"><CompetencyTags engineer={engineer} /></td><td className="engineer-load-table__wide" data-label="Загрузка"><div aria-label={`Загрузка: ${formatRussianCount(engineer.assignedTaskCount, ["задача", "задачи", "задач"])}`} className="load-cell"><span><i style={{ width: `${Math.max(4, engineer.assignedTaskCount / maxLoad * 100)}%` }} /></span></div></td><td className="numeric" data-label="Открытые">{engineer.assignedTaskCount}</td><td className="numeric" data-label="В работе">{engineer.inProgressTaskCount}</td><td className="numeric" data-label="Просрочено"><strong className={engineer.overdueTaskCount ? "danger-text" : ""}>{engineer.overdueTaskCount}</strong></td><td data-label="Состояние"><StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Неактивен" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить карточку" onClick={() => openEditor(engineer)} /></div></td></tr>)}</tbody></table></div>}</DataTableShell>
+    <DataTableShell meta={formatRussianCount(engineers.length, ["человек", "человека", "человек"])} title="Загрузка">{loading && engineers.length === 0 ? <ResourceState description="Подождите, список инженеров сейчас появится." status="loading" title="Загружаем инженеров" /> : engineers.length === 0 ? <ResourceState description="Когда появятся сотрудники с ролью инженера, они отобразятся здесь." status="empty" title="Инженеров пока нет" /> : <div className="table-scroll engineer-load-scroll"><table className="data-table engineer-load-table"><thead><tr><th>Инженер</th><th>Компетенции</th><th>Загрузка</th><th className="numeric">Открытые</th><th className="numeric">В работе</th><th className="numeric">Просрочено</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{engineers.map((engineer) => <tr className={engineer.isActive ? "" : "reference-admin-table__inactive"} key={engineer.id}><td className="engineer-load-table__wide" data-label="Инженер"><button className="entity-link engineer-load-table__name" onClick={() => openEngineer(engineer.id)} title="Открыть страницу инженера" type="button"><strong>{engineer.fullName}</strong></button>{engineer.hasOwnStock ? <small className="muted"> · свой склад</small> : null}</td><td className="engineer-load-table__wide" data-label="Компетенции"><CompetencyTags engineer={engineer} /></td><td className="engineer-load-table__wide" data-label="Загрузка"><div aria-label={`Загрузка: ${formatRussianCount(engineer.assignedTaskCount, ["задача", "задачи", "задач"])}`} className="load-cell"><span><i style={{ width: `${Math.max(4, engineer.assignedTaskCount / maxLoad * 100)}%` }} /></span></div></td><td className="numeric" data-label="Открытые">{engineer.assignedTaskCount}</td><td className="numeric" data-label="В работе">{engineer.inProgressTaskCount}</td><td className="numeric" data-label="Просрочено"><strong className={engineer.overdueTaskCount ? "danger-text" : ""}>{engineer.overdueTaskCount}</strong></td><td data-label="Состояние"><StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Неактивен" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить карточку" onClick={() => openEditor(engineer)} /></div></td></tr>)}</tbody></table></div>}</DataTableShell>
     </>}
-    <DialogForm busy={saving} description="По компетенциям CRM подсказывает, кого назначить на прибор." error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(editing)} submitLabel="Сохранить карточку" title="Изменить карточку инженера">
-      <label className="field-wide">ФИО<input autoFocus defaultValue={editing?.fullName} name="fullName" required /></label>
-      <div className="field-wide competency-field">
-        <span className="competency-field__label">Компетенции</span>
-        <EngineerCompetencyEditor
-          canAdd={editing?.isActive !== false}
-          draft={draft}
-          onChange={setCompetencies}
-          onDraftChange={setDraft}
-          references={references}
-          referencesState={referencesState === "idle" ? "loading" : referencesState}
-          value={withManufacturerIds(competencies, references.manufacturers)}
-        />
-      </div>
-    </DialogForm>
+    {editor}
   </>;
 }
 
@@ -147,7 +168,19 @@ const emptyPart = { articleNumber: "", name: "", minimumStock: 0, notes: "", isA
  */
 const INVENTORY_BOARD_LIMIT = 500;
 
-export function WarehousePage() {
+export function WarehousePage({ initialPartId }: {
+  /** Страница запчасти, открытая ссылкой (из резерва, прибора, страницы инженера) или из списка. */
+  readonly initialPartId?: string | undefined;
+} = {}) {
+  const partNav = useEntityNav();
+  // Страница запчасти (встреча 18.11: вместо окна истории — страница со всей информацией).
+  const [pagePart, setPagePart] = useState<InventoryPartRecord | null | undefined>(initialPartId ? undefined : null);
+  const loadPagePart = async () => {
+    if (!initialPartId) return;
+    try { setPagePart((await m2Api.inventoryPartById(initialPartId)) ?? null); }
+    catch (loadError) { setPagePart(null); toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть запчасть"); }
+  };
+  useEffect(() => { void loadPagePart(); }, [initialPartId]);
   const [parts, setParts] = useState<readonly InventoryPartRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -303,6 +336,13 @@ export function WarehousePage() {
   if (openedFromList) lastOpened.current = openedFromList;
   const opened = openedId ? openedFromList ?? lastOpened.current : undefined;
   const documentsView = view === "documents";
+  // Запчасть открывается своей страницей новым шагом истории: «Назад» браузера вернёт к складу.
+  const openPart = (part: InventoryPartRecord) => { if (partNav?.can("part")) partNav.open({ kind: "part", id: part.id }); else setOpenedId(part.id); };
+  if (initialPartId) {
+    if (pagePart === undefined) return <ResourceState description="Подождите, страница запчасти сейчас откроется." status="loading" title="Загружаем запчасть" />;
+    if (pagePart === null) return <ResourceState description="Возможно, позицию удалили или у вас нет доступа к складу." status="empty" title="Запчасть не найдена" />;
+    return <InventoryPartCard asPage={{ onBack: () => window.history.back() }} canWrite={canWrite === true} onChanged={() => loadPagePart()} onOpenChange={() => undefined} open part={pagePart} />;
+  }
   return <>
     <PageIntro
       actions={documentsView ? undefined : <>
@@ -328,8 +368,8 @@ export function WarehousePage() {
     {view === "board" ? <DataTableShell meta={`${formatRussianCount(total, ["позиция", "позиции", "позиций"])}${total > parts.length ? `, из них на доске ${parts.length}` : ""}`} title="Запас по позициям">
       {loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" />
         : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} />
-        : <InventoryBoard loading={loading} onOpen={(part) => setOpenedId(part.id)} parts={parts} />}
-    </DataTableShell> : <DataTableShell meta={formatRussianCount(total, ["позиция", "позиции", "позиций"])} title="Запчасти">{loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" /> : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} /> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Артикул</th><th>Наименование</th><th className="numeric">На складе</th><th>Г · Н · Б</th><th className="numeric">В резерве</th><th className="numeric">Доступно</th><th className="numeric">Минимум</th><th className="numeric">У инженеров</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{parts.map((part) => <tr className={part.isActive ? "" : "reference-admin-table__inactive"} key={part.id}><td><strong>{part.articleNumber}</strong>{part.aliases ? <small className="inventory-table__aliases" title={`Артикулы поставщиков: ${part.aliases}`}>{part.aliases}</small> : null}</td><td>{part.name}</td><td className="numeric">{part.onHandQuantity}</td><td className="inventory-table__conditions" title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</td><td className="numeric">{part.reservedQuantity}</td><td className="numeric"><strong>{part.availableQuantity}</strong></td><td className="numeric">{part.minimumStock}</td><td className="numeric">{part.withEngineersQuantity}</td><td><StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge></td><td><div className="table-actions"><Button className="button--compact" onClick={() => setOpenedId(part.id)} variant="ghost">История</Button>{part.isActive ? <Button className="button--compact" onClick={() => { setFormError(null); setReceiving(part); }} variant="secondary">Пополнить</Button> : null}<IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(part); }} />{part.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(part)} /> : <IconButton icon="enable" label="Включить" onClick={() => void m2Api.updateInventoryPart(part.id, { isActive: true }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div><RegistryPagination ariaLabel="Страницы склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}</DataTableShell>}
+        : <InventoryBoard loading={loading} onOpen={openPart} parts={parts} />}
+    </DataTableShell> : <DataTableShell meta={formatRussianCount(total, ["позиция", "позиции", "позиций"])} title="Запчасти">{loading && parts.length === 0 ? <ResourceState description="Подождите, склад сейчас появится." status="loading" title="Загружаем склад" /> : parts.length === 0 ? <ResourceState description={filters.search || filters.state !== "active" || filters.stock ? "Измените поиск или сбросьте фильтры." : "Добавьте первую позицию, затем пополните остаток."} status={filters.search || filters.state !== "active" || filters.stock ? "filtered-empty" : "empty"} title={filters.search || filters.state !== "active" || filters.stock ? "Запчастей по этим условиям нет" : "Запчастей пока нет"} /> : <><div className="table-scroll"><table className="data-table"><thead><tr><th>Артикул</th><th>Наименование</th><th className="numeric">На складе</th><th>Г · Н · Б</th><th className="numeric">В резерве</th><th className="numeric">Доступно</th><th className="numeric">Минимум</th><th className="numeric">У инженеров</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{parts.map((part) => <tr className={part.isActive ? "" : "reference-admin-table__inactive"} key={part.id}><td><button className="entity-link" onClick={() => openPart(part)} title="Открыть страницу запчасти" type="button"><strong>{part.articleNumber}</strong></button>{part.aliases ? <small className="inventory-table__aliases" title={`Артикулы поставщиков: ${part.aliases}`}>{part.aliases}</small> : null}</td><td><button className="entity-link" onClick={() => openPart(part)} title="Открыть страницу запчасти" type="button">{part.name}</button></td><td className="numeric">{part.onHandQuantity}</td><td className="inventory-table__conditions" title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</td><td className="numeric">{part.reservedQuantity}</td><td className="numeric"><strong>{part.availableQuantity}</strong></td><td className="numeric">{part.minimumStock}</td><td className="numeric">{part.withEngineersQuantity}</td><td><StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge></td><td><div className="table-actions"><Button className="button--compact" onClick={() => openPart(part)} variant="ghost">Открыть</Button>{part.isActive ? <Button className="button--compact" onClick={() => { setFormError(null); setReceiving(part); }} variant="secondary">Пополнить</Button> : null}<IconButton icon="edit" label="Изменить карточку" onClick={() => { setFormError(null); setEditing(part); }} />{part.isActive ? <IconButton icon="disable" label="Отключить" onClick={() => setDeactivating(part)} /> : <IconButton icon="enable" label="Включить" onClick={() => void m2Api.updateInventoryPart(part.id, { isActive: true }).then(() => reload())} />}</div></td></tr>)}</tbody></table></div><RegistryPagination ariaLabel="Страницы склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}</DataTableShell>}
     </>}
     <DialogForm busy={saving} description={editing === "new" ? "Можно сразу указать начальный остаток — он попадёт на склад как поступление." : "Изменятся наименование, минимум и примечание. Остаток меняйте через «Пополнить»."} error={formError} onOpenChange={(open) => { if (!open) setEditing(null); }} onSubmit={save} open={Boolean(draft)} submitLabel={editing === "new" ? "Добавить запчасть" : "Сохранить изменения"} title={editing === "new" ? "Новая запчасть" : "Изменить запчасть"}><label>Артикул<input autoFocus defaultValue={draft?.articleNumber} name="articleNumber" required /></label><label>Наименование<input defaultValue={draft?.name} name="name" required /></label><label>Минимальный остаток<input defaultValue={draft?.minimumStock} min="0" name="minimumStock" step="0.001" type="number" /></label>{editing === "new" ? <label>Начальный остаток<input defaultValue="0" min="0" name="initialQuantity" step="0.001" type="number" /></label> : null}<label className="field-check field-wide"><input checked={countable} onChange={(event) => setCountable(event.target.checked)} type="checkbox" /><span>Считается штуками<small className="form-hint">Количество только целое. Снимите для трубок, жидкостей и всего, что меряют метрами или литрами.</small></span></label><label className="field-wide">Примечание<AutoTextarea defaultValue={draft?.notes ?? ""} name="notes" rows={3} /></label></DialogForm>
     <DialogForm

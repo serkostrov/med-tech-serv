@@ -8,6 +8,7 @@ import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { equipmentOptionMeta, equipmentOptionTitle } from "./equipment-options.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { StatusBoard, localStatusPage } from "./StatusBoard.js";
+import { EntityLink, useEntityNav } from "./entity-links.js";
 
 export const MAINTENANCE_MONTHS = [
   "Янв", "Фев", "Мар", "Апр", "Май", "Июн", "Июл", "Авг", "Сен", "Окт", "Ноя", "Дек"
@@ -80,6 +81,16 @@ export function generationSummary(result: { readonly created: readonly unknown[]
 
 const NO_EQUIPMENT: readonly EquipmentApiRecord[] = [];
 
+/**
+ * Вторая строка периода в графике. В группе инженера его ФИО уже в заголовке — не повторяем
+ * (встреча 18.11: «дублирующая информация»), вместо него — клиент. В группе организации — инженер.
+ */
+export function maintenanceRowDetails(item: Pick<MaintenancePlanPeriodResponse, "periodFrom" | "periodTo" | "assignedEngineerName" | "organization" | "site">, view: string): string {
+  const period = formatMaintenancePeriod(item.periodFrom, item.periodTo);
+  if (view === "engineer") return [period, item.organization ?? item.site].filter(Boolean).join(" · ");
+  return `${period} · ${item.assignedEngineerName ?? "инженер не назначен"}`;
+}
+
 /** Где на годовой шкале сегодняшний день, в процентах; вне выбранного года — нет отметки. */
 function todayPercent(year: number): number | undefined {
   const now = new Date();
@@ -137,7 +148,251 @@ function defaultPeriod(year: number, key: number, previousTo?: string): PeriodDr
   return { key, periodFrom, periodTo: shiftIsoDate(periodFrom, 14), assignedEngineerId: "", comment: "", locked: false };
 }
 
+/**
+ * Окно «План прибора на год»: периоды ТО, инженеры, комментарии. Одно и то же окно открывает
+ * кнопка «Настроить план» в плане ТО (прибор выбирают) и вкладка «План ТО» в карточке прибора
+ * (прибор уже выбран и не меняется).
+ */
+export function MaintenancePlanDialog({ open, onOpenChange, year, engineers, device = null, lockDevice = false, planItems, onSaved }: {
+  readonly open: boolean;
+  readonly onOpenChange: (open: boolean) => void;
+  readonly year: number;
+  readonly engineers: readonly { readonly id: string; readonly fullName: string }[];
+  /** Прибор, с которым открыть окно. */
+  readonly device?: EquipmentApiRecord | null;
+  /** Прибор не меняется (окно открыто из его карточки). */
+  readonly lockDevice?: boolean;
+  /** Периоды плана на этот год: по ним окно показывает уже заданный план прибора. */
+  readonly planItems: readonly MaintenancePlanPeriodResponse[];
+  readonly onSaved: () => void | Promise<void>;
+}) {
+  const [equipmentId, setEquipmentId] = useState("");
+  // Прибор выбирают поиском, как в новой задаче: список в тысячу приборов без поиска не пролистать.
+  const [selectedDevice, setSelectedDevice] = useState<EquipmentApiRecord | null>(null);
+  const [pickingDevice, setPickingDevice] = useState(false);
+  const [periods, setPeriods] = useState<readonly PeriodDraft[]>([defaultPeriod(year, 1)]);
+  const [nextPeriodKey, setNextPeriodKey] = useState(2);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+
+  const chooseEquipment = (chosen: EquipmentApiRecord) => {
+    setSelectedDevice(chosen);
+    setPickingDevice(false);
+    setFormError(null);
+    setEquipmentId(chosen.id);
+    const existing = planItems.filter((item) => item.equipmentId === chosen.id);
+    if (existing.length === 0) {
+      setPeriods([defaultPeriod(year, nextPeriodKey)]);
+      setNextPeriodKey((value) => value + 1);
+      return;
+    }
+    const { drafts, nextKey } = planDrafts(existing, nextPeriodKey);
+    setPeriods(drafts);
+    setNextPeriodKey(nextKey);
+  };
+
+  // Каждое открытие — с чистого листа или с плана выбранного прибора.
+  useEffect(() => {
+    if (!open) return;
+    setFormError(null);
+    if (device) { chooseEquipment(device); return; }
+    setEquipmentId("");
+    setSelectedDevice(null);
+    setPickingDevice(false);
+    setPeriods([defaultPeriod(year, nextPeriodKey)]);
+    setNextPeriodKey((value) => value + 1);
+  }, [open, device?.id, year]);
+
+  const updatePeriod = (key: number, patch: Partial<Omit<PeriodDraft, "key">>) => {
+    setPeriods((current) => current.map((period) => period.key === key ? { ...period, ...patch } : period));
+  };
+  const addPeriod = () => {
+    if (periods.length >= MAX_ANNUAL_MAINTENANCE_PERIODS) return;
+    // Новый период — после самого позднего, даже если периоды в окне идут не по датам.
+    setPeriods((current) => [...current, defaultPeriod(year, nextPeriodKey, current.map((item) => item.periodTo).sort().at(-1))]);
+    setNextPeriodKey((value) => value + 1);
+  };
+  const removePeriod = (key: number) => {
+    if (periods.length <= 1) return;
+    setPeriods((current) => current.filter((item) => item.key !== key || item.locked));
+  };
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!equipmentId) {
+      const text = "Выберите прибор для годового плана";
+      setFormError(text);
+      toast.warning(text);
+      return;
+    }
+    setSaving(true);
+    setFormError(null);
+    try {
+      await m2Api.replaceMaintenancePlan({
+        equipmentId, year,
+        periods: periods.map((period) => ({
+          periodFrom: period.periodFrom, periodTo: period.periodTo,
+          ...(period.assignedEngineerId ? { assignedEngineerId: period.assignedEngineerId } : {}),
+          ...(period.comment.trim() ? { comment: period.comment.trim() } : {})
+        }))
+      });
+      onOpenChange(false);
+      await onSaved();
+    } catch (saveError) {
+      const text = saveError instanceof Error ? saveError.message : "Не получилось сохранить план";
+      setFormError(text);
+      toast.error(text);
+    } finally { setSaving(false); }
+  };
+  const existingPlanCount = planItems.filter((item) => item.equipmentId === equipmentId).length;
+  // Периоды с задачей и закрытые в окне только для просмотра: база их не меняет.
+  const lockedPeriodCount = periods.filter((item) => item.locked).length;
+
+  return <DialogForm
+    busy={saving}
+    description={lockDevice ? "Задайте периоды ТО прибора на год. Из сохранённого плана потом можно создать задачи инженерам." : "Сначала выберите прибор, затем задайте периоды ТО. Из сохранённого плана потом можно создать задачи инженерам."}
+    error={formError}
+    onOpenChange={onOpenChange}
+    onSubmit={submit}
+    open={open}
+    size="lg"
+    submitDisabled={!equipmentId || pickingDevice}
+    submitLabel="Сохранить план"
+    title={`План прибора на ${year} год`}
+  >
+    <div className="maintenance-plan-form">
+      <div className="equipment-picker maintenance-plan-form__device">
+        <span className="equipment-picker__label">Прибор *</span>
+        {selectedDevice && !pickingDevice ? (
+          <div className="equipment-picker__selected">
+            <p className="equipment-picker__result">
+              <strong>{equipmentOptionTitle(selectedDevice)}</strong>
+              <span>{equipmentOptionMeta(selectedDevice)}</span>
+            </p>
+            {lockDevice ? null : <Button onClick={() => setPickingDevice(true)} variant="secondary">Сменить</Button>}
+          </div>
+        ) : (
+          <>
+            <EquipmentFolderPicker allowCreate={false} equipment={NO_EQUIPMENT} onSelect={chooseEquipment} />
+            {selectedDevice ? <Button className="maintenance-plan-form__keep" onClick={() => setPickingDevice(false)} variant="ghost">Не менять прибор</Button> : null}
+          </>
+        )}
+      </div>
+      {/* Пока выбирают другой прибор, периоды старого не показываем и не сохраняем. */}
+      {equipmentId && !pickingDevice ? (
+        <div className="maintenance-plan-form__periods">
+          <div className="maintenance-plan-form__periods-head">
+            <div>
+              <h3>Периоды ТО</h3>
+              <p>{lockedPeriodCount > 0
+                ? "Периоды с задачей и закрытые не меняются: сроки ТО переносите в самих задачах. Остальные периоды можно менять и добавлять новые."
+                : existingPlanCount > 0 ? `У прибора уже есть план на ${year} год. Сохранение заменит текущие периоды.` : `Можно задать от 1 до ${MAX_ANNUAL_MAINTENANCE_PERIODS} периодов в год.`}</p>
+            </div>
+            <span>{periods.length} из {MAX_ANNUAL_MAINTENANCE_PERIODS}</span>
+          </div>
+          <div className="maintenance-period-editor">
+            {periods.map((period, index) => period.locked ? (
+              <article aria-labelledby={`maintenance-period-${period.key}`} className="maintenance-period-card maintenance-period-card--locked" key={period.key}>
+                <header>
+                  <h4 id={`maintenance-period-${period.key}`}>ТО № {index + 1}</h4>
+                  <span className="maintenance-period-card__lock">{period.lockLabel ?? maintenancePlanStatusLabel.generated}</span>
+                </header>
+                <dl className="maintenance-period-card__facts">
+                  <div><dt>Начало</dt><dd>{formatIsoCalendarDate(period.periodFrom)}</dd></div>
+                  <div><dt>Окончание</dt><dd>{formatIsoCalendarDate(period.periodTo)}</dd></div>
+                  <div><dt>Инженер</dt><dd>{period.engineerName ?? "не назначен"}</dd></div>
+                  {period.comment ? <div><dt>Комментарий</dt><dd>{period.comment}</dd></div> : null}
+                </dl>
+              </article>
+            ) : (
+              <article aria-labelledby={`maintenance-period-${period.key}`} className="maintenance-period-card" key={period.key}>
+                <header>
+                  <h4 id={`maintenance-period-${period.key}`}>ТО № {index + 1}</h4>
+                  {periods.length > 1 ? <IconButton icon="close" label={`Удалить период ${index + 1}`} onClick={() => removePeriod(period.key)} /> : null}
+                </header>
+                <label>
+                  Начало
+                  <DatePicker onChange={(periodFrom) => updatePeriod(period.key, { periodFrom })} required value={period.periodFrom} />
+                </label>
+                <label>
+                  Окончание
+                  <DatePicker onChange={(periodTo) => updatePeriod(period.key, { periodTo })} required value={period.periodTo} />
+                </label>
+                <label>
+                  Инженер
+                  <Select onChange={(event) => updatePeriod(period.key, { assignedEngineerId: event.target.value })} value={period.assignedEngineerId}>
+                    <option value="">Назначить позднее</option>
+                    {engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}
+                  </Select>
+                </label>
+                <label>
+                  Комментарий
+                  <input maxLength={500} onChange={(event) => updatePeriod(period.key, { comment: event.target.value })} placeholder="Необязательно" value={period.comment} />
+                </label>
+              </article>
+            ))}
+          </div>
+          {periods.length < MAX_ANNUAL_MAINTENANCE_PERIODS
+            ? <Button icon="plus" onClick={addPeriod} variant="secondary">Добавить период</Button>
+            : <p className="form-hint">В год можно задать не больше {MAX_ANNUAL_MAINTENANCE_PERIODS} периодов ТО.</p>}
+        </div>
+      ) : <p className="maintenance-plan-form__empty">Сначала выберите прибор — тогда можно задать периоды ТО.</p>}
+    </div>
+  </DialogForm>;
+}
+
+/** Прибор периода в виде, который понимает окно плана. */
+function periodDevice(item: MaintenancePlanPeriodResponse): EquipmentApiRecord {
+  return { id: item.equipmentId, serialNumber: item.equipment.serialNumber, manufacturer: item.equipment.manufacturer, model: item.equipment.model, status: "", ...(item.organization ? { organization: item.organization } : {}), ...(item.site ? { site: item.site } : {}) };
+}
+
+/**
+ * Вкладка «План ТО» в карточке прибора (встреча 18.11): периоды ТО этого прибора на год,
+ * инженер и задача по каждому, кнопка «Изменить план». Карточка на доске плана ведёт сюда.
+ */
+export function EquipmentPlanTab({ device, readOnly = false }: { readonly device: EquipmentApiRecord; readonly readOnly?: boolean }) {
+  const [year, setYear] = useState(() => new Date().getFullYear());
+  const [items, setItems] = useState<readonly MaintenancePlanPeriodResponse[] | null>(null);
+  const [engineers, setEngineers] = useState<readonly { readonly id: string; readonly fullName: string }[]>([]);
+  const [editing, setEditing] = useState(false);
+  const load = async (targetYear = year) => {
+    setItems(null);
+    try {
+      const plans = await m2Api.maintenancePlans(targetYear, "equipment", { equipmentId: device.id });
+      setItems([...plans.items].sort((left, right) => left.periodFrom.localeCompare(right.periodFrom)));
+    } catch (loadError) {
+      setItems([]);
+      toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить план ТО прибора");
+    }
+  };
+  useEffect(() => { void load(year); }, [year, device.id]);
+  useEffect(() => { if (!readOnly) void m2Api.listTaskEngineers().then(setEngineers).catch(() => setEngineers([])); }, [readOnly]);
+  return <section className="task-section" aria-labelledby={`equipment-plan-${device.id}`}>
+    <header className="task-section__head">
+      <h3 id={`equipment-plan-${device.id}`}>План ТО</h3>
+      <div className="equipment-plan__tools">
+        <div className="year-stepper" role="group" aria-label="Год плана">
+          <button aria-label="Предыдущий год" onClick={() => setYear((value) => value - 1)} type="button">‹</button>
+          <strong>{year}</strong>
+          <button aria-label="Следующий год" onClick={() => setYear((value) => value + 1)} type="button">›</button>
+        </div>
+        {readOnly ? null : <Button icon="edit" onClick={() => setEditing(true)} variant="secondary">{items && items.length ? "Изменить план" : "Задать план"}</Button>}
+      </div>
+    </header>
+    {items === null ? <div className="task-section__empty"><p>Загружаем план…</p></div> : items.length === 0 ? <div className="task-section__empty"><p>На {year} год плана ТО у прибора нет.{readOnly ? "" : " Нажмите «Задать план», чтобы указать периоды обслуживания."}</p></div> : <div className="table-scroll"><table className="data-table equipment-plan-table"><thead><tr><th scope="col">ТО</th><th scope="col">Период</th><th scope="col">Инженер</th><th scope="col">Задача</th><th scope="col">Состояние</th></tr></thead><tbody>
+      {items.map((item, index) => <tr key={item.id}>
+        <td><strong>ТО № {index + 1}</strong>{item.comment ? <small className="muted"> · {item.comment}</small> : null}</td>
+        <td>{formatMaintenancePeriod(item.periodFrom, item.periodTo)}</td>
+        <td>{item.assignedEngineerId ? <EntityLink target={{ kind: "engineer", id: item.assignedEngineerId }}>{item.assignedEngineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>
+        <td>{item.generatedTaskId ? <EntityLink target={{ kind: "task", id: item.generatedTaskId }}>Открыть задачу</EntityLink> : <span className="muted">ещё не создана</span>}</td>
+        <td><span className={`maintenance-status maintenance-status--${item.status}`}>{maintenancePlanStatusLabel[item.status]}</span></td>
+      </tr>)}
+    </tbody></table></div>}
+    {readOnly ? null : <MaintenancePlanDialog device={device} engineers={engineers} lockDevice planItems={items ?? []} onOpenChange={setEditing} onSaved={() => load(year)} open={editing} year={year} />}
+  </section>;
+}
+
 export function MaintenancePlanPage() {
+  const nav = useEntityNav();
   const initialYear = new Date().getUTCFullYear();
   const [year, setYear] = useState(initialYear);
   // По умолчанию — доска по месяцам (просьба 17.11: «по месяцам разбить, чтобы посмотреть»).
@@ -146,16 +401,9 @@ export function MaintenancePlanPage() {
   const [engineers, setEngineers] = useState<readonly { readonly id: string; readonly fullName: string }[]>([]);
   const [selected, setSelected] = useState<readonly string[]>([]);
   const [formOpen, setFormOpen] = useState(false);
-  const [equipmentId, setEquipmentId] = useState("");
-  // Прибор выбирают поиском, как в новой задаче: список в тысячу приборов без поиска не пролистать.
-  const [selectedDevice, setSelectedDevice] = useState<EquipmentApiRecord | null>(null);
-  const [pickingDevice, setPickingDevice] = useState(false);
+  const [formDevice, setFormDevice] = useState<EquipmentApiRecord | null>(null);
   const [generating, setGenerating] = useState(false);
-  const [periods, setPeriods] = useState<readonly PeriodDraft[]>([defaultPeriod(initialYear, 1)]);
-  const [nextPeriodKey, setNextPeriodKey] = useState(2);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [formError, setFormError] = useState<string | null>(null);
 
   const load = async (targetYear = year, targetView = view) => {
     setLoading(true);
@@ -176,83 +424,15 @@ export function MaintenancePlanPage() {
 
   useEffect(() => { void load(year, view); }, [year, view]);
 
-  const changeYear = (nextYear: number) => {
-    setYear(nextYear);
-    setPeriods([defaultPeriod(nextYear, nextPeriodKey)]);
-    setNextPeriodKey((value) => value + 1);
-  };
-
-  const updatePeriod = (key: number, patch: Partial<Omit<PeriodDraft, "key">>) => {
-    setPeriods((current) => current.map((period) => period.key === key ? { ...period, ...patch } : period));
-  };
-
-  const chooseEquipment = (device: EquipmentApiRecord) => {
-    const id = device.id;
-    setSelectedDevice(device);
-    setPickingDevice(false);
-    setFormError(null);
-    setEquipmentId(id);
-    const existing = data?.items.filter((item) => item.equipmentId === id) ?? [];
-    if (existing.length === 0) {
-      setPeriods([defaultPeriod(year, nextPeriodKey)]);
-      setNextPeriodKey((value) => value + 1);
-      return;
-    }
-    const { drafts, nextKey } = planDrafts(existing, nextPeriodKey);
-    setPeriods(drafts);
-    setNextPeriodKey(nextKey);
-  };
-
-  const addPeriod = () => {
-    if (periods.length >= MAX_ANNUAL_MAINTENANCE_PERIODS) return;
-    // Новый период — после самого позднего, даже если периоды в окне идут не по датам.
-    setPeriods((current) => [...current, defaultPeriod(year, nextPeriodKey, current.map((item) => item.periodTo).sort().at(-1))]);
-    setNextPeriodKey((value) => value + 1);
-  };
-
-  const removePeriod = (key: number) => {
-    if (periods.length <= 1) return;
-    setPeriods((current) => current.filter((item) => item.key !== key || item.locked));
-  };
-
-  const openForm = () => {
-    setFormError(null);
-    setEquipmentId("");
-    setSelectedDevice(null);
-    setPickingDevice(false);
-    setPeriods([defaultPeriod(year, nextPeriodKey)]);
-    setNextPeriodKey((value) => value + 1);
+  const openForm = (device: EquipmentApiRecord | null = null) => {
+    setFormDevice(device);
     setFormOpen(true);
   };
-
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (!equipmentId) {
-      const text = "Выберите прибор для годового плана";
-      setFormError(text);
-      toast.warning(text);
-      return;
-    }
-    setSaving(true);
-    setFormError(null);
-    try {
-      await m2Api.replaceMaintenancePlan({
-        equipmentId, year,
-        periods: periods.map((period) => ({
-          periodFrom: period.periodFrom, periodTo: period.periodTo,
-          ...(period.assignedEngineerId ? { assignedEngineerId: period.assignedEngineerId } : {}),
-          ...(period.comment.trim() ? { comment: period.comment.trim() } : {})
-        }))
-      });
-      setFormOpen(false);
-      await load();
-    } catch (saveError) {
-      const text = saveError instanceof Error ? saveError.message : "Не получилось сохранить план";
-      setFormError(text);
-      toast.error(text);
-    } finally { setSaving(false); }
+  // Встреча 18.11: из плана ТО — в карточку прибора, на вкладку «План ТО». Без раздела «Приборы» — окно плана.
+  const openDevice = (item: MaintenancePlanPeriodResponse) => {
+    if (nav?.can("equipment")) nav.open({ kind: "equipment", id: item.equipmentId, tab: "plan" });
+    else openForm(periodDevice(item));
   };
-
   const [confirmAll, setConfirmAll] = useState(false);
   // Без выбранных строк задачи создаются по всем запланированным периодам года: сначала спрашиваем.
   const requestGenerate = () => {
@@ -287,9 +467,6 @@ export function MaintenancePlanPage() {
   const toggle = (id: string) => setSelected((current) => current.includes(id)
     ? current.filter((item) => item !== id) : [...current, id]);
   const items = data?.items ?? [];
-  const existingPlanCount = items.filter((item) => item.equipmentId === equipmentId).length;
-  // Периоды с задачей и закрытые в окне только для просмотра: база их не меняет.
-  const lockedPeriodCount = periods.filter((item) => item.locked).length;
   const generatedCount = items.filter(periodHasTask).length;
   const organizations = new Set(items.map((item) => item.organizationId).filter(Boolean)).size;
 
@@ -299,7 +476,7 @@ export function MaintenancePlanPage() {
     <PageIntro
       actions={
         <>
-          <Button onClick={openForm} variant="secondary">Настроить план</Button>
+          <Button onClick={() => openForm()} variant="secondary">Настроить план</Button>
           <Button busy={generating} busyLabel="Создаём задачи…" disabled={loading} onClick={requestGenerate}>
             {selected.length ? `Создать задачи · ${selected.length}` : "Создать задачи"}
           </Button>
@@ -308,9 +485,9 @@ export function MaintenancePlanPage() {
       title="План ТО"
       titleAside={<>
         <div className="year-stepper" role="group" aria-label="Год плана">
-          <button aria-label="Предыдущий год" onClick={() => changeYear(year - 1)} type="button">‹</button>
+          <button aria-label="Предыдущий год" onClick={() => setYear(year - 1)} type="button">‹</button>
           <strong>{year}</strong>
-          <button aria-label="Следующий год" onClick={() => changeYear(year + 1)} type="button">›</button>
+          <button aria-label="Следующий год" onClick={() => setYear(year + 1)} type="button">›</button>
         </div>
         <ViewSwitch items={[{ value: "month", label: "По месяцам" }, { value: "equipment", label: "По приборам" }, { value: "engineer", label: "По инженерам" }, { value: "organization", label: "По организациям" }]} label="Группировка плана" onValueChange={setView} value={view} />
       </>}
@@ -325,97 +502,7 @@ export function MaintenancePlanPage() {
       tone="primary"
     />
 
-    <DialogForm
-      busy={saving}
-      description="Сначала выберите прибор, затем задайте периоды ТО. Из сохранённого плана потом можно создать задачи инженерам."
-      error={formError}
-      onOpenChange={setFormOpen}
-      onSubmit={submit}
-      open={formOpen}
-      size="lg"
-      submitDisabled={!equipmentId || pickingDevice}
-      submitLabel="Сохранить план"
-      title={`План прибора на ${year} год`}
-    >
-      <div className="maintenance-plan-form">
-        <div className="equipment-picker maintenance-plan-form__device">
-          <span className="equipment-picker__label">Прибор *</span>
-          {selectedDevice && !pickingDevice ? (
-            <div className="equipment-picker__selected">
-              <p className="equipment-picker__result">
-                <strong>{equipmentOptionTitle(selectedDevice)}</strong>
-                <span>{equipmentOptionMeta(selectedDevice)}</span>
-              </p>
-              <Button onClick={() => setPickingDevice(true)} variant="secondary">Сменить</Button>
-            </div>
-          ) : (
-            <>
-              <EquipmentFolderPicker allowCreate={false} equipment={NO_EQUIPMENT} onSelect={chooseEquipment} />
-              {selectedDevice ? <Button className="maintenance-plan-form__keep" onClick={() => setPickingDevice(false)} variant="ghost">Не менять прибор</Button> : null}
-            </>
-          )}
-        </div>
-        {/* Пока выбирают другой прибор, периоды старого не показываем и не сохраняем. */}
-        {equipmentId && !pickingDevice ? (
-          <div className="maintenance-plan-form__periods">
-            <div className="maintenance-plan-form__periods-head">
-              <div>
-                <h3>Периоды ТО</h3>
-                <p>{lockedPeriodCount > 0
-                  ? "Периоды с задачей и закрытые не меняются: сроки ТО переносите в самих задачах. Остальные периоды можно менять и добавлять новые."
-                  : existingPlanCount > 0 ? `У прибора уже есть план на ${year} год. Сохранение заменит текущие периоды.` : `Можно задать от 1 до ${MAX_ANNUAL_MAINTENANCE_PERIODS} периодов в год.`}</p>
-              </div>
-              <span>{periods.length} из {MAX_ANNUAL_MAINTENANCE_PERIODS}</span>
-            </div>
-            <div className="maintenance-period-editor">
-              {periods.map((period, index) => period.locked ? (
-                <article aria-labelledby={`maintenance-period-${period.key}`} className="maintenance-period-card maintenance-period-card--locked" key={period.key}>
-                  <header>
-                    <h4 id={`maintenance-period-${period.key}`}>ТО № {index + 1}</h4>
-                    <span className="maintenance-period-card__lock">{period.lockLabel ?? maintenancePlanStatusLabel.generated}</span>
-                  </header>
-                  <dl className="maintenance-period-card__facts">
-                    <div><dt>Начало</dt><dd>{formatIsoCalendarDate(period.periodFrom)}</dd></div>
-                    <div><dt>Окончание</dt><dd>{formatIsoCalendarDate(period.periodTo)}</dd></div>
-                    <div><dt>Инженер</dt><dd>{period.engineerName ?? "не назначен"}</dd></div>
-                    {period.comment ? <div><dt>Комментарий</dt><dd>{period.comment}</dd></div> : null}
-                  </dl>
-                </article>
-              ) : (
-                <article aria-labelledby={`maintenance-period-${period.key}`} className="maintenance-period-card" key={period.key}>
-                  <header>
-                    <h4 id={`maintenance-period-${period.key}`}>ТО № {index + 1}</h4>
-                    {periods.length > 1 ? <IconButton icon="close" label={`Удалить период ${index + 1}`} onClick={() => removePeriod(period.key)} /> : null}
-                  </header>
-                  <label>
-                    Начало
-                    <DatePicker onChange={(periodFrom) => updatePeriod(period.key, { periodFrom })} required value={period.periodFrom} />
-                  </label>
-                  <label>
-                    Окончание
-                    <DatePicker onChange={(periodTo) => updatePeriod(period.key, { periodTo })} required value={period.periodTo} />
-                  </label>
-                  <label>
-                    Инженер
-                    <Select onChange={(event) => updatePeriod(period.key, { assignedEngineerId: event.target.value })} value={period.assignedEngineerId}>
-                      <option value="">Назначить позднее</option>
-                      {engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}
-                    </Select>
-                  </label>
-                  <label>
-                    Комментарий
-                    <input maxLength={500} onChange={(event) => updatePeriod(period.key, { comment: event.target.value })} placeholder="Необязательно" value={period.comment} />
-                  </label>
-                </article>
-              ))}
-            </div>
-            {periods.length < MAX_ANNUAL_MAINTENANCE_PERIODS
-              ? <Button icon="plus" onClick={addPeriod} variant="secondary">Добавить период</Button>
-              : <p className="form-hint">В год можно задать не больше {MAX_ANNUAL_MAINTENANCE_PERIODS} периодов ТО.</p>}
-          </div>
-        ) : <p className="maintenance-plan-form__empty">Сначала выберите прибор — тогда можно задать периоды ТО.</p>}
-      </div>
-    </DialogForm>
+    <MaintenancePlanDialog device={formDevice} engineers={engineers} planItems={items} onOpenChange={setFormOpen} onSaved={() => load()} open={formOpen} year={year} />
 
     {view === "month" ? <StatusBoard<MaintenancePlanPeriodResponse>
       columns={maintenanceMonthColumns(year)}
@@ -424,11 +511,7 @@ export function MaintenancePlanPage() {
       itemKey={(item) => item.id}
       label={`План ТО на ${year} год по месяцам`}
       load={async (month, offset, limit) => localStatusPage([...items].sort((left, right) => left.periodFrom.localeCompare(right.periodFrom)), (item) => String(maintenanceMonthIndex(item.periodFrom)) === month, offset, limit)}
-      onOpen={(item) => {
-        // Карточка открывает план этого прибора: периоды, инженеры, комментарии.
-        openForm();
-        chooseEquipment({ id: item.equipmentId, serialNumber: item.equipment.serialNumber, manufacturer: item.equipment.manufacturer, model: item.equipment.model, status: "", ...(item.organization ? { organization: item.organization } : {}), ...(item.site ? { site: item.site } : {}) });
-      }}
+      onOpen={openDevice}
       queryKey={`${year}:${loading ? "loading" : "ready"}:${items.map((item) => `${item.id}=${item.status}`).join(",")}`}
       renderCard={(item) => <>
         <span className="task-board-card__top">S/N {item.equipment.serialNumber}</span>
@@ -453,11 +536,15 @@ export function MaintenancePlanPage() {
         // По приборам подписываем группу моделью и клиентом, а не одним серийным номером.
         const label = view === "equipment" && first ? `${first.equipment.manufacturer} ${first.equipment.model} · S/N ${first.equipment.serialNumber}` : group.label;
         const sub = view === "equipment" && first ? first.organization ?? first.site : undefined;
+        // Заголовок группы — ссылка: прибор ведёт в его карточку, инженер — на его страницу (встреча 18.11).
+        const title = view === "equipment" && first
+          ? <EntityLink target={{ kind: "equipment", id: first.equipmentId, tab: "plan" }}>{label}</EntityLink>
+          : view === "engineer" && first?.assignedEngineerId ? <EntityLink target={{ kind: "engineer", id: first.assignedEngineerId }}>{label}</EntityLink> : label;
         return <article className="maintenance-group" key={group.key}>
-        <header><h3>{label}{sub ? <small>{sub}</small> : null}</h3><span>{formatRussianCount(group.items.length, ["период", "периода", "периодов"])}</span></header>
+        <header><h3>{title}{sub ? <small>{sub}</small> : null}</h3><span>{formatRussianCount(group.items.length, ["период", "периода", "периодов"])}</span></header>
         {group.items.map((item, index) => <div className="maintenance-row" key={item.id}>
           <label className="maintenance-row__select"><input checked={selected.includes(item.id)} disabled={!canGenerateTask(item)} onChange={() => toggle(item.id)} type="checkbox" /><span className="sr-only">Выбрать период {formatMaintenancePeriod(item.periodFrom, item.periodTo)}</span></label>
-          <div className="maintenance-row__identity"><strong>{view === "equipment" ? `ТО № ${index + 1}` : `${item.equipment.model} · S/N ${item.equipment.serialNumber}`}</strong><span>{formatMaintenancePeriod(item.periodFrom, item.periodTo)} · {item.assignedEngineerName ?? "инженер не назначен"}</span></div>
+          <div className="maintenance-row__identity"><strong>{view === "equipment" ? `ТО № ${index + 1}` : <EntityLink target={{ kind: "equipment", id: item.equipmentId, tab: "plan" }}>{`${item.equipment.model} · S/N ${item.equipment.serialNumber}`}</EntityLink>}</strong><span>{maintenanceRowDetails(item, view)}</span></div>
           <div className="maintenance-track">{today !== undefined ? <i aria-hidden="true" className="maintenance-today" style={{ left: `${today}%` }} /> : null}<span className={`maintenance-bar maintenance-bar--${item.status}`} style={{ left: `${item.timeline.leftPercent}%`, width: `${Math.max(item.timeline.widthPercent, 0.8)}%` }} title={formatMaintenancePeriod(item.periodFrom, item.periodTo)}>{item.timeline.crossesYearBoundary ? "↔" : ""}</span></div>
           <span className={`maintenance-status maintenance-status--${item.status}`}>{maintenancePlanStatusLabel[item.status]}</span>
         </div>)}

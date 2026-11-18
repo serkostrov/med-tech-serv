@@ -411,6 +411,8 @@ export interface EngineerOverview {
   readonly assignedTaskCount: number;
   readonly inProgressTaskCount: number;
   readonly overdueTaskCount: number;
+  /** У инженера свой склад (0072): на его странице вкладка «Склад» с выданными ему запчастями. */
+  readonly hasOwnStock?: boolean;
 }
 
 /** Количество по состояниям запчасти: гарантийная, новая, б/у. */
@@ -434,6 +436,25 @@ export interface InventoryPartRecord {
   readonly onHandByCondition: PartConditionTotals;
   /** Доступно (на складе минус резерв) по тем же состояниям. */
   readonly availableByCondition: PartConditionTotals;
+}
+
+/**
+ * Запчасть, выданная или поставленная по задаче на приборе (встреча 18.11: «на странице прибора —
+ * запчасти, которые к нему подходят; на странице запчасти — к каким приборам»). Связь берём
+ * из резервов по задачам прибора: что реально выдавали и ставили.
+ */
+export interface PartUsageRecord {
+  readonly partId: string;
+  readonly articleNumber: string;
+  readonly partName: string;
+  readonly quantity: number;
+  readonly condition: "G" | "N" | "B";
+  readonly status: "issued" | "installed";
+  readonly taskId: string;
+  readonly taskNumber: string;
+  readonly equipmentId?: string;
+  readonly equipmentLabel?: string;
+  readonly date: string;
 }
 
 /** Движение по позиции склада из истории (функция inventory_part_movements, миграция 0048). */
@@ -555,6 +576,7 @@ export interface StockReservationRecord {
   readonly engineerName?: string;
   /** Кому выдали на самом деле (после выдачи). */
   readonly issuedToName?: string;
+  readonly issuedToId?: string;
   /** Инженер отметил, что эта запчасть встала на прибор (stock_reservations.install_marked). */
   readonly installMarked: boolean;
   /** Шаги резерва по порядку: от «Ждёт сборки» до последнего состояния. */
@@ -784,6 +806,28 @@ function mailRecord(row: Record<string, unknown>): MailInboxRecord {
   return record as unknown as MailInboxRecord;
 }
 
+function partUsageRecord(row: Record<string, unknown>): PartUsageRecord {
+  const part = related(row, "part");
+  const task = related(row, "task");
+  const device = related(task, "device");
+  const serial = optionalText(device, "serial_number");
+  const label = serial ? [optionalText(related(device, "maker"), "name"), optionalText(related(device, "model"), "name"), `S/N ${serial}`].filter(Boolean).join(" ") : undefined;
+  const condition = text(row, "part_condition");
+  return {
+    partId: text(row, "part_id"),
+    articleNumber: optionalText(part, "article_number") ?? "",
+    partName: optionalText(part, "name") ?? "",
+    quantity: numberValue(row.quantity) ?? 0,
+    condition: condition === "G" || condition === "B" ? condition : "N",
+    status: text(row, "status") === "installed" ? "installed" : "issued",
+    taskId: optionalText(task, "id") ?? "",
+    taskNumber: optionalText(task, "number") ?? "",
+    ...(optionalText(task, "equipment_id") ? { equipmentId: optionalText(task, "equipment_id") } : {}),
+    ...(label ? { equipmentLabel: label } : {}),
+    date: iso(row.updated_at)
+  };
+}
+
 /**
  * Безопасная часть ключа в хранилище. Storage принимает в ключе только латиницу,
  * цифры и простые знаки: имя «Снимок экрана — 2026-11-11 в 15.00.30.png»
@@ -1005,6 +1049,7 @@ export function stockReservationRecord(row: Row): StockReservationRecord {
     ...(taskStatus ? { taskStatus } : {}),
     ...(engineerName ? { engineerName } : {}),
     ...(issuedToName ? { issuedToName } : {}),
+    ...(optionalText(row, "issued_to") ? { issuedToId: optionalText(row, "issued_to") } : {}),
     installMarked: row.install_marked === true,
     steps: reservationSteps(row.stock_reservation_history ?? row.history),
     createdAt: text(row, "created_at"),
@@ -1092,7 +1137,7 @@ function isMissingSchemaObject(
   return missing;
 }
 
-const RESERVATION_SELECT = "id, number, status, part_id, part_condition, quantity, task_id, created_at, updated_at, "
+const RESERVATION_SELECT = "id, number, status, part_id, part_condition, quantity, task_id, issued_to, created_at, updated_at, "
   + "task:tasks(number, title, status_code, engineer:users!engineer_id(full_name)), issued:users!issued_to(full_name)";
 
 /**
@@ -1677,6 +1722,8 @@ export class M2ApiClient {
 
   /** Отметка установки и история шагов из миграции 0028: пока их нет, резервы читаются без них. */
   private reservationMarkAvailable = true;
+  /** Колонка users.has_own_stock (0072) есть в базе: до накатки миграции её не просим. */
+  private ownStockAvailable = true;
   private reservationHistoryLevel = 0;
 
   /** Псевдонимы (0047) и остатки по состояниям (0050): пока их нет, склад читается без них. */
@@ -4145,8 +4192,18 @@ export class M2ApiClient {
   public async engineers(): Promise<readonly EngineerOverview[]> {
     // Инженеры и их открытые задачи одновременно. Загрузка: только незакрытые задачи,
     // все, а не первые 1000 (столько сервер отдаёт за один запрос).
+    const engineerRows = async () => {
+      const columns = "id, full_name, is_active, engineer_competencies(id, manufacturer_id, model_line, manufacturer:manufacturers(name))";
+      if (this.ownStockAvailable) {
+        const withStock = await this.db().from("users").select(`${columns}, has_own_stock`).eq("role", "engineer").order("full_name");
+        // Колонки «свой склад» в базе ещё нет (0072 не накатана): работаем как раньше.
+        if (!withStock.error || !/has_own_stock/u.test(withStock.error.message ?? "")) return withStock;
+        this.ownStockAvailable = false;
+      }
+      return this.db().from("users").select(columns).eq("role", "engineer").order("full_name");
+    };
     const [{ data, error }, tasks] = await Promise.all([
-      this.db().from("users").select("id, full_name, is_active, engineer_competencies(id, manufacturer_id, model_line, manufacturer:manufacturers(name))").eq("role", "engineer").order("full_name"),
+      engineerRows(),
       allPages((start, end, withCount) => this.db().from("tasks")
         .select("id, engineer_id, status_code, deadline_to", withCount ? { count: "exact" } : undefined)
         .not("engineer_id", "is", null).not("status_code", "in", "(closed,cancelled)")
@@ -4174,6 +4231,7 @@ export class M2ApiClient {
             modelLine: optionalText(value, "model_line")
           };
         })),
+        ...(row.has_own_stock === true ? { hasOwnStock: true } : {}),
         assignedTaskCount: assigned.length,
         inProgressTaskCount: assigned.filter((task) => text(asRow(task), "status_code") === "in_progress").length,
         overdueTaskCount: assigned.filter((task) => {
@@ -4209,6 +4267,10 @@ export class M2ApiClient {
     const patch: Row = {};
     if (input.fullName !== undefined) patch.full_name = input.fullName;
     if (input.isActive !== undefined) patch.is_active = input.isActive;
+    if (input.hasOwnStock !== undefined && (input.hasOwnStock === true || this.ownStockAvailable)) {
+      if (!this.ownStockAvailable) throw new M2ApiError(501, "«Свой склад» заработает после обновления базы на сервере");
+      patch.has_own_stock = input.hasOwnStock === true;
+    }
     if (Object.keys(patch).length) {
       const { error } = await this.db().from("users").update(patch).eq("id", id);
       throwIfError(error);
@@ -4254,7 +4316,7 @@ export class M2ApiClient {
    * словам поиска (артикул, наименование) и сортировке из окна «Склад».
    */
   private async inventoryPartRows(
-    query: { readonly search?: string; readonly state?: string; readonly stock?: string; readonly sort?: string },
+    query: { readonly search?: string; readonly state?: string; readonly stock?: string; readonly sort?: string; readonly id?: string },
     limit: number,
     offset: number
   ): Promise<{ readonly items: readonly InventoryPartRecord[]; readonly total: number }> {
@@ -4263,6 +4325,7 @@ export class M2ApiClient {
         ? `${INVENTORY_REGISTRY_SELECT}, ${INVENTORY_REGISTRY_EXTRA_SELECT}`
         : INVENTORY_REGISTRY_SELECT;
       let request = this.db().from("inventory_part_registry").select(select, { count: "exact" });
+      if (query.id) request = request.eq("id", query.id);
       if (query.state === "active" || query.state === "low") request = request.eq("is_active", true);
       if (query.state === "low") request = request.eq("below_minimum", true);
       if (query.state === "inactive") request = request.eq("is_active", false);
@@ -4725,6 +4788,45 @@ export class M2ApiClient {
       rows.push(...chunk);
     }
     return rows;
+  }
+
+  /** Одна позиция склада: страница запчасти, открытая ссылкой (встреча 18.11). */
+  public async inventoryPartById(id: string): Promise<InventoryPartRecord | undefined> {
+    return (await this.inventoryPartRows({ state: "all", id }, 1, 0)).items.find((item) => item.id === id);
+  }
+
+  /** Эта запчасть сейчас у инженеров: выдана и ещё не установлена и не возвращена. */
+  public async partWithEngineers(partId: string): Promise<readonly StockReservationRecord[]> {
+    return this.loadReservations(
+      (select) => this.db().from("stock_reservations").select(select).eq("part_id", partId).eq("status", "issued").order("updated_at", { ascending: false }).limit(300),
+      "Не получилось загрузить, у кого из инженеров запчасть"
+    );
+  }
+
+  /** Запчасти, которые выдавали и ставили по задачам этого прибора. */
+  public async equipmentPartUsage(equipmentId: string): Promise<readonly PartUsageRecord[]> {
+    const { data, error } = await this.db().from("stock_reservations")
+      .select("part_id, part_condition, quantity, status, updated_at, part:parts(article_number, name), task:tasks!inner(id, number, equipment_id)")
+      .eq("task.equipment_id", equipmentId).in("status", ["issued", "installed"]).order("updated_at", { ascending: false }).limit(300);
+    throwIfError(error, "Не получилось загрузить запчасти прибора");
+    return (data ?? []).map((item) => partUsageRecord(asRow(item)));
+  }
+
+  /** Приборы, на которые выдавали и ставили эту запчасть. */
+  public async partEquipmentUsage(partId: string): Promise<readonly PartUsageRecord[]> {
+    const { data, error } = await this.db().from("stock_reservations")
+      .select("part_id, part_condition, quantity, status, updated_at, part:parts(article_number, name), task:tasks(id, number, equipment_id, device:equipment!equipment_id(serial_number, model:equipment_models(name), maker:manufacturers(name)))")
+      .eq("part_id", partId).in("status", ["issued", "installed"]).order("updated_at", { ascending: false }).limit(300);
+    throwIfError(error, "Не получилось загрузить приборы запчасти");
+    return (data ?? []).map((item) => partUsageRecord(asRow(item)));
+  }
+
+  /** Запчасти, которые сейчас у инженера: выданы ему и ещё не установлены и не возвращены. */
+  public async engineerStock(engineerId: string): Promise<readonly StockReservationRecord[]> {
+    return this.loadReservations(
+      (select) => this.db().from("stock_reservations").select(select).eq("status", "issued").eq("issued_to", engineerId).order("updated_at", { ascending: false }).limit(500),
+      "Не получилось загрузить запчасти инженера"
+    );
   }
 
   /** Резервы одной задачи с шагами истории: карточка задачи и форма результата инженера. */

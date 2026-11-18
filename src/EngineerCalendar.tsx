@@ -1,3 +1,4 @@
+import { EntityLink } from "./entity-links.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { m2Api, type AssignmentSuggestionRecord, type EngineerCalendarData, type TaskCardResponse } from "./m2-api.js";
 import {
@@ -64,6 +65,11 @@ function rowStateBadges(row: CalendarRow): readonly { readonly tone: "neutral" |
   return [row.summary.taskCount === 0 ? { tone: "success", text: "Свободен" } : { tone: "info", text: "Занят" }];
 }
 
+/** Подпись дня-продолжения: «день 2 из 4» (без последнего слова, если задача длинная). */
+export function continuationLabel(placement: Pick<CalendarPlacement, "dayIndex" | "dayCount">): string {
+  return placement.dayCount > 1 ? `день ${placement.dayIndex} из ${placement.dayCount}` : "продолжение";
+}
+
 function TaskChip({ placement, onOpen }: {
   readonly placement: CalendarPlacement;
   readonly onOpen: (taskId: string) => void;
@@ -88,14 +94,17 @@ function TaskChip({ placement, onOpen }: {
       title={taskHint(task, placement)}
       type="button"
     >
-      {/* Продолжение многодневной задачи — полоска без подписи: номер и название стоят
-          в первом её дне, остальное видно в подсказке. */}
+      {/* Встреча 18.11: пустые полоски продолжения были непонятны («почему одни пустые, другие
+          заполнены»). Теперь в каждом дне задачи её номер, в первом — ещё и название,
+          в остальных — какой это день: «день 2 из 4». */}
       <span className="calendar-task__number">
         {placement.continuesBefore && placement.isFirstVisibleDay ? "←" : ""}
-        {placement.isFirstVisibleDay ? task.number : ""}
+        {task.number}
         {placement.continuesAfter && placement.isLastVisibleDay ? "→" : ""}
       </span>
-      {placement.isFirstVisibleDay ? <span className="calendar-task__title">{task.title}</span> : null}
+      {placement.isFirstVisibleDay
+        ? <span className="calendar-task__title">{task.title}</span>
+        : <span className="calendar-task__day">{continuationLabel(placement)}</span>}
     </button>
   );
 }
@@ -170,7 +179,7 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
         const badges = rowStateBadges(row);
         return <div className="engineer-calendar__row" key={row.engineer.id} role="row">
           <div className={`engineer-calendar__name${row.engineer.isActive ? "" : " is-inactive"}`} role="rowheader">
-            <strong>{row.engineer.fullName}</strong>
+            <strong><EntityLink target={{ kind: "engineer", id: row.engineer.id }}>{row.engineer.fullName}</EntityLink></strong>
             <span>
               {badges.map((badge) => <StatusBadge key={badge.text} tone={badge.tone}>{badge.text}</StatusBadge>)}
               <small>{formatRussianCount(row.summary.taskCount, ["задача", "задачи", "задач"])} · пик {row.summary.busiestDayCount} · окон {row.summary.freeWorkdayCount}</small>
@@ -518,7 +527,8 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
         </div>
       </div> : null}
       <p className="engineer-calendar__legend">
-        Задача на несколько дней занимает каждый свой день · <i className="calendar-legend calendar-legend--overloaded" /> перегруз: {OVERLOADED_TASKS_PER_DAY} и больше задач в день
+        Клетка — день инженера, в ней его задачи на этот день. Задача на несколько дней стоит в каждом своём дне: в первом — номер и название, дальше — «день 2 из 3». Пустая клетка — свободный день
+        · <i className="calendar-legend calendar-legend--overloaded" /> перегруз: {OVERLOADED_TASKS_PER_DAY} и больше задач в день
         · <i className="calendar-legend calendar-legend--weekend" /> суббота и воскресенье · задачи без срока — в последнем столбце
       </p>
     </section>

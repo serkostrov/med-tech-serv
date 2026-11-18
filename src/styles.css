@@ -9539,3 +9539,36 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .mail-boxes__count { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--color-canvas); color: var(--color-ink-soft); font-size: 12px; text-align: center; }
 .mail-boxes__tab.is-active .mail-boxes__count { background: rgb(255 255 255 / 22%); color: #fff; }
 .mail-boxes__hint { margin: 0 0 12px; color: var(--color-muted); font-size: 13px; }
+
+/* Ссылки между карточками (встреча 18.11): инженер, прибор, запчасть, задача. */
+.entity-link { display: inline; padding: 0; border: 0; background: none; color: var(--color-accent-dark); font: inherit; text-align: left; cursor: pointer; }
+.entity-link:hover { color: var(--color-accent); text-decoration: underline; text-underline-offset: 2px; }
+.entity-link:focus-visible { outline: 2px solid color-mix(in srgb, var(--color-accent) 40%, transparent); outline-offset: 2px; border-radius: 3px; }
+.engineer-page__number { margin-right: 6px; color: var(--color-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.engineer-page__task { display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; }
+.engineer-page__task strong { font-weight: 600; }
+.engineer-page__actions { display: flex; gap: 8px; margin-top: 10px; }
+.engineer-page__groups { display: grid; gap: 14px; }
+.engineer-page .metric-grid, .part-page .metric-grid { margin-bottom: 14px; }
+.engineer-load-table__name strong { font-weight: 650; }
+.engineer-own-stock > span { display: grid; gap: 2px; }
+.engineer-own-stock small { color: var(--color-muted); font-size: 12px; font-weight: 500; }
+.equipment-tab-hint { margin: 0 0 12px; padding: 10px 12px; border-radius: 9px; background: var(--color-canvas); color: var(--color-ink-soft); font-size: 13px; line-height: 1.45; }
+.equipment-plan__tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.equipment-plan-table td small { font-size: 12px; }
+.part-page__body { display: grid; gap: 14px; margin-top: 4px; }
+.part-page .part-card__section { padding: 16px 18px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
+
+
+/* Календарь загрузки: в днях-продолжениях номер задачи и «день 2 из 3» вместо пустой полоски (встреча 18.11). */
+.calendar-task--continued { min-height: 0; opacity: 0.85; }
+.calendar-task--continued .calendar-task__number { min-height: 0; text-align: left; font-weight: 600; }
+.calendar-task__day { overflow: hidden; color: var(--color-muted); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.engineer-calendar__grid--dense .calendar-task__day { display: none; }
+/* 30 инженеров и больше (встреча 18.11): сетка листается внутри себя, шапка с днями остаётся на месте. */
+@media (min-width: 761px) {
+  .engineer-calendar__scroll { max-height: max(420px, calc(100vh - 240px)); }
+}
+@media (min-width: 761px) {
+  .engineer-calendar__head { position: sticky; top: 0; z-index: 3; background: var(--color-surface); }
+}

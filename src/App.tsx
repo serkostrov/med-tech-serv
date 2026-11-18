@@ -39,6 +39,7 @@ import {
   type ApiSessionUser,
   type AssignmentSuggestionRecord,
   type EquipmentApiRecord,
+  type PartUsageRecord,
   type EquipmentCardResponse,
   type EquipmentPassportReferences,
   type InvoiceApiRecord,
@@ -53,7 +54,7 @@ import { buildWorkAct, type WorkActEquipmentRow, type WorkActWorkRow } from "./w
 import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
-import { MaintenancePlanPage } from "./MaintenancePlan.js";
+import { EquipmentPlanTab, MaintenancePlanPage } from "./MaintenancePlan.js";
 import { attentionFilter, taskAttentionItems, type TaskAttentionCounts, type TaskAttentionKey } from "./task-attention.js";
 import { EQUIPMENT_SPEND_PERIODS, equipmentSpendEmptyText, equipmentSpendLines, equipmentSpendRange, type EquipmentSpend, type EquipmentSpendPeriod } from "./equipment-spend.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate, taskPeriodProblem } from "./task-dates.js";
@@ -91,6 +92,7 @@ import { EngineerPicker } from "./EngineerPicker.js";
 import { MultiSelect, WorkTypesPicker } from "./MultiSelect.js";
 import { filterValues, joinFilterValues } from "./filter-values.js";
 import { MAIL_BOXES, type MailBox } from "./mail-boxes.js";
+import { EntityLink, EntityNavProvider, type EngineerPageTab, type EntityNavigation, type EntityTarget, type EquipmentCardTab } from "./entity-links.js";
 import { PartsMultiPicker, type SelectedTaskPart } from "./PartsMultiPicker.js";
 import { AccessAdminPage } from "./AccessAdminPage.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
@@ -1467,7 +1469,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         {detailTab === "props" ? <section aria-label="Свойства задачи" className="task-props task-props--tab">
           <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setEditWorkTypes([...new Set([task.workTypeCode ?? card.workType?.code ?? "", ...(task.extraWorkTypeCodes ?? [])].filter(Boolean))]); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
           <dl>
-            <div><dt>Инженер</dt><dd>{card.engineer?.fullName ?? <span className="is-empty">Не назначен</span>}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить</button> : canAssign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Назначить</button> : null}</dd></div>
+            <div><dt>Инженер</dt><dd>{card.engineer?.fullName ? <EntityLink target={card.engineer.id ? { kind: "engineer", id: card.engineer.id } : undefined}>{card.engineer.fullName}</EntityLink> : <span className="is-empty">Не назначен</span>}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить</button> : canAssign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Назначить</button> : null}</dd></div>
             <div><dt>Срок</dt><dd>{task.periodFrom || task.periodTo ? formatTaskDateRange(task.periodFrom, task.periodTo) : <span className="is-empty">Не указан</span>}</dd></div>
             <div><dt>Срочность</dt><dd>{task.priority === "urgent" ? "Срочная" : "Плановая"}</dd></div>
             <div><dt>Вид работ</dt><dd>{workTypeLabel}</dd></div>
@@ -1477,7 +1479,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             {task.completedAt ? <div><dt>Окончание работ</dt><dd>{task.workFinishedAt ? companyDateTimeText(task.completedAt) : companyDateText(task.completedAt)}</dd></div> : null}
           </dl>
           <dl>
-            <div><dt>Прибор</dt><dd>{card.equipment ? <>{card.equipment.manufacturer} {card.equipment.model}<small>S/N {card.equipment.serialNumber}{card.equipment.statusName || card.equipment.status ? ` · ${card.equipment.statusName ?? card.equipment.status}` : ""}</small></> : <span className="is-empty">Не выбран</span>}</dd></div>
+            <div><dt>Прибор</dt><dd>{card.equipment ? <><EntityLink target={{ kind: "equipment", id: card.equipment.id }}>{card.equipment.manufacturer} {card.equipment.model}</EntityLink><small>S/N {card.equipment.serialNumber}{card.equipment.statusName || card.equipment.status ? ` · ${card.equipment.statusName ?? card.equipment.status}` : ""}</small></> : <span className="is-empty">Не выбран</span>}</dd></div>
             <div><dt>Площадка</dt><dd>{task.customer?.siteName ?? <span className="is-empty">Не указана</span>}{task.customer?.address ? <small>{task.customer.address}</small> : null}</dd></div>
             {task.customer?.contactFullName || contactDetails ? <div><dt>Контакт</dt><dd>{task.customer?.contactFullName ?? ""}{contactDetails ? <small className="task-contact-links">{task.customer?.contactPhone ? <a href={`tel:${task.customer.contactPhone.replace(/[^\d+]/gu, "")}`}>{task.customer.contactPhone}</a> : null}{task.customer?.contactEmail ? <a href={`mailto:${task.customer.contactEmail}`}>{task.customer.contactEmail}</a> : null}</small> : null}</dd></div> : null}
             {task.initiator?.fullName || task.initiatorName ? <div><dt>Обратился</dt><dd>{task.initiator?.fullName ?? task.initiatorName}</dd></div> : null}
@@ -2554,6 +2556,7 @@ function AssignmentHistorySection({
 }
 
 function EquipmentCard({
+  initialTab,
   record,
   readOnly,
   onBack,
@@ -2574,11 +2577,19 @@ function EquipmentCard({
   readonly onLoadMoreHistory: () => Promise<void>;
   readonly onLoadMoreMeterReadings: () => Promise<void>;
   readonly sites: readonly SiteOption[];
+  /** Вкладка, с которой открыть карточку (ссылка из плана ТО — «План ТО»). */
+  readonly initialTab?: EquipmentCardTab | undefined;
   readonly payers: readonly PayerOption[];
 }) {
   const [changeKind, setChangeKind] = useState<EquipmentAssignmentKind | null>(null);
   const [manualOpen, setManualOpen] = useState(false);
-  const [detailTab, setDetailTab] = useState<"history" | "meters" | "files" | "movements">("history");
+  const [detailTab, setDetailTab] = useState<EquipmentCardTab>(initialTab ?? "history");
+  // Запчасти, которые выдавали и ставили по задачам прибора (вкладка «Запчасти»).
+  const [partUsage, setPartUsage] = useState<readonly PartUsageRecord[] | null>(null);
+  useEffect(() => {
+    if (detailTab !== "parts" || partUsage !== null) return;
+    void m2Api.equipmentPartUsage(record.id).then(setPartUsage).catch((loadError: unknown) => { setPartUsage([]); toast.error(loadError instanceof Error ? loadError.message : "Не получилось загрузить запчасти прибора"); });
+  }, [detailTab, record.id]);
   const [openTasks, setOpenTasks] = useState<readonly TaskApiRecord[] | null>(null);
   // Инженер не видит плательщиков, в том числе в истории прибора.
   const history = readOnly ? record.history.filter((event) => event.eventType !== "payer_change") : record.history;
@@ -2637,7 +2648,9 @@ function EquipmentCard({
             { value: "history", label: "История", ...(readOnly ? {} : { badge: record.historyTotal }) },
             { value: "meters", label: "Счётчик", badge: record.meterReadingsTotal },
             { value: "files", label: "Файлы", badge: record.fileRecords.length },
-            { value: "movements", label: "Перемещения", badge: siteChanges.length + payerChanges.length }
+            { value: "movements", label: "Перемещения", badge: siteChanges.length + payerChanges.length },
+            { value: "plan", label: "План ТО" },
+            { value: "parts", label: "Запчасти", ...(partUsage ? { badge: new Set(partUsage.map((item) => item.partId)).size } : {}) }
           ]} label="Разделы карточки прибора" onValueChange={setDetailTab} value={detailTab} />
           {detailTab === "history" ? <section className="task-section equipment-history" aria-labelledby="equipment-history-title">
             <header className="task-section__head">
@@ -2661,18 +2674,35 @@ function EquipmentCard({
           </section> : null}
           {detailTab === "meters" ? <section className="task-section" aria-labelledby={`equipment-meters-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-meters-${record.id}`}>Показания счётчика</h3><span className="muted">{record.meterReadings.length} из {record.meterReadingsTotal}</span></header>
-            {record.meterReadings.length > 0 ? <div className="table-scroll"><table className="data-table equipment-meters-table"><thead><tr><th scope="col">Дата</th><th className="numeric" scope="col">Показание</th><th className="numeric" scope="col">Прирост</th><th scope="col">Кто записал</th></tr></thead><tbody>
+            {/* Встреча 18.11: «откуда они берутся, кто и когда записывает». */}
+            <p className="equipment-tab-hint">Счётчик — число исследований, которое показывает сам прибор. Инженер переписывает его с экрана прибора в результате работ по задаче (поле «Показание счётчика»), в историю прибора оно попадает, когда координатор принимает закрытие задачи. Счётчик только растёт: меньше прошлого значения система не примет. Старые показания приходят при переносе из 1С.</p>
+            {record.meterReadings.length > 0 ? <div className="table-scroll"><table className="data-table equipment-meters-table"><thead><tr><th scope="col">Дата</th><th className="numeric" scope="col">Показание</th><th className="numeric" scope="col">Прирост</th><th scope="col">Кто записал</th><th scope="col">Задача</th></tr></thead><tbody>
               {record.meterReadings.map((reading, index) => {
                 const previous = record.meterReadings[index + 1];
                 const delta = previous ? reading.reading - previous.reading : undefined;
-                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td></tr>;
+                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td><td>{reading.taskId ? <EntityLink target={{ kind: "task", id: reading.taskId }}>Открыть</EntityLink> : <span className="muted">—</span>}</td></tr>;
               })}
             </tbody></table></div> : <div className="task-section__empty"><p>Показаний пока нет. Они появятся после принятого закрытия задачи.</p></div>}
             {record.meterReadings.length < record.meterReadingsTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreMeterReadings()} variant="secondary">Показать ещё показания</Button> : null}
           </section> : null}
           {detailTab === "files" ? <section className="task-section" aria-labelledby={`equipment-files-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-files-${record.id}`}>Файлы прибора</h3></header>
+            {/* Встреча 18.11: «что это за файлы и откуда берутся». */}
+            <p className="equipment-tab-hint">Документы самого прибора: паспорт, фото шильдика, инструкции, сертификаты. Их прикрепляют в паспорте — кнопка «Изменить» справа. Фото с выездов и акты хранятся в задачах: открыть задачу можно во вкладке «История».</p>
             <FileGallery emptyText={readOnly ? "К прибору пока не прикреплены файлы." : "К прибору пока не прикреплены файлы. Их можно добавить в паспорте: «Изменить»."} files={record.fileRecords} />
+          </section> : null}
+          {detailTab === "plan" ? <EquipmentPlanTab device={{ id: record.id, serialNumber: record.serial, manufacturer: record.manufacturer, model: record.model, status: record.status, ...(record.organization ? { organization: record.organization } : {}), ...(record.place ? { site: record.place } : {}) }} readOnly={readOnly} /> : null}
+          {detailTab === "parts" ? <section className="task-section" aria-labelledby={`equipment-parts-${record.id}`}>
+            <header className="task-section__head"><h3 id={`equipment-parts-${record.id}`}>Запчасти прибора</h3><span className="muted">что выдавали и ставили по его задачам</span></header>
+            {partUsage === null ? <div className="task-section__empty"><p>Загружаем запчасти…</p></div> : partUsage.length === 0 ? <div className="task-section__empty"><p>По задачам этого прибора запчасти ещё не выдавали.</p></div> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Запчасть</th><th className="numeric" scope="col">Кол-во</th><th scope="col">Состояние</th><th scope="col">Задача</th><th scope="col">Когда</th></tr></thead><tbody>
+              {partUsage.map((item, index) => <tr key={`${item.partId}-${item.taskId}-${index}`}>
+                <td><EntityLink target={{ kind: "part", id: item.partId }}><span className="engineer-page__number">{item.articleNumber}</span> {item.partName}</EntityLink></td>
+                <td className="numeric">{item.quantity.toLocaleString("ru-RU")}</td>
+                <td>{item.status === "installed" ? "Установлена" : "Выдана инженеру"}</td>
+                <td>{item.taskId ? <EntityLink target={{ kind: "task", id: item.taskId }}>{item.taskNumber}</EntityLink> : "—"}</td>
+                <td>{formatTaskDate(item.date)}</td>
+              </tr>)}
+            </tbody></table></div>}
           </section> : null}
           {detailTab === "movements" ? <div className="task-work">
             <AssignmentHistorySection empty="Перемещений пока нет. Они появятся после смены места установки." events={siteChanges} title="Смены места установки" />
@@ -2766,7 +2796,7 @@ const EQUIPMENT_STATUS_COLORS: Readonly<Record<string, string>> = {
   in_use: "#1f8a52", needs_repair: "#e07a2e", in_repair: "#2f86c4", written_off: "#8a9aa3"
 };
 
-function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engineer?: boolean; readonly initialEquipmentId?: string | undefined }) {
+function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { readonly engineer?: boolean; readonly initialEquipmentId?: string | undefined; readonly initialTab?: EquipmentCardTab | undefined }) {
   const { pageSize, setPageSize } = usePageSize(engineer ? "my-equipment" : "equipment");
   // Доска по статусам (просьба 17.11); у инженера — только список своих приборов.
   const [registryView, setRegistryView] = useState<"board" | "list">(engineer ? "list" : "board");
@@ -3009,7 +3039,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId }: { readonly engi
   if (selectedRecord) {
     return (
       <>
-        <EquipmentCard key={selectedRecord.id} onAddManual={addManualHistoryRecord} onApply={applyAssignment} onBack={closeCard} {...(engineer ? {} : { onEdit: () => openEdit(selectedRecord.id) })} onLoadMoreHistory={loadMoreHistory} onLoadMoreMeterReadings={loadMoreMeterReadings} payers={payers} readOnly={engineer} record={selectedRecord} sites={sites} />
+        <EquipmentCard initialTab={selectedRecord.id === initialEquipmentId ? initialTab : undefined} key={selectedRecord.id} onAddManual={addManualHistoryRecord} onApply={applyAssignment} onBack={closeCard} {...(engineer ? {} : { onEdit: () => openEdit(selectedRecord.id) })} onLoadMoreHistory={loadMoreHistory} onLoadMoreMeterReadings={loadMoreMeterReadings} payers={payers} readOnly={engineer} record={selectedRecord} sites={sites} />
         {!engineer ? <EquipmentPassportForm key={editingId ?? "card-edit"} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
       </>
     );
@@ -3646,7 +3676,8 @@ function FinancePage() {
     <ConfirmationDialog cancelLabel="Не отменять" confirmLabel="Отменить счёт" description={cancelling ? <>Счёт {cancelling.number} останется в списке со статусом «Отменён», его задачи можно будет выставить в новый счёт. Вернуть отменённый счёт в работу нельзя.</> : null} onConfirm={async () => { if (!cancelling) return; await m2Api.cancelInvoice(cancelling.id); toast.success(`Счёт ${cancelling.number} отменён`); void reloadInvoiceTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Счёт отменён, но список не обновился. Обновите страницу.")); }} onOpenChange={(open) => { if (!open) setCancelling(null); }} open={Boolean(cancelling)} title={cancelling ? `Отменить счёт ${cancelling.number}?` : "Отменить счёт?"} /></>;
 }
 
-function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange, taskDrill, onOpenTasks }: {
+function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, entityRoute = {}, onReturnToEquipment, onTaskRouteChange, taskDrill, onOpenTasks }: {
+  readonly entityRoute?: EntityRoute;
   readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
@@ -3659,9 +3690,9 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
   switch (view) {
     case "tasks": return <CoordinatorTasks initialDrill={taskDrill} initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} />;
     case "maintenance": return <MaintenancePlanPage />;
-    case "equipment": return <EquipmentPage initialEquipmentId={equipmentRouteId} />;
-    case "engineers": return <OperationsEngineersPage />;
-    case "warehouse": return <OperationsWarehousePage />;
+    case "equipment": return <EquipmentPage initialEquipmentId={equipmentRouteId} initialTab={entityRoute.equipmentTab} />;
+    case "engineers": return <OperationsEngineersPage initialEngineerId={entityRoute.engineerId} initialTab={entityRoute.engineerTab} />;
+    case "warehouse": return <OperationsWarehousePage initialPartId={entityRoute.partId} />;
     case "reservations": return <ReservationsPage />;
     case "notifications": return <NotificationsPage />;
     case "journals": return <JournalsPage />;
@@ -3676,7 +3707,8 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToE
   }
 }
 
-function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange, taskDrill, onOpenTasks }: {
+function AdminWorkspace({ view, taskRouteId, equipmentRouteId, entityRoute = {}, onReturnToEquipment, onTaskRouteChange, taskDrill, onOpenTasks }: {
+  readonly entityRoute?: EntityRoute;
   readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly taskRouteId: string | undefined;
@@ -3687,7 +3719,7 @@ function AdminWorkspace({ view, taskRouteId, equipmentRouteId, onReturnToEquipme
 }) {
   if (view === "access") return <AccessAdminPage />;
   if (view === "references") return <ReferencesWorkspace notificationTemplates />;
-  return <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} {...(onOpenTasks ? { onOpenTasks } : {})} onTaskRouteChange={onTaskRouteChange} taskDrill={taskDrill} taskRouteId={taskRouteId} view={view} />;
+  return <CoordinatorWorkspace entityRoute={entityRoute} equipmentRouteId={equipmentRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} {...(onOpenTasks ? { onOpenTasks } : {})} onTaskRouteChange={onTaskRouteChange} taskDrill={taskDrill} taskRouteId={taskRouteId} view={view} />;
 }
 
 function engineerDate(value: string | undefined): string {
@@ -3902,7 +3934,8 @@ function InitiatorWorkspace({ view }: { readonly view: NavigationId }) {
   return view === "notifications" ? <NotificationsPage /> : <InitiatorRequests />;
 }
 
-function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onReturnToEquipment, onTaskRouteChange }: {
+function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, entityRoute = {}, onReturnToEquipment, onTaskRouteChange }: {
+  readonly entityRoute?: EntityRoute;
   readonly onReturnToEquipment?: () => void;
   readonly view: NavigationId;
   readonly user: ApiSessionUser;
@@ -3912,18 +3945,18 @@ function EngineerWorkspace({ view, user, taskRouteId, equipmentRouteId, onReturn
 }) {
   switch (view) {
     case "tasks": return <EngineerTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} user={user} />;
-    case "equipment": return <EquipmentPage engineer initialEquipmentId={equipmentRouteId} />;
+    case "equipment": return <EquipmentPage engineer initialEquipmentId={equipmentRouteId} initialTab={entityRoute.equipmentTab} />;
     case "notifications": return <NotificationsPage />;
     default: return <EngineerTasks initialTaskId={taskRouteId} {...(onReturnToEquipment ? { onReturnToEquipment } : {})} onTaskRouteChange={onTaskRouteChange} user={user} />;
   }
 }
 
-function WarehouseWorkspace({ view }: { readonly view: NavigationId }) {
+function WarehouseWorkspace({ view, entityRoute = {} }: { readonly view: NavigationId; readonly entityRoute?: EntityRoute }) {
   switch (view) {
-    case "warehouse": return <OperationsWarehousePage />;
+    case "warehouse": return <OperationsWarehousePage initialPartId={entityRoute.partId} />;
     case "reservations": return <ReservationsPage />;
     case "notifications": return <NotificationsPage />;
-    default: return <OperationsWarehousePage />;
+    default: return <OperationsWarehousePage initialPartId={entityRoute.partId} />;
   }
 }
 
@@ -4016,7 +4049,34 @@ function LoginPage({ onLogin }: { readonly onLogin: (user: ApiSessionUser) => vo
 }
 
 /** Метки шага истории: раздел, паспорт прибора, задача, открытая из паспорта. */
-type RouteState = { readonly view?: NavigationId; readonly equipmentId?: string; readonly fromEquipmentId?: string };
+type RouteState = {
+  readonly view?: NavigationId;
+  readonly equipmentId?: string;
+  readonly fromEquipmentId?: string;
+  /** Вкладка карточки прибора, открытой ссылкой (например, «План ТО» из плана ТО). */
+  readonly equipmentTab?: EquipmentCardTab;
+  /** Страница инженера и запчасти, открытые ссылкой (встреча 18.11). */
+  readonly engineerId?: string;
+  readonly engineerTab?: EngineerPageTab;
+  readonly partId?: string;
+};
+
+/** Карточка внутри раздела, открытая ссылкой: страница инженера, запчасти, вкладка прибора. */
+interface EntityRoute {
+  readonly engineerId?: string;
+  readonly engineerTab?: EngineerPageTab;
+  readonly partId?: string;
+  readonly equipmentTab?: EquipmentCardTab;
+}
+
+function entityRouteFromState(state: RouteState | null): EntityRoute {
+  if (!state) return {};
+  return {
+    ...(state.view === "engineers" && state.engineerId ? { engineerId: state.engineerId, ...(state.engineerTab ? { engineerTab: state.engineerTab } : {}) } : {}),
+    ...(state.view === "warehouse" && state.partId ? { partId: state.partId } : {}),
+    ...(state.view === "equipment" && state.equipmentTab ? { equipmentTab: state.equipmentTab } : {})
+  };
+}
 
 function currentRouteState(): RouteState | null {
   return typeof window === "undefined" ? null : window.history.state as RouteState | null;
@@ -4052,6 +4112,8 @@ function App() {
   });
   // Текущая задача открыта из паспорта: кнопка «назад» ведёт в паспорт и подписана «К прибору».
   const [fromEquipmentId, setFromEquipmentId] = useState<string | undefined>(() => currentRouteState()?.fromEquipmentId);
+  // Страница инженера, запчасти или вкладка прибора, открытые ссылкой.
+  const [entityRoute, setEntityRoute] = useState<EntityRoute>(() => taskIdFromPathname(window.location.pathname) ? {} : entityRouteFromState(currentRouteState()));
   const navigation = navigationForSession(role, sessionUser);
   const groups = groupNavigation(navigation);
   const activeItem = navigation.find((item) => item.id === activeView) ?? navigation[0];
@@ -4070,6 +4132,8 @@ function App() {
       const stateView = currentRouteState()?.view;
       setActiveView(taskRouteId && nextNavigation.some((item) => item.id === "tasks") ? "tasks"
         : equipmentRouteId && nextNavigation.some((item) => item.id === "equipment") ? "equipment"
+          : entityRoute.engineerId && nextNavigation.some((item) => item.id === "engineers") ? "engineers"
+            : entityRoute.partId && nextNavigation.some((item) => item.id === "warehouse") ? "warehouse"
           // Вернулись в приложение кнопкой «Назад» с другого сайта: открываем раздел этого шага.
           : stateView && nextNavigation.some((item) => item.id === stateView) ? stateView
             : nextNavigation[0]?.id ?? getDefaultView(nextRole));
@@ -4087,11 +4151,15 @@ function App() {
       setFromEquipmentId(taskId ? state?.fromEquipmentId : undefined);
       if (taskId) {
         setEquipmentRouteId(undefined);
+        setEntityRoute({});
         setTaskRouteId(taskId);
+        // С другой страницы (инженер, прибор) назад в задачу: раздел задач открываем заново.
+        if (routeContext.current.activeView !== "tasks") setNavigationKey((value) => value + 1);
         setActiveView("tasks");
         return;
       }
       setTaskRouteId(undefined);
+      setEntityRoute(entityRouteFromState(state));
       if (state?.view === "equipment" && state.equipmentId) {
         setEquipmentRouteId(state.equipmentId);
         setActiveView("equipment");
@@ -4117,6 +4185,7 @@ function App() {
     setActiveView(id);
     setTaskDrill(undefined);
     setEquipmentRouteId(undefined);
+    setEntityRoute({});
     setNavigationKey((value) => value + 1);
     setTaskRouteId(undefined);
     setFromEquipmentId(undefined);
@@ -4125,8 +4194,47 @@ function App() {
     const state = currentRouteState();
     // У первого шага и после обновления страницы меток нет: на нём раздел по умолчанию.
     const shownView = state?.view ?? routeContext.current.defaultView;
-    if (window.location.pathname === "/" && shownView === id && !state?.equipmentId) return;
+    if (window.location.pathname === "/" && shownView === id && !state?.equipmentId && !state?.engineerId && !state?.partId) return;
     window.history.pushState({ view: id }, "", "/");
+  };
+
+  // Ссылки между карточками (встреча 18.11): каждый переход — новый шаг истории, «Назад» возвращает.
+  const viewIds = navigation.map((item) => item.id);
+  const entityViews: Readonly<Record<EntityTarget["kind"], NavigationId>> = { task: "tasks", engineer: "engineers", equipment: "equipment", part: "warehouse" };
+  const entityNav: EntityNavigation = {
+    can: (kind) => viewIds.includes(entityViews[kind]),
+    open: (target) => {
+      taskStepFrom.current = null;
+      setTaskDrill(undefined);
+      setFromEquipmentId(undefined);
+      if (target.kind === "task") {
+        setEquipmentRouteId(undefined);
+        setEntityRoute({});
+        if (routeContext.current.activeView !== "tasks") setNavigationKey((value) => value + 1);
+        setActiveView("tasks");
+        setTaskRouteId(target.id);
+        window.history.pushState(null, "", taskPathname(target.id));
+        return;
+      }
+      setTaskRouteId(undefined);
+      if (target.kind === "equipment") {
+        setEquipmentRouteId(target.id);
+        setEntityRoute(target.tab ? { equipmentTab: target.tab } : {});
+        window.history.pushState({ view: "equipment", equipmentId: target.id, ...(target.tab ? { equipmentTab: target.tab } : {}) }, "", "/");
+      } else if (target.kind === "engineer") {
+        setEquipmentRouteId(undefined);
+        setEntityRoute({ engineerId: target.id, ...(target.tab ? { engineerTab: target.tab } : {}) });
+        window.history.pushState({ view: "engineers", engineerId: target.id, ...(target.tab ? { engineerTab: target.tab } : {}) }, "", "/");
+      } else {
+        setEquipmentRouteId(undefined);
+        setEntityRoute({ partId: target.id });
+        window.history.pushState({ view: "warehouse", partId: target.id }, "", "/");
+      }
+      setActiveView(entityViews[target.kind]);
+      setNavigationKey((value) => value + 1);
+      window.scrollTo(0, 0);
+      document.querySelector(".main-shell")?.scrollTo?.(0, 0);
+    }
   };
 
   const openTasksFromReport = (drill: TaskDrillDown) => {
@@ -4180,6 +4288,7 @@ function App() {
     setTaskRouteId(undefined);
     setEquipmentRouteId(undefined);
     setFromEquipmentId(undefined);
+    setEntityRoute({});
     window.history.replaceState(null, "", "/");
   };
 
@@ -4208,12 +4317,14 @@ function App() {
       userName={sessionUser.fullName}
     >
       <ProfileDialog fullName={sessionUser.fullName} onOpenChange={setProfileOpen} open={profileOpen} roleName={sessionUser.accessRoleName ?? roleLabels[role]} />
+      <EntityNavProvider value={entityNav}>
       {navigation.length === 0 ? <ResourceState description="У вашей роли нет рабочих разделов. Попросите администратора открыть доступ." status="empty" title="Нет доступных разделов" /> : null}
-      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
-      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
-      {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace key={navigationKey} view={activeView} /> : null}
+      {navigation.length > 0 && role === "coordinator" ? <CoordinatorWorkspace entityRoute={entityRoute} equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "engineer" ? <EngineerWorkspace entityRoute={entityRoute} equipmentRouteId={equipmentRouteId} key={navigationKey} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} user={sessionUser} view={activeView} /> : null}
+      {navigation.length > 0 && role === "warehouse" ? <WarehouseWorkspace entityRoute={entityRoute} key={navigationKey} view={activeView} /> : null}
       {navigation.length > 0 && role === "initiator" ? <InitiatorWorkspace key={navigationKey} view={activeView} /> : null}
-      {navigation.length > 0 && role === "admin" ? <AdminWorkspace equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      {navigation.length > 0 && role === "admin" ? <AdminWorkspace entityRoute={entityRoute} equipmentRouteId={equipmentRouteId} key={navigationKey} onOpenTasks={openTasksFromReport} taskDrill={taskDrill} {...(returnToEquipment ? { onReturnToEquipment: returnToEquipment } : {})} onTaskRouteChange={changeTaskRoute} taskRouteId={taskRouteId} view={activeView} /> : null}
+      </EntityNavProvider>
     </AppShell>
   );
 }

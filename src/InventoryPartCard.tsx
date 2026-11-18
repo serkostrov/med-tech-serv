@@ -1,6 +1,8 @@
-import React, { useEffect, useRef, useState, type FormEvent } from "react";
-import { m2Api, type InventoryPartRecord, type PartAliasRecord, type StockMovementRecord } from "./m2-api.js";
-import { Button, Dialog, IconButton, Notice, ResourceState, Select, StatusBadge, toast } from "./ui.js";
+import React, { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { m2Api, type InventoryPartRecord, type PartAliasRecord, type PartUsageRecord, type StockMovementRecord, type StockReservationRecord } from "./m2-api.js";
+import { Button, Dialog, EntityDetailToolbar, IconButton, Notice, PageTabs, ResourceState, Select, StatusBadge, toast } from "./ui.js";
+import { EntityLink } from "./entity-links.js";
+import { formatDisplayDate } from "./date-format.js";
 import { parseAmount } from "./price-list.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import {
@@ -17,6 +19,22 @@ import {
   movementWhenText,
   type PartCondition
 } from "./stock-movements.js";
+
+export type PartPageTab = "stock" | "history" | "engineers" | "equipment" | "aliases";
+
+/** Приборы запчасти одной строкой на прибор: сколько выдали, сколько поставили, последняя задача. */
+export function partUsageByEquipment(usage: readonly PartUsageRecord[]) {
+  const rows = new Map<string, { equipmentId: string; label: string; issued: number; installed: number; lastTaskId?: string; lastTaskNumber?: string; lastDate?: string }>();
+  for (const item of usage) {
+    if (!item.equipmentId) continue;
+    const row = rows.get(item.equipmentId) ?? { equipmentId: item.equipmentId, label: item.equipmentLabel ?? "Прибор", issued: 0, installed: 0 };
+    row.issued += item.quantity;
+    if (item.status === "installed") row.installed += item.quantity;
+    if (!row.lastDate || item.date > row.lastDate) { row.lastDate = item.date; row.lastTaskId = item.taskId; row.lastTaskNumber = item.taskNumber; }
+    rows.set(item.equipmentId, row);
+  }
+  return [...rows.values()].sort((left, right) => (right.lastDate ?? "").localeCompare(left.lastDate ?? ""));
+}
 
 /** Сколько движений читаем за раз: столько же, сколько отдаёт функция базы по умолчанию. */
 const MOVEMENTS_PAGE = 100;
@@ -46,8 +64,10 @@ function parseQuantity(value: string): number | null {
  * Цену прихода карточка только отправляет: читать её складу нельзя (0040), поэтому в остатках
  * и в истории денег нет.
  */
-export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChanged }: {
+export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChanged, asPage }: {
   readonly part: InventoryPartRecord | null;
+  /** Страница запчасти вместо окна (встреча 18.11: «по попапам неудобно»): с кнопкой «Назад». */
+  readonly asPage?: { readonly onBack: () => void; readonly initialTab?: PartPageTab };
   readonly canWrite: boolean;
   readonly open: boolean;
   readonly onOpenChange: (open: boolean) => void;
@@ -69,6 +89,15 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
   // подставить чужую историю.
   const loadTurn = useRef(0);
   const partId = part?.id ?? "";
+  const [pageTab, setPageTab] = useState<PartPageTab>(asPage?.initialTab ?? "stock");
+  const [atEngineers, setAtEngineers] = useState<readonly StockReservationRecord[] | null>(null);
+  const [usage, setUsage] = useState<readonly PartUsageRecord[] | null>(null);
+  useEffect(() => {
+    if (!asPage || !partId) return;
+    void m2Api.partWithEngineers(partId).then(setAtEngineers).catch(() => setAtEngineers([]));
+    void m2Api.partEquipmentUsage(partId).then(setUsage).catch(() => setUsage([]));
+  }, [partId, Boolean(asPage)]);
+  const usageByEquipment = useMemo(() => partUsageByEquipment(usage ?? []), [usage]);
 
   const loadMovements = async (offset = 0) => {
     const turn = ++loadTurn.current;
@@ -194,14 +223,7 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
   // Готовое к выдаче состояние: списывают обычно оттуда, где запчасти есть и они не в резерве.
   const defaultCondition = conditionWithMostStock(form === "writeoff" ? part.availableByCondition : part.onHandByCondition);
   const shown = movements.length;
-  return <Dialog
-    busy={saving}
-    description={`Остатки по состояниям, артикулы поставщиков и всё, что происходило с позицией.${part.isActive ? "" : " Позиция снята с учёта."}`}
-    onOpenChange={onOpenChange}
-    open={open}
-    size="lg"
-    title={`${part.articleNumber} · ${part.name}`}
-  >
+  const stockSection = <>
     <section className="part-card__section">
       <h3 className="part-card__heading">Остаток по состояниям</h3>
       <div className="part-card__conditions">
@@ -261,6 +283,8 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
       </form> : null}
     </section>
 
+  </>;
+  const aliasSection = <>
     <section className="part-card__section">
       <h3 className="part-card__heading">Артикулы поставщиков</h3>
       <p className="part-card__hint">У одной запчасти бывает свой артикул у каждого поставщика. Склад и резервы находят позицию по любому из них.</p>
@@ -283,6 +307,8 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
       </form> : null}
     </section>
 
+  </>;
+  const historySection = <>
     <section className="part-card__section">
       <h3 className="part-card__heading">История движений{movementsTotal ? <span className="part-card__count">{formatRussianCount(movementsTotal, ["движение", "движения", "движений"])}</span> : null}</h3>
       {movementsState === "loading" && shown === 0 ? <ResourceState description="Подождите, история сейчас появится." status="loading" title="Загружаем историю" />
@@ -319,5 +345,68 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
           >Показать ещё · {movementsTotal - shown}</Button> : null}
         </>}
     </section>
+  </>;
+  if (asPage) {
+    const tabs = [
+      { value: "stock" as const, label: "Остатки" },
+      { value: "history" as const, label: "История движений", ...(movementsTotal ? { badge: movementsTotal } : {}) },
+      { value: "engineers" as const, label: "У инженеров", ...(atEngineers ? { badge: atEngineers.length } : {}) },
+      { value: "equipment" as const, label: "Приборы", ...(usage ? { badge: new Set(usage.map((item) => item.equipmentId).filter(Boolean)).size } : {}) },
+      { value: "aliases" as const, label: "Артикулы поставщиков", ...(aliases.length ? { badge: aliases.length } : {}) }
+    ];
+    return <div className="part-page">
+      <EntityDetailToolbar backLabel="Назад" onBack={asPage.onBack} />
+      <header className="task-head">
+        <div className="task-head__meta">
+          <span className="task-head__number">{part.articleNumber}</span>
+          <StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge>
+        </div>
+        <h1>{part.name}</h1>
+        <p>На складе {movementQuantityText(part.onHandQuantity)} · доступно {movementQuantityText(part.availableQuantity)} · у инженеров {movementQuantityText(part.withEngineersQuantity)}</p>
+      </header>
+      <PageTabs items={tabs} label="Разделы страницы запчасти" onValueChange={setPageTab} value={pageTab} />
+      <div className="part-page__body">
+        {pageTab === "stock" ? stockSection : null}
+        {pageTab === "history" ? historySection : null}
+        {pageTab === "aliases" ? aliasSection : null}
+        {pageTab === "engineers" ? <section className="part-card__section">
+          <h3 className="part-card__heading">У инженеров</h3>
+          <p className="part-card__hint">Выдана инженерам и ещё не установлена и не возвращена на склад.</p>
+          {atEngineers === null ? <ResourceState description="Подождите." status="loading" title="Загружаем" /> : atEngineers.length === 0 ? <p className="part-card__empty">Сейчас эта запчасть ни у кого из инженеров не числится.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Инженер</th><th>Состояние</th><th className="numeric">Количество</th><th>Задача</th><th>Выдана</th></tr></thead><tbody>
+            {atEngineers.map((item) => <tr key={item.id}>
+              <td>{item.issuedToId ? <EntityLink target={{ kind: "engineer", id: item.issuedToId, tab: "stock" }}>{item.issuedToName ?? item.engineerName ?? "Инженер"}</EntityLink> : item.issuedToName ?? item.engineerName ?? "—"}</td>
+              <td>{PART_CONDITION_LETTERS[item.condition]} · {PART_CONDITION_LABELS[item.condition]}</td>
+              <td className="numeric">{movementQuantityText(item.quantity)}</td>
+              <td>{item.taskId ? <EntityLink target={{ kind: "task", id: item.taskId }}>{item.taskNumber ?? "Задача"}</EntityLink> : "—"}</td>
+              <td>{formatDisplayDate(item.updatedAt)}</td>
+            </tr>)}
+          </tbody></table></div>}
+        </section> : null}
+        {pageTab === "equipment" ? <section className="part-card__section">
+          <h3 className="part-card__heading">Приборы</h3>
+          <p className="part-card__hint">На какие приборы эту запчасть выдавали и ставили по задачам — так видно, к каким приборам она подходит.</p>
+          {usage === null ? <ResourceState description="Подождите." status="loading" title="Загружаем" /> : usageByEquipment.length === 0 ? <p className="part-card__empty">По задачам эту запчасть ещё не выдавали.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Прибор</th><th className="numeric">Выдано</th><th className="numeric">Установлено</th><th>Последняя задача</th></tr></thead><tbody>
+            {usageByEquipment.map((row) => <tr key={row.equipmentId}>
+              <td><EntityLink target={{ kind: "equipment", id: row.equipmentId, tab: "parts" }}>{row.label}</EntityLink></td>
+              <td className="numeric">{movementQuantityText(row.issued)}</td>
+              <td className="numeric">{movementQuantityText(row.installed)}</td>
+              <td>{row.lastTaskId ? <EntityLink target={{ kind: "task", id: row.lastTaskId }}>{row.lastTaskNumber}</EntityLink> : "—"}{row.lastDate ? <small className="muted"> · {formatDisplayDate(row.lastDate)}</small> : null}</td>
+            </tr>)}
+          </tbody></table></div>}
+        </section> : null}
+      </div>
+    </div>;
+  }
+  return <Dialog
+    busy={saving}
+    description={`Остатки по состояниям, артикулы поставщиков и всё, что происходило с позицией.${part.isActive ? "" : " Позиция снята с учёта."}`}
+    onOpenChange={onOpenChange}
+    open={open}
+    size="lg"
+    title={`${part.articleNumber} · ${part.name}`}
+  >
+    {stockSection}
+    {aliasSection}
+    {historySection}
   </Dialog>;
 }

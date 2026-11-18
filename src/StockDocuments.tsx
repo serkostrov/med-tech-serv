@@ -1,6 +1,7 @@
+import { EntityLink } from "./entity-links.js";
 import React, { useEffect, useRef, useState } from "react";
 import { m2Api } from "./m2-api.js";
-import { Button, DataTableShell, DatePicker, Dialog, FilterBar, ResourceState, Select, StatusBadge, toast, type StatusTone } from "./ui.js";
+import { Button, DataTableShell, DatePicker, Dialog, EntityDetailToolbar, FilterBar, ResourceState, Select, StatusBadge, toast, type StatusTone } from "./ui.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
@@ -34,9 +35,11 @@ function KindBadge({ kind }: { readonly kind: StockDocumentKind }) {
 }
 
 /** Карточка документа: шапка, строки и выгрузка этого документа в Excel. */
-export function StockDocumentDialog({ document, onClose }: {
+export function StockDocumentDialog({ document, onClose, asPage = false }: {
   readonly document: StockDocumentRecord | null;
   readonly onClose: () => void;
+  /** Страницей вместо окна (встреча 18.11: «по попапам неудобно»): «Назад» возвращает к списку. */
+  readonly asPage?: boolean;
 }) {
   const [lines, setLines] = useState<readonly StockDocumentLine[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -72,20 +75,10 @@ export function StockDocumentDialog({ document, onClose }: {
     ["Площадка", document.siteName ?? ""]
   ] : [];
   const facts = allFacts.filter(([, value]) => value);
-  return <Dialog
-    description={document ? stockDocumentHint(document) : undefined}
-    footer={<>
-      <Button onClick={onClose} variant="secondary">Закрыть</Button>
-      <Button busy={exporting} busyLabel="Готовим файл…" disabled={!lines || lines.length === 0} onClick={() => void exportOne()}>Скачать в Excel</Button>
-    </>}
-    onOpenChange={(open) => { if (!open) onClose(); }}
-    open={Boolean(document)}
-    size="lg"
-    title={document ? `${STOCK_DOCUMENT_KIND_LABELS[document.kind]} ${document.number}` : "Документ склада"}
-  >
+  const content = <>
     {document ? <div className="stock-document">
       <dl className="stock-document__facts">
-        {facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+        {facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{label === "Основание" && document.taskId ? <EntityLink target={{ kind: "task", id: document.taskId }}>{value}</EntityLink> : value}</dd></div>)}
       </dl>
       {error ? <ResourceState description={error} status="error" title="Строки не загрузились" />
         : !lines ? <ResourceState description="Подождите, строки документа сейчас появятся." status="loading" title="Загружаем строки" />
@@ -106,6 +99,31 @@ export function StockDocumentDialog({ document, onClose }: {
           </tr>)}</tbody>
         </table></div>}
     </div> : null}
+  </>;
+  if (asPage && document) {
+    return <div className="stock-document-page">
+      <EntityDetailToolbar backLabel="К документам" onBack={onClose} />
+      <header className="task-head">
+        <div className="task-head__meta"><span className="task-head__number">{document.number}</span><KindBadge kind={document.kind} /></div>
+        <h1>{STOCK_DOCUMENT_KIND_LABELS[document.kind]} {document.number}</h1>
+        <p>{stockDocumentHint(document)}</p>
+        <div className="engineer-page__actions"><Button busy={exporting} busyLabel="Готовим файл…" disabled={!lines || lines.length === 0} onClick={() => void exportOne()} variant="secondary">Скачать в Excel</Button></div>
+      </header>
+      <section className="task-section">{content}</section>
+    </div>;
+  }
+  return <Dialog
+    description={document ? stockDocumentHint(document) : undefined}
+    footer={<>
+      <Button onClick={onClose} variant="secondary">Закрыть</Button>
+      <Button busy={exporting} busyLabel="Готовим файл…" disabled={!lines || lines.length === 0} onClick={() => void exportOne()}>Скачать в Excel</Button>
+    </>}
+    onOpenChange={(open) => { if (!open) onClose(); }}
+    open={Boolean(document)}
+    size="lg"
+    title={document ? `${STOCK_DOCUMENT_KIND_LABELS[document.kind]} ${document.number}` : "Документ склада"}
+  >
+    {content}
   </Dialog>;
 }
 
@@ -152,6 +170,8 @@ export function StockDocumentsView() {
     }
   };
   const filtered = Boolean(filters.kind || filters.search || filters.from || filters.to);
+  // Открытый документ — страницей на месте списка; «К документам» возвращает к тому же отбору.
+  if (opened) return <StockDocumentDialog asPage document={opened} onClose={() => setOpened(null)} />;
   return <>
     <FilterBar loading={loading} onReset={() => { setFilters(EMPTY_FILTERS); void reload(EMPTY_FILTERS, 0); }} onSubmit={() => reload(filters, 0)}>
       <label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер, задача, S/N, инженер или артикул" type="search" value={filters.search} /></label>
@@ -197,7 +217,6 @@ export function StockDocumentsView() {
         </table></div>
         <RegistryPagination ariaLabel="Страницы документов склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}
     </DataTableShell>
-    <StockDocumentDialog document={opened} onClose={() => setOpened(null)} />
   </>;
 }
 
