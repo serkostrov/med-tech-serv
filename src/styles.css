@@ -9650,3 +9650,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .mail-received strong { display: block; font-weight: 600; white-space: nowrap; }
 .mail-received small { color: var(--color-muted); font-size: 12.5px; }
 .table-actions.mail-actions { gap: 14px; }
+
+/* Список с галочками у правого края экрана открывается влево и не шире экрана (18.11). */
+.multi-select__panel { max-width: calc(100vw - 16px); }
+.multi-select__panel--right { left: auto; right: 0; }
+/* Таблица в карточке обрезает углы; открытый список в её шапке (статус КП) не должен обрезаться. */
+.card:has(.multi-select__panel), .data-table-shell:has(.multi-select__panel) { overflow: visible; }
+.multi-select__panel--up { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 4px; }

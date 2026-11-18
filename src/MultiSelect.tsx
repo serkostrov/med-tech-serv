@@ -1,4 +1,4 @@
-import React, { useEffect, useId, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { filterSummary } from "./filter-values.js";
 
 export interface MultiSelectOption {
@@ -31,6 +31,36 @@ export function MultiSelect({ label, options, value, onChange, emptyLabel = "В�
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const wrap = useRef<HTMLDivElement>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  // Кнопка у правого края экрана — список открывается влево, по правому краю кнопки
+  // (18.11: «Все этапы» в календаре уходил за край). Меряем до отрисовки, без мигания.
+  const [alignRight, setAlignRight] = useState(false);
+  // И по высоте: не влезает вниз — открываем вверх, если там просторнее, иначе укорачиваем
+  // прокручиваемую часть, чтобы «Готово» было на экране (проверка на экране 1024×700).
+  const [openUp, setOpenUp] = useState(false);
+  const [optionsMaxHeight, setOptionsMaxHeight] = useState<number | undefined>(undefined);
+  useLayoutEffect(() => {
+    if (!open) { setAlignRight(false); setOpenUp(false); setOptionsMaxHeight(undefined); return; }
+    const panel = panelRef.current;
+    const trigger = wrap.current;
+    if (!panel || !trigger || getComputedStyle(panel).position !== "absolute") return;
+    const box = trigger.getBoundingClientRect();
+    // Край — ближайший блок, который обрезает по ширине (область страницы), или край экрана.
+    let limit = document.documentElement.clientWidth - 8;
+    for (let node = trigger.parentElement; node && node !== document.body; node = node.parentElement) {
+      if (getComputedStyle(node).overflowX !== "visible") { limit = Math.min(limit, node.getBoundingClientRect().right - 8); break; }
+    }
+    setAlignRight(box.left + panel.offsetWidth > limit && box.right - panel.offsetWidth >= 8);
+    const below = window.innerHeight - box.bottom - 12;
+    const above = box.top - 12;
+    const height = panel.offsetHeight;
+    if (height <= below) return;
+    const options = panel.querySelector<HTMLElement>(".multi-select__options");
+    const fixedPart = height - (options?.offsetHeight ?? 0);
+    const up = above > below;
+    setOpenUp(up);
+    if ((up ? above : below) < height && options) setOptionsMaxHeight(Math.max(120, (up ? above : below) - fixedPart));
+  }, [open]);
   const listId = useId();
   const labelId = useId();
 
@@ -63,9 +93,9 @@ export function MultiSelect({ label, options, value, onChange, emptyLabel = "В�
       <span>{filterSummary(value, labelOf, emptyLabel)}</span>
       <svg aria-hidden="true" height="14" viewBox="0 0 24 24" width="14"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" /></svg>
     </button>
-    {open ? <div className="multi-select__panel" id={listId}>
+    {open ? <div className={`multi-select__panel${alignRight ? " multi-select__panel--right" : ""}${openUp ? " multi-select__panel--up" : ""}`} id={listId} ref={panelRef}>
       {searchable ? <input aria-label={`${label}: поиск`} autoFocus className="multi-select__search" onChange={(event) => setQuery(event.target.value)} placeholder={searchPlaceholder} type="search" value={query} /> : null}
-      <div aria-labelledby={labelId} className="multi-select__options" role="group">
+      <div aria-labelledby={labelId} className="multi-select__options" role="group" style={optionsMaxHeight ? { maxHeight: optionsMaxHeight } : undefined}>
         {allOption ? <label className="multi-select__option multi-select__option--all"><input checked={value.length === 0} onChange={() => onChange([])} type="checkbox" /><span>{emptyLabel}</span></label> : null}
         {shown.map((option) => <label className="multi-select__option" key={option.value}><input checked={value.includes(option.value)} onChange={() => toggle(option.value)} type="checkbox" /><span>{option.label}</span></label>)}
         {shown.length === 0 ? <p className="multi-select__empty">Ничего не нашли</p> : null}
