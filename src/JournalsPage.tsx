@@ -1,5 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { m2Api } from "./m2-api.js";
+import { MultiSelect } from "./MultiSelect.js";
+import { filterValues, joinFilterValues } from "./filter-values.js";
 import {
   CardHeader,
   FilterBar,
@@ -100,14 +102,8 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
       onSubmit={() => { setPageIndex(0); return reload(filters, 0); }}
     >
       <label className="filter-field--search">Поиск<input onChange={(event) => change("search", event.target.value)} placeholder="Номер объекта, действие или автор" type="search" value={filters.search} /></label>
-      <label>Кто изменил<Select onChange={(event) => change("actorId", event.target.value)} value={filters.actorId}>
-        <option value="">Все сотрудники</option>
-        {people.map((person) => <option key={person.id} value={person.id}>{person.fullName}</option>)}
-      </Select></label>
-      <label>Объект<Select onChange={(event) => change("entityType", event.target.value)} value={filters.entityType}>
-        <option value="">Все объекты</option>
-        {ENTITY_FILTER_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-      </Select></label>
+      <MultiSelect emptyLabel="Все сотрудники" label="Кто изменил" onChange={(next) => change("actorId", joinFilterValues(next))} options={people.map((person) => ({ value: person.id, label: person.fullName }))} searchPlaceholder="Фамилия" value={filterValues(filters.actorId)} />
+      <MultiSelect emptyLabel="Все объекты" label="Объект" onChange={(next) => change("entityType", joinFilterValues(next))} options={ENTITY_FILTER_OPTIONS} value={filterValues(filters.entityType)} />
       <label>С<DatePicker aria-label="Изменения с даты" onChange={(value) => change("from", value)} value={filters.from} /></label>
       <label>По<DatePicker aria-label="Изменения по дату" onChange={(value) => change("to", value)} value={filters.to} /></label>
     </FilterBar>

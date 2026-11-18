@@ -8,6 +8,7 @@ import {
   quoteOverdue, quoteTotalText, quoteWorkbookSheet, type QuoteStatus
 } from "./quotes.js";
 import { downloadWorkbook } from "./registry-export.js";
+import { MultiSelect } from "./MultiSelect.js";
 import { companyToday } from "./task-dates.js";
 import {
   Button, CardHeader, DatePicker, DialogForm, EntityDetailToolbar, IconButton, Input, PageIntro, ResourceState, Select, StatusBadge, toast
@@ -22,7 +23,8 @@ export function QuotesPage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const [canWrite, setCanWrite] = useState(false);
-  const [statusFilter, setStatusFilter] = useState<"" | QuoteStatus>("");
+  // Статусы — по нескольку (встреча 18.11).
+  const [statusFilter, setStatusFilter] = useState<readonly string[]>([]);
   const [editor, setEditor] = useState<{ readonly mode: "create" } | { readonly mode: "edit"; readonly quote: QuoteApiRecord } | null>(null);
   const [cardRefresh, setCardRefresh] = useState(0);
   const [sites, setSites] = useState<readonly { readonly id: string; readonly name: string }[]>([]);
@@ -44,7 +46,7 @@ export function QuotesPage() {
   }, []);
 
   const today = companyToday();
-  const shown = useMemo(() => (quotes ?? []).filter((quote) => !statusFilter || quote.status === statusFilter), [quotes, statusFilter]);
+  const shown = useMemo(() => (quotes ?? []).filter((quote) => statusFilter.length === 0 || statusFilter.includes(quote.status)), [quotes, statusFilter]);
 
   const editorDialog = editor ? <QuoteHeaderDialog
     key={editor.mode === "edit" ? editor.quote.id : "new"}
@@ -81,10 +83,7 @@ export function QuotesPage() {
     />
     <section className="card card--table" aria-labelledby="quotes-title">
       <CardHeader
-        action={<Select aria-label="Статус КП" onChange={(event) => setStatusFilter(event.target.value as "" | QuoteStatus)} value={statusFilter}>
-          <option value="">Все статусы</option>
-          {(Object.keys(QUOTE_STATUS_LABELS) as QuoteStatus[]).map((status) => <option key={status} value={status}>{QUOTE_STATUS_LABELS[status]}</option>)}
-        </Select>}
+        action={<MultiSelect compact emptyLabel="Все статусы" label="Статус КП" onChange={setStatusFilter} options={(Object.keys(QUOTE_STATUS_LABELS) as QuoteStatus[]).map((status) => ({ value: status, label: QUOTE_STATUS_LABELS[status] }))} value={statusFilter} />}
         headingId="quotes-title"
         meta={quotes ? `${shown.length} из ${quotes.length}` : undefined}
         title="Коммерческие предложения"

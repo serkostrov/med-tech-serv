@@ -2218,9 +2218,16 @@ export class M2ApiClient {
     const ownOnly = !canReadWholeNotificationJournal(session.permissions);
     let request = this.db().from("notifications").select("id, event_code, recipient_user_id, channel, recipient_address, subject, body, status, scheduled_at, sent_at, delivered_at, attempts, last_error, task_id, created_at", { count: "exact" }).order("created_at", { ascending: false }).range(offset, offset + limit - 1);
     if (ownOnly) request = request.eq("recipient_user_id", session.id);
-    if (query.channel) request = request.eq("channel", query.channel);
-    if (query.status) request = request.eq("status", query.status);
-    if (query.eventCode) request = request.eq("event_code", query.eventCode);
+    // Канал, статус и событие — по нескольку через запятую (встреча 18.11): одно — «равно», несколько — «одно из».
+    const channels = filterValues(query.channel);
+    if (channels.length === 1) request = request.eq("channel", channels[0]!);
+    else if (channels.length) request = request.in("channel", channels);
+    const statuses = filterValues(query.status);
+    if (statuses.length === 1) request = request.eq("status", statuses[0]!);
+    else if (statuses.length) request = request.in("status", statuses);
+    const events = filterValues(query.eventCode);
+    if (events.length === 1) request = request.eq("event_code", events[0]!);
+    else if (events.length) request = request.in("event_code", events);
     // Фильтр «Адресат» раньше не уходил в запрос: ищем по адресу получателя.
     const recipient = query.recipient ? escapeIlikePattern(query.recipient.trim()) : "";
     if (recipient) request = request.ilike("recipient_address", `%${recipient}%`);
@@ -2311,8 +2318,13 @@ export class M2ApiClient {
       .order("occurred_at", { ascending: false })
       .order("id", { ascending: false })
       .range(offset, offset + limit - 1);
-    if (query.actorId) request = request.eq("actor_user_id", query.actorId);
-    if (query.entityType) request = request.eq("entity_type", query.entityType);
+    // Кто и что — по нескольку через запятую (встреча 18.11).
+    const actors = filterValues(query.actorId);
+    if (actors.length === 1) request = request.eq("actor_user_id", actors[0]!);
+    else if (actors.length) request = request.in("actor_user_id", actors);
+    const entityTypes = filterValues(query.entityType);
+    if (entityTypes.length === 1) request = request.eq("entity_type", entityTypes[0]!);
+    else if (entityTypes.length) request = request.in("entity_type", entityTypes);
     if (query.from) request = request.gte("occurred_at", companyDayStart(query.from) ?? query.from);
     if (query.to) request = request.lte("occurred_at", companyDayEnd(query.to) ?? query.to);
     // Поиск по номеру объекта, действию, таблице и автору: всё это столбцы, отбор в базе.
@@ -3355,7 +3367,9 @@ export class M2ApiClient {
     const box = mailBoxFilter(query.box ?? "all");
     if (box.statuses) request = request.in("status", [...box.statuses]);
     if (box.or) request = request.or(box.or);
-    if (query.status) request = request.eq("status", query.status);
+    const mailStatuses = filterValues(query.status);
+    if (mailStatuses.length === 1) request = request.eq("status", mailStatuses[0]!);
+    else if (mailStatuses.length) request = request.in("status", mailStatuses);
     const search = query.search?.trim().replace(/[,()%*\\]/gu, " ").trim();
     if (search) request = request.or(`sender.ilike.%${search}%,subject.ilike.%${search}%`);
     const { data, error, count } = await request;
