@@ -6,7 +6,8 @@ import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { formatSitePersonDetails, sitePeople } from "./site-people.js";
-import { EntityDetailToolbar, MetricCard, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
+import { EntityDetailToolbar, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
+import { TaskStageBoard } from "./TaskStageBoard.js";
 
 /**
  * Страница клиента — площадки (встреча 18.11: «зашли и видим всё: её заказы, все её контакты,
@@ -81,7 +82,6 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
     <ResourceState description="Возможно, площадку удалили или у вас нет к ней доступа." status="empty" title="Клиент не найден" />
   </>;
 
-  const overdue = groups.open.filter((task) => task.isOverdue).length;
   const tabs = [
     { value: "tasks" as const, label: "Заявки", badge: groups.open.length + groups.closed.length },
     { value: "equipment" as const, label: "Приборы", badge: equipmentTotal },
@@ -98,27 +98,11 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
       <h1>{site.name}</h1>
       <p>{site.address || "Адрес не указан"}{site.notes ? ` · ${site.notes}` : ""}</p>
     </header>
-    <div className="metric-grid metric-grid--four">
-      <MetricCard icon="tasks" label="Открытые заявки" tone="yellow" value={String(groups.open.length)} />
-      <MetricCard icon="clock" label="Просроченные" tone="orange" value={String(overdue)} />
-      <MetricCard icon="check" label="Выполнено" value={String(groups.closed.length)} />
-      <MetricCard icon="equipment" label="Приборов" value={String(equipmentTotal)} />
-    </div>
     <PageTabs items={tabs} label="Разделы страницы клиента" onValueChange={setTab} value={tab} />
 
-    {tab === "tasks" ? <div className="engineer-page__groups">
-      {tasks === null ? <ResourceState description="Подождите." status="loading" title="Загружаем заявки" /> : <>
-        <section className="task-section" aria-labelledby="site-open-tasks">
-          <header className="task-section__head"><h3 id="site-open-tasks">Открытые</h3><span className="muted">{formatRussianCount(groups.open.length, ["заявка", "заявки", "заявок"])}</span></header>
-          {groups.open.length ? <TaskRows done={false} tasks={groups.open} /> : <div className="task-section__empty"><p>Открытых заявок нет.</p></div>}
-        </section>
-        <section className="task-section" aria-labelledby="site-closed-tasks">
-          <header className="task-section__head"><h3 id="site-closed-tasks">Выполненные</h3><span className="muted">{formatRussianCount(groups.closed.length, ["заявка", "заявки", "заявок"])}</span></header>
-          {groups.closed.length ? <TaskRows done tasks={groups.closed} /> : <div className="task-section__empty"><p>Выполненных заявок пока нет.</p></div>}
-        </section>
-        {tasksTotal > tasks.length ? <p className="muted">Показаны последние {formatRussianCount(tasks.length, ["заявка", "заявки", "заявок"])} из {tasksTotal}. Остальные — в «Задачах» с фильтром по площадке.</p> : null}
-      </>}
-    </div> : null}
+    {tab === "tasks" ? (tasks === null
+      ? <ResourceState description="Подождите." status="loading" title="Загружаем заявки" />
+      : <TaskStageBoard label={`Заявки клиента ${site.name}`} show={{ engineer: true }} tasks={tasks.filter((task) => task.status !== "cancelled")} />) : null}
 
     {tab === "equipment" ? <section className="task-section" aria-labelledby="site-equipment">
       <header className="task-section__head"><h3 id="site-equipment">Приборы на площадке</h3><span className="muted">{formatRussianCount(equipmentTotal, ["прибор", "прибора", "приборов"])}</span></header>

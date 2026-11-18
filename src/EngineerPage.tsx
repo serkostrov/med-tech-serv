@@ -5,7 +5,8 @@ import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 import { competencyKey, competencyLabel } from "./engineer-competencies.js";
 import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
-import { Button, EntityDetailToolbar, MetricCard, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
+import { Button, EntityDetailToolbar, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
+import { TaskStageBoard } from "./TaskStageBoard.js";
 
 /**
  * Страница инженера (встреча 18.11): «зайти и увидеть всю картину по инженеру» — задачи
@@ -128,7 +129,6 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
     <ResourceState description="Возможно, сотрудник удалён или у вас нет доступа." status="empty" title="Инженер не найден" />
   </>;
 
-  const doneCount = groups.find((group) => group.key === "done")?.items.length ?? 0;
   const tabs = [
     { value: "tasks" as const, label: "Задачи", badge: tasks?.filter((task) => task.status !== "cancelled").length ?? 0 },
     { value: "equipment" as const, label: "Приборы", badge: equipment.length },
@@ -148,28 +148,11 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
       <h1>{engineer.fullName}</h1>
       {onEdit ? <div className="engineer-page__actions"><Button icon="edit" onClick={() => onEdit(engineer)} variant="secondary">Изменить карточку</Button></div> : null}
     </header>
-    <div className="metric-grid metric-grid--four">
-      <MetricCard icon="tasks" label="Открытые задачи" tone="yellow" value={String(engineer.assignedTaskCount)} />
-      <MetricCard icon="engineers" label="В работе" value={String(engineer.inProgressTaskCount)} />
-      <MetricCard icon="clock" label="Просроченные" tone="orange" value={String(engineer.overdueTaskCount)} />
-      <MetricCard icon="check" label="Выполнено" value={String(doneCount)} />
-    </div>
     <PageTabs items={tabs} label="Разделы страницы инженера" onValueChange={setTab} value={shownTab} />
 
-    {shownTab === "tasks" ? <div className="engineer-page__groups">
-      {tasks === null ? <ResourceState description="Подождите, задачи инженера сейчас появятся." status="loading" title="Загружаем задачи" /> : groups.map((group) => <section className="task-section" key={group.key} aria-labelledby={`engineer-group-${group.key}`}>
-        <header className="task-section__head"><h3 id={`engineer-group-${group.key}`}>{group.title}</h3><span className="muted">{formatRussianCount(group.items.length, ["задача", "задачи", "задач"])}</span></header>
-        {group.items.length === 0 ? <div className="task-section__empty"><p>{group.empty}</p></div> : <div className="table-scroll"><table className="data-table engineer-page__table"><thead><tr><th scope="col">Задача</th><th scope="col">Прибор</th><th scope="col">{group.key === "done" ? "Выполнена" : "Срок"}</th><th scope="col">Этап</th></tr></thead><tbody>
-          {group.items.map((task) => <tr key={task.id}>
-            <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
-            <td>{task.equipmentId ? <EntityLink target={{ kind: "equipment", id: task.equipmentId }}>{equipmentText(task)}</EntityLink> : "—"}</td>
-            <td className="cell-date">{group.key === "done" ? formatDisplayDate(task.completedAt ?? task.visitDate) || "—" : <>{task.periodTo ? `до ${formatDisplayDate(task.periodTo)}` : "—"}{task.isOverdue ? <small className="danger-text"> · просрочена</small> : null}</>}</td>
-            <td><StatusBadge tone={STATUS_TONE[task.status] ?? "neutral"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
-          </tr>)}
-        </tbody></table></div>}
-      </section>)}
-      {tasks && tasksTotal > tasks.length ? <p className="muted">Показаны первые {formatRussianCount(tasks.length, ["задача", "задачи", "задач"])} из {tasksTotal}. Остальные — в разделе «Задачи» с фильтром по инженеру.</p> : null}
-    </div> : null}
+    {shownTab === "tasks" ? (tasks === null
+      ? <ResourceState description="Подождите, задачи инженера сейчас появятся." status="loading" title="Загружаем задачи" />
+      : <TaskStageBoard label={`Задачи инженера ${engineer.fullName}`} show={{}} tasks={tasks.filter((task) => task.status !== "cancelled")} />) : null}
 
     {shownTab === "equipment" ? <section className="task-section" aria-labelledby="engineer-equipment-title">
       <header className="task-section__head"><h3 id="engineer-equipment-title">Приборы инженера</h3><span className="muted">с которыми были его задачи</span></header>
