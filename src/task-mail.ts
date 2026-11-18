@@ -110,3 +110,14 @@ export function taskMailReplyTemplates(context: { readonly taskNumber: string; r
     { key: "done", label: "Работы выполнены", text: `Здравствуйте!\n\nРаботы по заявке ${context.taskNumber} выполнены. Акт выполненных работ придёт отдельным письмом.` }
   ];
 }
+
+/** Столько же проверяет база (0072): не больше 10 файлов и 20 МБ на письмо. */
+export const MAX_REPLY_FILES = 10;
+export const MAX_REPLY_BYTES = 20 * 1024 * 1024;
+
+/** Что не так с файлами ответа — или null, если можно отправлять. */
+export function taskMailAttachmentProblem(count: number, bytes: number): string | null {
+  if (count > MAX_REPLY_FILES) return `Не больше ${MAX_REPLY_FILES} файлов в одном ответе`;
+  if (bytes > MAX_REPLY_BYTES) return "Файлы больше 20 МБ вместе: почта клиента может не принять такое письмо";
+  return null;
+}

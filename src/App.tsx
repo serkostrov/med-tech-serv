@@ -63,8 +63,8 @@ import { pendingAfterRetry, pendingUploadNames, pendingUploadsText, type Pending
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
 import { allRegistryRows, downloadWorkbook, equipmentRegistrySheets, registryExportNote, registryFileName, taskRegistrySheets } from "./registry-export.js";
 import { FileDropField } from "./FileDropField.js";
-import { FileGallery } from "./FileGallery.js";
-import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAuthor, taskMailReplyAddress, taskMailReplySubject, taskMailReplyTemplates, taskMailReplyLost, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
+import { FileGallery, fileSizeLabel } from "./FileGallery.js";
+import { MAX_TASK_MAIL_REPLY, taskMailAttachmentFile, taskMailAttachmentProblem, taskMailAuthor, taskMailReplyAddress, taskMailReplySubject, taskMailReplyTemplates, taskMailReplyLost, taskMailReplyRefusal, taskMailReplyStatus } from "./task-mail.js";
 import { tasksAvailableForInvoice } from "./invoice-tasks.js";
 import { InvoiceCardPage } from "./InvoiceCardPage.js";
 import {
@@ -684,7 +684,11 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
  * и наши ответы по порядку. Вложения показывает обычная галерея файлов задачи, поэтому
  * открываются и скачиваются они так же и по тем же правам (их проверяет база).
  */
-export function TaskMailThread({ messages, canReply, loading, error, onReload, onReply, taskNumber = "", engineerName, period }: {
+export function TaskMailThread({ messages, canReply, loading, error, onReload, onReply, taskNumber = "", engineerName, period, taskFiles = [], onUploadFiles }: {
+  /** Файлы задачи: их можно приложить к ответу (встреча 18.11). */
+  readonly taskFiles?: readonly EquipmentFileResponse[];
+  /** Загрузить файл с компьютера в задачу и сразу приложить к ответу. */
+  readonly onUploadFiles?: (files: readonly File[]) => Promise<readonly EquipmentFileResponse[]>;
   /** Для заготовок ответа: номер заявки, инженер и срок подставляются в текст. */
   readonly taskNumber?: string;
   readonly engineerName?: string | undefined;
@@ -694,10 +698,36 @@ export function TaskMailThread({ messages, canReply, loading, error, onReload, o
   readonly loading: boolean;
   readonly error: string | null;
   readonly onReload: () => void;
-  readonly onReply: (body: string) => Promise<void>;
+  readonly onReply: (body: string, fileIds: readonly string[]) => Promise<void>;
 }) {
   const [draft, setDraft] = useState("");
   const [sending, setSending] = useState(false);
+  // Файлы к ответу: выбранные из файлов задачи и загруженные с компьютера.
+  const [attached, setAttached] = useState<readonly string[]>([]);
+  const [uploaded, setUploaded] = useState<readonly EquipmentFileResponse[]>([]);
+  const [pickingFiles, setPickingFiles] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const allFiles = [...taskFiles, ...uploaded.filter((file) => !taskFiles.some((item) => item.id === file.id))];
+  const attachedFiles = attached.map((id) => allFiles.find((file) => file.id === id)).filter((file): file is EquipmentFileResponse => Boolean(file));
+  const attachedBytes = attachedFiles.reduce((sum, file) => sum + file.byteSize, 0);
+  const attachProblem = taskMailAttachmentProblem(attachedFiles.length, attachedBytes);
+  const toggleAttached = (id: string) => setAttached((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id]);
+  const uploadFromComputer = async (list: FileList | null) => {
+    if (!list || list.length === 0 || !onUploadFiles) return;
+    setUploading(true);
+    try {
+      const added = await onUploadFiles([...list]);
+      setUploaded((current) => [...current, ...added]);
+      setAttached((current) => [...current, ...added.map((file) => file.id).filter((id) => !current.includes(id))]);
+      toast.success(added.length === 1 ? `Файл «${added[0]?.originalName}» добавлен в задачу и приложен к ответу` : `Файлы добавлены в задачу и приложены к ответу: ${added.length}`);
+    } catch (uploadError) {
+      toast.error(uploadError instanceof Error ? uploadError.message : "Не получилось загрузить файл");
+    } finally {
+      setUploading(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
   const refusal = taskMailReplyRefusal(draft);
   // Кому уйдёт ответ и с какой темой, видно до отправки: правило то же, что в базе.
   const replyTo = taskMailReplyAddress(messages);
@@ -713,10 +743,13 @@ export function TaskMailThread({ messages, canReply, loading, error, onReload, o
     event.preventDefault();
     // Та же проверка, что в базе: пустой ответ клиенту не уходит.
     if (refusal) { toast.warning(refusal); return; }
+    if (attachProblem) { toast.warning(attachProblem); return; }
     setSending(true);
     try {
-      await onReply(draft);
+      await onReply(draft, attached);
       setDraft("");
+      setAttached([]);
+      setPickingFiles(false);
       toast.success("Ответ встал в очередь: он уйдёт клиенту ответом на его письмо");
     } catch (sendError) {
       toast.error(sendError instanceof Error ? sendError.message : "Не получилось отправить ответ клиенту");
@@ -778,6 +811,19 @@ export function TaskMailThread({ messages, canReply, loading, error, onReload, o
         rows={6}
         value={draft}
       />
+      <div className="mail-compose__files">
+        {attachedFiles.length ? <ul aria-label="Файлы к ответу" className="mail-compose__attached">
+          {attachedFiles.map((file) => <li key={file.id}><span>{file.originalName}</span><small>{fileSizeLabel(file.byteSize)}</small><button aria-label={`Убрать «${file.originalName}»`} onClick={() => toggleAttached(file.id)} type="button">×</button></li>)}
+        </ul> : null}
+        <div className="mail-compose__file-actions">
+          {allFiles.length ? <Button aria-expanded={pickingFiles} className="button--compact" onClick={() => setPickingFiles((open) => !open)} variant="secondary">{pickingFiles ? "Скрыть файлы задачи" : `Приложить файлы задачи · ${allFiles.length}`}</Button> : null}
+          {onUploadFiles ? <><Button busy={uploading} busyLabel="Загружаем…" className="button--compact" onClick={() => fileInput.current?.click()} variant="ghost">Загрузить с компьютера</Button><input hidden multiple onChange={(event) => void uploadFromComputer(event.target.files)} ref={fileInput} type="file" /></> : null}
+          {attachProblem ? <span className="mail-compose__warning">{attachProblem}</span> : attachedFiles.length ? <span className="muted">{formatRussianCount(attachedFiles.length, ["файл", "файла", "файлов"])} · {fileSizeLabel(attachedBytes)}</span> : null}
+        </div>
+        {pickingFiles ? <ul aria-label="Файлы задачи" className="mail-compose__picker">
+          {allFiles.map((file) => <li key={file.id}><label><input checked={attached.includes(file.id)} onChange={() => toggleAttached(file.id)} type="checkbox" /><span>{file.originalName}</span><small>{fileSizeLabel(file.byteSize)}</small></label></li>)}
+        </ul> : null}
+      </div>
       <footer className="mail-compose__foot">
         <p>Клиент получит письмо ответом на свою заявку, его ответ вернётся сюда.{length > 0 ? <span className="mail-compose__count"> · {length.toLocaleString("ru")} симв.</span> : null}</p>
         <div className="mail-compose__actions">
@@ -1389,7 +1435,9 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             loading={mailLoading}
             messages={mailThread}
             onReload={() => void loadMailThread()}
-            onReply={async (body) => { await m2Api.sendTaskMailReply(task.id, body); await loadMailThread(); }}
+            onReply={async (body, fileIds) => { await m2Api.sendTaskMailReply(task.id, body, fileIds); await loadMailThread(); }}
+            onUploadFiles={async (files) => { const added = await m2Api.uploadTaskFiles(task.id, files, "document"); await onChanged(); return added; }}
+            taskFiles={card.files}
           />
         </section> : null}
         {detailTab === "work" ? <div className="task-work">
@@ -3165,6 +3213,7 @@ const NOTIFICATION_ERROR_TEXT: Readonly<Record<string, string>> = {
   smtp_starttls_unavailable: "почтовый сервер не поддерживает защищённое соединение",
   smtp_invalid_address: "неверный адрес e-mail",
   smtp_recipient_rejected: "почтовый сервер не знает такого адреса",
+  reply_attachment_unavailable: "не удалось взять приложенный файл из хранилища, служба попробует ещё раз",
   smtp_message_rejected: "почтовый сервер отклонил письмо",
   smtp_invalid_message: "письмо составлено с ошибкой",
   smtp_temporary_failure: "временный сбой почтового сервера",

@@ -3457,10 +3457,16 @@ export class M2ApiClient {
   }
 
   /** Ответ координатора клиенту: база ставит его в очередь, служба отправляет в той же цепочке. */
-  public async sendTaskMailReply(taskId: string, body: string): Promise<void> {
+  public async sendTaskMailReply(taskId: string, body: string, fileIds: readonly string[] = []): Promise<void> {
     const refusal = taskMailReplyRefusal(body);
     if (refusal) throw new M2ApiError(422, refusal);
-    const { error } = await this.db().rpc("send_task_mail_reply", { p_task_id: taskId, p_body: body.trim() });
+    // Без файлов — прежний вызов: работает и на базе без 0072.
+    const { error } = fileIds.length
+      ? await this.db().rpc("send_task_mail_reply", { p_task_id: taskId, p_body: body.trim(), p_file_ids: [...fileIds] })
+      : await this.db().rpc("send_task_mail_reply", { p_task_id: taskId, p_body: body.trim() });
+    if (error && fileIds.length && (error as { readonly code?: string }).code === "PGRST202") {
+      throw new M2ApiError(501, "Файлы в ответе заработают после обновления базы на сервере. Отправьте ответ без файлов");
+    }
     throwIfError(error, "Не получилось отправить ответ клиенту");
   }
 

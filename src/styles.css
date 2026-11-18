@@ -9559,6 +9559,22 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .part-page__body { display: grid; gap: 14px; margin-top: 4px; }
 .part-page .part-card__section { padding: 16px 18px; border: 1px solid var(--color-border); border-radius: 12px; background: var(--color-surface); }
 
+/* Файлы в ответе клиенту (встреча 18.11). */
+.mail-compose__files { display: grid; gap: 8px; }
+.mail-compose__attached { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.mail-compose__attached li { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; padding: 4px 6px 4px 10px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-canvas); font-size: 13px; }
+.mail-compose__attached li span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 260px; }
+.mail-compose__attached li small { color: var(--color-muted); font-size: 12px; }
+.mail-compose__attached button { display: inline-grid; width: 20px; height: 20px; place-items: center; padding: 0; border: 0; border-radius: 50%; background: transparent; color: var(--color-ink-soft); font-size: 15px; cursor: pointer; }
+.mail-compose__attached button:hover { background: rgb(0 0 0 / 8%); }
+.mail-compose__file-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 13px; }
+.mail-compose__warning { color: var(--color-danger); font-size: 13px; }
+.mail-compose__picker { display: grid; gap: 2px; max-height: 220px; overflow: auto; margin: 0; padding: 6px; border: 1px solid var(--color-border); border-radius: 10px; list-style: none; background: var(--color-surface); }
+.mail-compose__picker label { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 7px; font-size: 13px; cursor: pointer; }
+.mail-compose__picker label:hover { background: var(--color-canvas); }
+.mail-compose__picker input { width: 16px; height: 16px; accent-color: var(--color-accent); }
+.mail-compose__picker small { margin-left: auto; color: var(--color-muted); font-size: 12px; }
+.mail-compose__files { padding: 0 16px 12px; }
 
 /* Календарь загрузки: в днях-продолжениях номер задачи и «день 2 из 3» вместо пустой полоски (встреча 18.11). */
 .calendar-task--continued { min-height: 0; opacity: 0.85; }

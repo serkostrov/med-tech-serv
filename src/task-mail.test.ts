@@ -11,7 +11,8 @@ import {
   taskMailReplyRefusal,
   taskMailReplyStatus,
   taskMailReplySubject,
-  taskMailReplyTemplates
+  taskMailReplyTemplates,
+  taskMailAttachmentProblem
 } from "./task-mail.js";
 import type { TaskMailMessage } from "./types.js";
 
@@ -145,5 +146,13 @@ describe("ответ клиенту как письмо", () => {
     assert.match(templates[1]!.text, /назначен инженер Инженер Демо\. Срок работ: 17–24 ноября\./u);
     assert.ok(templates.every((item) => item.text.includes("З-000006")));
     assert.match(taskMailReplyTemplates({ taskNumber: "З-1" })[1]!.text, /назначен инженер\. Перед выездом/u);
+  });
+});
+
+describe("файлы в ответе клиенту", () => {
+  it("до 10 файлов и 20 МБ вместе — можно, больше — объясняем", () => {
+    assert.equal(taskMailAttachmentProblem(2, 5 * 1024 * 1024), null);
+    assert.match(taskMailAttachmentProblem(11, 1000) ?? "", /не больше 10/iu);
+    assert.match(taskMailAttachmentProblem(1, 21 * 1024 * 1024) ?? "", /20 МБ/u);
   });
 });
