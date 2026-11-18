@@ -9165,143 +9165,153 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Период переключили, данные ещё летят: показываем прежние, но видно, что они устаревают. */
 .engineer-calendar__pending { opacity: 0.55; transition: opacity 120ms ease-out; }
 .engineer-calendar__grid {
-  --calendar-name-width: 230px;
-  --calendar-day-width: minmax(76px, 1fr);
+  --calendar-name-width: 220px;
+  --calendar-day-width: minmax(84px, 1fr);
+  --calendar-lane: 30px;
   display: grid;
-  grid-template-columns: var(--calendar-name-width) repeat(var(--calendar-days), var(--calendar-day-width)) 96px;
+  grid-template-columns: var(--calendar-name-width) repeat(var(--calendar-days), var(--calendar-day-width));
   min-width: 100%;
   font-size: 12.5px;
 }
+.engineer-calendar__grid--undated {
+  grid-template-columns: var(--calendar-name-width) repeat(var(--calendar-days), var(--calendar-day-width)) 104px;
+}
 .engineer-calendar__grid--dense {
   --calendar-day-width: minmax(34px, 1fr);
+  --calendar-lane: 24px;
 }
 .engineer-calendar__head, .engineer-calendar__row { display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; }
 
 .engineer-calendar__corner, .engineer-calendar__day, .engineer-calendar__undated-head {
   position: sticky;
   top: 0;
-  z-index: 2;
-  padding: 6px 4px;
+  z-index: 3;
+  padding: 8px 4px;
   border-bottom: 1px solid var(--color-border);
   background: var(--color-surface);
   text-align: center;
 }
 .engineer-calendar__corner, .engineer-calendar__undated-head {
+  display: flex;
+  align-items: flex-end;
   color: var(--color-muted);
+  font-size: 12px;
   font-weight: 650;
   text-align: left;
-  padding-left: 10px;
+  padding-left: 14px;
 }
-.engineer-calendar__corner { left: 0; z-index: 3; }
-.engineer-calendar__day { display: grid; gap: 1px; color: var(--color-muted); }
-.engineer-calendar__day strong { color: var(--color-ink); font-size: 14px; }
-.engineer-calendar__day small { color: var(--color-accent); font-size: 11px; }
-.engineer-calendar__day.is-weekend { background: #f6f8f9; }
-.engineer-calendar__day.is-past strong { color: var(--color-muted); }
-.engineer-calendar__day.is-today { background: var(--color-accent-soft); }
-.engineer-calendar__day.is-today strong { color: var(--color-accent-dark); }
+.engineer-calendar__corner { left: 0; z-index: 4; }
+.engineer-calendar__day { display: grid; justify-items: center; gap: 2px; color: var(--color-muted); font-size: 11.5px; }
+.engineer-calendar__day strong {
+  display: grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  color: var(--color-ink);
+  font-size: 14px;
+  font-weight: 650;
+}
+.engineer-calendar__day small { color: var(--color-muted); font-size: 10.5px; }
+.engineer-calendar__day.is-weekend span, .engineer-calendar__day.is-weekend strong { color: var(--color-muted); }
+.engineer-calendar__day.is-today span { color: var(--color-accent-dark); font-weight: 650; }
+.engineer-calendar__day.is-today strong { background: var(--color-accent); color: #fff; }
 
 .engineer-calendar__name {
   position: sticky;
   left: 0;
-  z-index: 1;
+  z-index: 2;
   display: grid;
-  gap: 2px;
-  padding: 8px 10px;
+  align-content: start;
+  gap: 4px;
+  padding: 9px 12px 9px 14px;
   border-top: 1px solid var(--color-border-soft);
+  border-right: 1px solid var(--color-border-soft);
   background: var(--color-surface);
 }
-.engineer-calendar__name strong { font-size: 13.5px; font-weight: 650; }
-.engineer-calendar__name > span { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
-.engineer-calendar__name small { color: var(--color-muted); font-size: 11.5px; }
+.engineer-calendar__name strong { font-size: 13.5px; font-weight: 650; line-height: 1.3; }
+.engineer-calendar__name > span { display: flex; flex-wrap: wrap; gap: 4px; }
+.engineer-calendar__name .status-badge { font-size: 11px; padding: 1px 7px; }
 .engineer-calendar__name.is-inactive strong { color: var(--color-muted); }
+.engineer-calendar__row--unassigned .engineer-calendar__name strong { color: var(--color-warning); }
+.engineer-calendar__row--unassigned .engineer-calendar__name,
+.engineer-calendar__row--unassigned .engineer-calendar__track,
+.engineer-calendar__row--unassigned .engineer-calendar__undated { background-color: color-mix(in srgb, var(--color-warning-soft) 45%, var(--color-surface)); }
+.engineer-calendar__row--unassigned { border-bottom: 2px solid var(--color-border); }
 
-.engineer-calendar__cell, .engineer-calendar__undated {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-height: 46px;
-  /* День с десятком задач не должен раздувать всю строку: лишнее прокручивается внутри клетки. */
-  max-height: 132px;
-  overflow-y: auto;
-  padding: 3px 2px;
+/* Дни строки: фон по дням, полосы задач поверх. Ряды полос задаёт сама строка. */
+.engineer-calendar__track {
+  position: relative;
+  display: grid;
+  row-gap: 4px;
+  padding: 8px 0 4px;
   border-top: 1px solid var(--color-border-soft);
+}
+.engineer-calendar__bg {
+  grid-row: 1 / -1;
+  margin: -8px 0 -4px;
   border-left: 1px solid var(--color-border-soft);
 }
-.engineer-calendar__cell.is-weekend { background: #f6f8f9; }
-.engineer-calendar__cell.is-today { background: color-mix(in srgb, var(--color-accent-soft) 60%, #fff); }
-.engineer-calendar__cell--overloaded { background: var(--color-warning-soft); }
-.engineer-calendar__cell--overloaded.is-weekend { background: color-mix(in srgb, var(--color-warning-soft) 80%, #eef1f3); }
-.engineer-calendar__undated { align-items: flex-start; padding-left: 8px; }
-.engineer-calendar__undated .is-empty { color: var(--color-muted); }
+.engineer-calendar__bg.is-weekend { background: #f5f7f8; }
+.engineer-calendar__bg.is-today { background: color-mix(in srgb, var(--color-accent-soft) 70%, transparent); }
+.engineer-calendar__bg.is-overloaded { background: color-mix(in srgb, var(--color-warning-soft) 70%, transparent); }
 
-.calendar-task {
-  display: grid;
-  gap: 1px;
-  width: 100%;
-  min-height: 18px;
-  padding: 2px 4px;
-  border: 1px solid color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
-  border-radius: 4px;
-  background: var(--color-accent-soft);
-  color: var(--color-accent-dark);
-  font-size: 11.5px;
-  line-height: 1.25;
+.calendar-bar {
+  --bar: var(--color-accent);
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin: 0 3px;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--bar) 30%, transparent);
+  border-left: 3px solid var(--bar);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bar) 13%, var(--color-surface));
+  color: var(--color-ink);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.2;
   text-align: left;
+  white-space: nowrap;
   cursor: pointer;
 }
-.calendar-task:hover { border-color: var(--color-accent); background: color-mix(in srgb, var(--color-accent) 18%, #fff); }
-.calendar-task__number { font-weight: 650; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.calendar-task__title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--color-ink-soft); }
-/* Продолжение многодневной задачи: полоска без подписи, подробности в подсказке. */
-.calendar-task--continued { min-height: 16px; opacity: 0.7; }
-.calendar-task--continued .calendar-task__number { min-height: 10px; text-align: center; }
-.calendar-task--start { border-left-width: 3px; }
-/* Период начался раньше или кончается позже показанного: в плотном режиме подписи нет,
-   поэтому продолжение видно по рваной границе клетки, а не по стрелке в тексте. */
-.calendar-task--from-before { border-left: 2px dashed currentColor; border-top-left-radius: 0; border-bottom-left-radius: 0; }
-.calendar-task--to-after { border-right: 2px dashed currentColor; border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.calendar-task--visit { box-shadow: inset 0 -2px 0 var(--color-accent); }
-.calendar-task--urgent { border-color: color-mix(in srgb, var(--color-warning) 55%, var(--color-border)); }
-.calendar-task--overdue {
-  border-color: color-mix(in srgb, var(--color-danger) 55%, var(--color-border));
-  background: var(--color-danger-soft);
-  color: var(--color-danger);
+.calendar-bar:hover, .calendar-bar:focus-visible { background: color-mix(in srgb, var(--bar) 24%, var(--color-surface)); outline: none; }
+.calendar-bar__number { flex: none; color: color-mix(in srgb, var(--bar) 75%, #000); font-weight: 700; }
+.calendar-bar__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--color-ink-soft); }
+.calendar-bar__visit {
+  position: absolute;
+  bottom: 0;
+  height: 3px;
+  background: var(--bar);
 }
-.calendar-task--in_progress { background: var(--color-success-soft); color: var(--color-success); border-color: color-mix(in srgb, var(--color-success) 40%, var(--color-border)); }
-.calendar-task--closed { background: var(--color-border-soft); color: var(--color-muted); border-color: var(--color-border); }
-.calendar-task--under_review { background: var(--color-accent-soft); }
-.calendar-task--undated { background: var(--color-warning-soft); color: var(--color-warning); border-color: color-mix(in srgb, var(--color-warning) 40%, var(--color-border)); }
-/* В длинном периоде подписи не читаются: остаются цветные полоски, номер и срок — в подсказке. */
-.engineer-calendar__grid--dense .calendar-task__title { display: none; }
-.engineer-calendar__grid--dense .calendar-task { min-height: 16px; }
-.engineer-calendar__grid--dense .calendar-task__number { min-height: 10px; font-size: 0; }
+/* Задача началась раньше или кончится позже показанного: край полосы срезан. */
+.calendar-bar--from-before { margin-left: 0; border-left-width: 1px; border-left-style: dashed; border-top-left-radius: 0; border-bottom-left-radius: 0; }
+.calendar-bar--to-after { margin-right: 0; border-right-style: dashed; border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.calendar-bar--planned { --bar: #8a9aa3; border-style: dashed; border-left-style: solid; }
+.calendar-bar--new { --bar: #e07a2e; }
+.calendar-bar--assigned { --bar: #c99a12; }
+.calendar-bar--in_progress { --bar: #1f8a52; }
+.calendar-bar--under_review { --bar: #2f86c4; }
+.calendar-bar--closed { --bar: #8a9aa3; }
+.calendar-bar--closed .calendar-bar__title { color: var(--color-muted); }
+.calendar-bar--overdue { --bar: var(--color-danger); }
+.calendar-bar--urgent .calendar-bar__number::after { content: " !"; color: var(--color-danger); }
+.engineer-calendar__grid--dense .calendar-bar { margin: 0 1px; padding: 0 5px; font-size: 11px; }
+.engineer-calendar__grid--dense .calendar-bar--from-before, .engineer-calendar__grid--dense .calendar-bar--to-after { margin: 0; }
 
-.engineer-calendar__unassigned { padding: 12px 16px 0; border-top: 1px solid var(--color-border-soft); }
-.engineer-calendar__unassigned h3 { margin: 0; font-size: 14px; font-weight: 650; }
-.engineer-calendar__unassigned p { margin: 2px 0 8px; color: var(--color-muted); font-size: 12.5px; }
-.engineer-calendar__unassigned-list { display: flex; flex-wrap: wrap; gap: 6px; }
-.engineer-calendar__unassigned-list .calendar-task { display: flex; align-items: center; gap: 8px; width: auto; max-width: 420px; padding: 6px 10px; }
-
-.engineer-calendar__legend {
+.engineer-calendar__undated {
   display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 4px 6px;
-  margin: 10px 16px 14px;
-  color: var(--color-muted);
-  font-size: 12px;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 6px;
+  border-top: 1px solid var(--color-border-soft);
+  border-left: 1px solid var(--color-border);
 }
-.calendar-legend {
-  display: inline-block;
-  width: 12px;
-  height: 12px;
-  border: 1px solid var(--color-border);
-  border-radius: 3px;
-  vertical-align: -2px;
-}
-.calendar-legend--overloaded { background: var(--color-warning-soft); }
-.calendar-legend--weekend { background: #f6f8f9; }
+.engineer-calendar__undated .calendar-bar { margin: 0; min-height: 26px; }
 
 .calendar-task-card { display: grid; gap: 14px; }
 .calendar-task-card__facts { display: grid; gap: 8px 18px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); margin: 0; }
@@ -9316,7 +9326,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 @media (max-width: 760px) {
   .engineer-calendar__grid { --calendar-name-width: 150px; }
   .engineer-calendar-toolbar__title { min-width: 140px; font-size: 14px; }
-  .engineer-calendar__name small { display: none; }
 }
 
 /* Карточка счёта: под ценой — откуда она, у скидки — ссылка «Добавить» или «Изменить» */
@@ -9387,7 +9396,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* Календарь: фильтры по инженеру и этапу в одной строке с периодом */
 .engineer-calendar-toolbar__filters { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
-.engineer-calendar-toolbar__filters label { display: grid; gap: 4px; min-width: 180px; color: var(--color-muted); font-size: 12.5px; }
+.engineer-calendar-toolbar__filters > label { display: grid; gap: 4px; min-width: 180px; color: var(--color-muted); font-size: 12.5px; }
+/* Фильтры календаря в одну строку с периодом: выбранные фамилии не растягивают кнопку. */
+.engineer-calendar-toolbar__filters .multi-select__trigger { width: auto; min-width: 150px; max-width: 260px; }
 
 /* Ещё виды работ к основному: чипы с крестиком и список «Добавить» */
 .extra-work-types { display: grid; gap: 6px; }

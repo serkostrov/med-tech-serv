@@ -1,29 +1,31 @@
 import { EntityLink } from "./entity-links.js";
+import { MultiSelect } from "./MultiSelect.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { m2Api, type AssignmentSuggestionRecord, type EngineerCalendarData, type TaskCardResponse } from "./m2-api.js";
 import {
   MAX_CALENDAR_DAYS,
-  OVERLOADED_TASKS_PER_DAY,
   buildEngineerCalendar,
   calendarDayTitle,
   calendarRange,
   calendarRangeTitle,
+  calendarRowBars,
   rankAssignmentCandidates,
   shiftCalendarRange,
   taskOccupiedRange,
+  UNASSIGNED_ENGINEER,
+  type CalendarBar,
   type CalendarMode,
-  type CalendarPlacement,
   type CalendarRange,
   type CalendarRow,
   type CalendarTask,
   type EngineerCalendar as CalendarLayout
 } from "./engineer-calendar.js";
 import { companyToday } from "./task-dates.js";
-import { Button, CardHeader, DatePicker, Dialog, MetricCard, ResourceState, Select, StatusBadge, ViewSwitch, toast } from "./ui.js";
+import { Button, DatePicker, Dialog, ResourceState, StatusBadge, ViewSwitch, toast } from "./ui.js";
 import { EngineerPicker } from "./EngineerPicker.js";
 import { formatIsoCalendarDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
-import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
+import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 
 const EMPTY_CALENDAR: EngineerCalendarData = { engineers: [], tasks: [] };
 
@@ -38,75 +40,118 @@ function taskPeriodText(task: CalendarTask): string {
   return `${formatIsoCalendarDate(occupied.from)} — ${formatIsoCalendarDate(occupied.to)}`;
 }
 
-/** Что показать в подсказке к задаче: номер, название, срок, площадка и прибор. */
-function taskHint(task: CalendarTask, placement?: CalendarPlacement): string {
+/** Что показать в подсказке к задаче: номер, название, этап, срок, выезд, площадка и прибор. */
+function taskHint(task: CalendarTask): string {
   return [
     `${task.number} · ${task.title}`,
     TASK_STATUS_LABELS[task.status] ?? task.status,
     taskPeriodText(task),
-    placement && placement.dayCount > 1 ? `день ${placement.dayIndex} из ${placement.dayCount}` : null,
-    placement?.isVisitDay ? "выезд в этот день" : null,
+    task.visitDate ? `выезд ${formatIsoCalendarDate(task.visitDate.slice(0, 10))}` : null,
     task.siteName,
     task.equipmentLabel,
     task.isOverdue ? "просрочена" : null
   ].filter(Boolean).join(" · ");
 }
 
-/**
- * Значки строки инженера. Просрочка и перегруз — разные беды, поэтому показываем оба,
- * а не прячем один за другим: у инженера может быть и то, и другое.
- */
-function rowStateBadges(row: CalendarRow): readonly { readonly tone: "neutral" | "danger" | "warning" | "success" | "info"; readonly text: string }[] {
+/** Значки у фамилии: только беды — просрочка и перегруз. «Свободен» и цифры убраны (встреча 18.11). */
+function rowStateBadges(row: CalendarRow): readonly { readonly tone: "neutral" | "danger" | "warning"; readonly text: string }[] {
   if (!row.engineer.isActive) return [{ tone: "neutral", text: "Неактивен" }];
-  const badges: { readonly tone: "danger" | "warning" | "success" | "info"; readonly text: string }[] = [];
-  if (row.summary.overdueTaskCount > 0) badges.push({ tone: "danger", text: "Есть просрочки" });
-  if (row.summary.overloadedDayCount > 0) badges.push({ tone: "warning", text: "Перегружен" });
-  if (badges.length) return badges;
-  return [row.summary.taskCount === 0 ? { tone: "success", text: "Свободен" } : { tone: "info", text: "Занят" }];
+  const badges: { readonly tone: "danger" | "warning"; readonly text: string }[] = [];
+  if (row.summary.overdueTaskCount > 0) badges.push({ tone: "danger", text: "Просрочка" });
+  if (row.summary.overloadedDayCount > 0) badges.push({ tone: "warning", text: "Перегруз" });
+  return badges;
 }
 
-/** Подпись дня-продолжения: «день 2 из 4» (без последнего слова, если задача длинная). */
-export function continuationLabel(placement: Pick<CalendarPlacement, "dayIndex" | "dayCount">): string {
-  return placement.dayCount > 1 ? `день ${placement.dayIndex} из ${placement.dayCount}` : "продолжение";
-}
-
-function TaskChip({ placement, onOpen }: {
-  readonly placement: CalendarPlacement;
+function CalendarBarButton({ bar, dense, onOpen }: {
+  readonly bar: CalendarBar;
+  readonly dense: boolean;
   readonly onOpen: (taskId: string) => void;
 }) {
-  const task = placement.task;
+  const task = bar.task;
+  const days = bar.end - bar.start + 1;
   const classes = [
-    "calendar-task",
-    `calendar-task--${task.status}`,
-    placement.isFirstVisibleDay ? "calendar-task--start" : "calendar-task--continued",
-    placement.isLastVisibleDay ? "calendar-task--end" : "",
-    placement.continuesBefore && placement.isFirstVisibleDay ? "calendar-task--from-before" : "",
-    placement.continuesAfter && placement.isLastVisibleDay ? "calendar-task--to-after" : "",
-    task.isOverdue ? "calendar-task--overdue" : "",
-    task.priority === "urgent" ? "calendar-task--urgent" : "",
-    placement.isVisitDay ? "calendar-task--visit" : ""
+    "calendar-bar",
+    `calendar-bar--${task.status}`,
+    bar.continuesBefore ? "calendar-bar--from-before" : "",
+    bar.continuesAfter ? "calendar-bar--to-after" : "",
+    task.isOverdue ? "calendar-bar--overdue" : "",
+    task.priority === "urgent" ? "calendar-bar--urgent" : ""
   ].filter(Boolean).join(" ");
-  return (
-    <button
-      aria-label={taskHint(task, placement)}
-      className={classes}
-      onClick={() => onOpen(task.id)}
-      title={taskHint(task, placement)}
-      type="button"
-    >
-      {/* Встреча 18.11: пустые полоски продолжения были непонятны («почему одни пустые, другие
-          заполнены»). Теперь в каждом дне задачи её номер, в первом — ещё и название,
-          в остальных — какой это день: «день 2 из 4». */}
-      <span className="calendar-task__number">
-        {placement.continuesBefore && placement.isFirstVisibleDay ? "←" : ""}
-        {task.number}
-        {placement.continuesAfter && placement.isLastVisibleDay ? "→" : ""}
-      </span>
-      {placement.isFirstVisibleDay
-        ? <span className="calendar-task__title">{task.title}</span>
-        : <span className="calendar-task__day">{continuationLabel(placement)}</span>}
-    </button>
-  );
+  const hint = taskHint(task);
+  return <button
+    aria-label={hint}
+    className={classes}
+    onClick={() => onOpen(task.id)}
+    style={{ gridColumn: `${bar.start + 1} / ${bar.end + 2}`, gridRow: String(bar.lane + 1) }}
+    title={hint}
+    type="button"
+  >
+    <span className="calendar-bar__number">{task.number}</span>
+    {dense && days < 4 ? null : <span className="calendar-bar__title">{task.title}</span>}
+    {/* День выезда — черта снизу под этим днём полосы. */}
+    {bar.visitIndex !== undefined && days > 1
+      ? <i aria-hidden="true" className="calendar-bar__visit" style={{ left: `${((bar.visitIndex - bar.start) / days) * 100}%`, width: `${100 / days}%` }} />
+      : null}
+  </button>;
+}
+
+/** Дни инженера одной дорожкой: фон дней (выходные, сегодня, перегруз) и полосы задач поверх. */
+function CalendarTrack({ row, dense, onOpenTask }: {
+  readonly row: CalendarRow;
+  readonly dense: boolean;
+  readonly onOpenTask: (taskId: string) => void;
+}) {
+  const { bars, lanes } = calendarRowBars(row);
+  return <div
+    className="engineer-calendar__track"
+    role="cell"
+    style={{
+      gridColumn: `2 / span ${row.cells.length}`,
+      gridTemplateColumns: `repeat(${row.cells.length}, minmax(0, 1fr))`,
+      // Последний ряд добирает высоту строки, когда фамилия в две строки выше полос.
+      gridTemplateRows: `repeat(${Math.max(lanes, 1)}, var(--calendar-lane)) minmax(0, 1fr)`
+    }}
+  >
+    {row.cells.map((cell, index) => <span
+      aria-hidden="true"
+      className={`engineer-calendar__bg${cell.isWeekend ? " is-weekend" : ""}${cell.isToday ? " is-today" : ""}${cell.level === "overloaded" ? " is-overloaded" : ""}`}
+      key={cell.date}
+      style={{ gridColumn: String(index + 1) }}
+      title={`${row.engineer.fullName} · ${calendarDayTitle(cell.date)}: ${cell.placements.length ? formatRussianCount(cell.placements.length, ["задача", "задачи", "задач"]) : "свободен"}`}
+    />)}
+    {bars.map((bar) => <CalendarBarButton bar={bar} dense={dense} key={bar.task.id} onOpen={onOpenTask} />)}
+  </div>;
+}
+
+function CalendarRowView({ row, dense, showUndated, onOpenTask }: {
+  readonly row: CalendarRow;
+  readonly dense: boolean;
+  readonly showUndated: boolean;
+  readonly onOpenTask: (taskId: string) => void;
+}) {
+  const unassigned = row.engineer.id === UNASSIGNED_ENGINEER.id;
+  const badges = unassigned ? [] : rowStateBadges(row);
+  return <div className={`engineer-calendar__row${unassigned ? " engineer-calendar__row--unassigned" : ""}`} role="row">
+    <div className={`engineer-calendar__name${row.engineer.isActive ? "" : " is-inactive"}`} role="rowheader">
+      {unassigned
+        ? <strong>Не назначены</strong>
+        : <strong><EntityLink target={{ kind: "engineer", id: row.engineer.id }}>{row.engineer.fullName}</EntityLink></strong>}
+      {badges.length ? <span>{badges.map((badge) => <StatusBadge key={badge.text} tone={badge.tone}>{badge.text}</StatusBadge>)}</span> : null}
+    </div>
+    <CalendarTrack dense={dense} onOpenTask={onOpenTask} row={row} />
+    {showUndated ? <div className="engineer-calendar__undated" role="cell">
+      {row.undatedTasks.map((task) => <button
+        aria-label={taskHint(task)}
+        className={`calendar-bar calendar-bar--undated calendar-bar--${task.status}`}
+        key={task.id}
+        onClick={() => onOpenTask(task.id)}
+        title={taskHint(task)}
+        type="button"
+      >
+        <span className="calendar-bar__number">{task.number}</span>
+      </button>)}
+    </div> : null}
+  </div>;
 }
 
 /**
@@ -147,8 +192,11 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
   readonly title: string;
   readonly onOpenTask: (taskId: string) => void;
 }) {
-  // В длинном периоде подписи в клетках не читаются: остаются полоски и подсказка.
+  // В длинном периоде названия не влезают: у коротких полос остаётся номер, полное — в подсказке.
   const dense = calendar.days.length >= DENSE_FROM_DAYS;
+  const rows = calendar.unassignedRow ? [calendar.unassignedRow, ...calendar.rows] : calendar.rows;
+  // Столбец «Без срока» — только если такие задачи есть: пустой столбец из прочерков не нужен.
+  const showUndated = rows.some((row) => row.undatedTasks.length > 0);
   return <div
     aria-label={`Календарь загрузки: ${title}`}
     className="engineer-calendar__scroll"
@@ -157,7 +205,7 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
   >
     <div
       aria-label={`Загрузка инженеров: ${title}`}
-      className={`engineer-calendar__grid${dense ? " engineer-calendar__grid--dense" : ""}`}
+      className={`engineer-calendar__grid${dense ? " engineer-calendar__grid--dense" : ""}${showUndated ? " engineer-calendar__grid--undated" : ""}`}
       role="table"
       style={{ ["--calendar-days" as string]: String(calendar.days.length) }}
     >
@@ -173,40 +221,9 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
           <strong>{day.dayLabel}</strong>
           {day.startsMonth ? <small>{day.monthLabel}</small> : null}
         </div>)}
-        <div className="engineer-calendar__undated-head" role="columnheader">Без срока</div>
+        {showUndated ? <div className="engineer-calendar__undated-head" role="columnheader">Без срока</div> : null}
       </div>
-      {calendar.rows.map((row) => {
-        const badges = rowStateBadges(row);
-        return <div className="engineer-calendar__row" key={row.engineer.id} role="row">
-          <div className={`engineer-calendar__name${row.engineer.isActive ? "" : " is-inactive"}`} role="rowheader">
-            <strong><EntityLink target={{ kind: "engineer", id: row.engineer.id }}>{row.engineer.fullName}</EntityLink></strong>
-            <span>
-              {badges.map((badge) => <StatusBadge key={badge.text} tone={badge.tone}>{badge.text}</StatusBadge>)}
-              <small>{formatRussianCount(row.summary.taskCount, ["задача", "задачи", "задач"])} · пик {row.summary.busiestDayCount} · окон {row.summary.freeWorkdayCount}</small>
-            </span>
-          </div>
-          {row.cells.map((cell) => <div
-            className={`engineer-calendar__cell engineer-calendar__cell--${cell.level}${cell.isWeekend ? " is-weekend" : ""}${cell.isToday ? " is-today" : ""}`}
-            key={cell.date}
-            role="cell"
-            title={`${row.engineer.fullName} · ${calendarDayTitle(cell.date)}: ${cell.placements.length ? formatRussianCount(cell.placements.length, ["задача", "задачи", "задач"]) : "свободен"}`}
-          >
-            {cell.placements.map((placement) => <TaskChip key={placement.task.id} onOpen={onOpenTask} placement={placement} />)}
-          </div>)}
-          <div className="engineer-calendar__undated" role="cell">
-            {row.undatedTasks.length === 0 ? <span className="is-empty">—</span> : row.undatedTasks.map((task) => <button
-              aria-label={taskHint(task)}
-              className="calendar-task calendar-task--undated"
-              key={task.id}
-              onClick={() => onOpenTask(task.id)}
-              title={taskHint(task)}
-              type="button"
-            >
-              <span className="calendar-task__number">{task.number}</span>
-            </button>)}
-          </div>
-        </div>;
-      })}
+      {rows.map((row) => <CalendarRowView dense={dense} key={row.engineer.id || "unassigned"} onOpenTask={onOpenTask} row={row} showUndated={showUndated} />)}
     </div>
   </div>;
 }
@@ -365,8 +382,9 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
   readonly onOpenTask?: (taskId: string) => void;
 } = {}) {
   const today = companyToday();
-  const [engineerFilter, setEngineerFilter] = useState("");
-  const [statusFilter, setStatusFilter] = useState("");
+  // Инженеры и этапы — по нескольку (18.11: «везде, где списки, выбор нескольких»).
+  const [engineerFilter, setEngineerFilter] = useState<readonly string[]>([]);
+  const [statusFilter, setStatusFilter] = useState<readonly string[]>([]);
   const [mode, setMode] = useState<CalendarMode>("week");
   const [range, setRange] = useState<CalendarRange>(() => calendarRange("week", today));
   // Свой период набирают в двух полях: показываем его, только когда обе даты заданы.
@@ -443,9 +461,9 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
   // окна задачи заново раскладывать месяц на двадцать инженеров незачем.
   const calendar = useMemo(() => {
     // Отбор — до раскладки: перегруз и «свободен весь период» считаются по тому, что видно.
-    const engineers = engineerFilter ? data.loaded.engineers.filter((item) => item.id === engineerFilter) : data.loaded.engineers;
-    const tasks = data.loaded.tasks.filter((task) => (!statusFilter || task.status === statusFilter)
-      && (!engineerFilter || task.engineerId === engineerFilter));
+    const engineers = engineerFilter.length ? data.loaded.engineers.filter((item) => engineerFilter.includes(item.id)) : data.loaded.engineers;
+    const tasks = data.loaded.tasks.filter((task) => (statusFilter.length === 0 || statusFilter.includes(task.status))
+      && (engineerFilter.length === 0 || (task.engineerId !== undefined && engineerFilter.includes(task.engineerId))));
     return buildEngineerCalendar({ engineers, tasks, range: data.range, today });
   }, [data, today, engineerFilter, statusFilter]);
   const openTask = (taskId: string) => { if (onOpenTask) onOpenTask(taskId); else setOpenTaskId(taskId); };
@@ -465,14 +483,8 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
         value={mode}
       />
       <div className="engineer-calendar-toolbar__filters">
-        {ownOnly ? null : <label>Инженер<Select onChange={(event) => setEngineerFilter(event.target.value)} value={engineerFilter}>
-          <option value="">Все инженеры</option>
-          {data.loaded.engineers.map((item) => <option key={item.id} value={item.id}>{item.fullName}</option>)}
-        </Select></label>}
-        <label>Этап<Select onChange={(event) => setStatusFilter(event.target.value)} value={statusFilter}>
-          <option value="">Все этапы</option>
-          {CALENDAR_STATUS_FILTER.map((code) => <option key={code} value={code}>{TASK_STATUS_LABELS[code] ?? code}</option>)}
-        </Select></label>
+        {ownOnly ? null : <MultiSelect compact emptyLabel="Все инженеры" label="Инженер" onChange={setEngineerFilter} options={data.loaded.engineers.map((item) => ({ value: item.id, label: item.fullName }))} searchPlaceholder="Фамилия инженера" value={engineerFilter} />}
+        <MultiSelect compact emptyLabel="Все этапы" label="Этап" onChange={setStatusFilter} options={CALENDAR_STATUS_FILTER.map((code) => ({ value: code, label: TASK_STATUS_LABELS[code] ?? code }))} value={statusFilter} />
       </div>
       {mode === "custom" ? <div className="engineer-calendar-toolbar__custom">
         <label>С<DatePicker onChange={(from) => applyCustom({ ...customDraft, from })} value={customDraft.from} /></label>
@@ -482,19 +494,9 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
       </div> : null}
     </div>
 
-    {ownOnly ? null : <div className="metric-grid metric-grid--four">
-      <MetricCard icon="engineers" label="Инженеров в сетке" value={String(calendar.rows.length)} />
-      <MetricCard icon="tasks" label="Задач в периоде" tone="yellow" value={String(calendar.totals.taskCount)} />
-      <MetricCard icon="clock" label={`Перегружены (от ${OVERLOADED_TASKS_PER_DAY} задач в день)`} tone="orange" value={String(calendar.totals.overloadedEngineerCount)} />
-      <MetricCard icon="engineers" label="Свободны весь период" tone="purple" value={String(calendar.totals.freeEngineerCount)} />
-    </div>}
 
     <section aria-labelledby="engineer-calendar-title" className="card card--table engineer-calendar">
-      <CardHeader
-        headingId="engineer-calendar-title"
-        meta={`${formatRussianCount(calendar.days.length, ["день", "дня", "дней"])}${calendar.totals.undatedTaskCount ? ` · без срока: ${calendar.totals.undatedTaskCount}` : ""}`}
-        title="Календарь загрузки"
-      />
+      <h2 className="sr-only" id="engineer-calendar-title">Календарь загрузки</h2>
       {loadError && calendar.rows.length === 0
         ? <ResourceState description={loadError} onRetry={() => void load(range)} status="error" title="Календарь не загрузился" />
         : loading && calendar.rows.length === 0
@@ -509,28 +511,6 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
               </div>
               {ownOnly ? <OwnDayList calendar={calendar} onOpenTask={openTask} /> : null}
             </div>}
-      {!ownOnly && calendar.totals.unassignedTaskCount > 0 ? <div className="engineer-calendar__unassigned">
-        <h3>Ещё не назначены · {calendar.totals.unassignedTaskCount}</h3>
-        <p>Задачи периода без инженера. Откройте задачу и выберите, кому её отдать.</p>
-        <div className="engineer-calendar__unassigned-list">
-          {calendar.unassignedTasks.map((task) => <button
-            className={`calendar-task calendar-task--${task.status}${task.isOverdue ? " calendar-task--overdue" : ""}`}
-            key={task.id}
-            onClick={() => setOpenTaskId(task.id)}
-            title={taskHint(task)}
-            type="button"
-          >
-            <span className="calendar-task__number">{task.number}</span>
-            <span className="calendar-task__title">{task.title}</span>
-            <StatusBadge tone={TASK_STATUS_TONES[task.status] ?? "neutral"}>{taskPeriodText(task)}</StatusBadge>
-          </button>)}
-        </div>
-      </div> : null}
-      <p className="engineer-calendar__legend">
-        Клетка — день инженера, в ней его задачи на этот день. Задача на несколько дней стоит в каждом своём дне: в первом — номер и название, дальше — «день 2 из 3». Пустая клетка — свободный день
-        · <i className="calendar-legend calendar-legend--overloaded" /> перегруз: {OVERLOADED_TASKS_PER_DAY} и больше задач в день
-        · <i className="calendar-legend calendar-legend--weekend" /> суббота и воскресенье · задачи без срока — в последнем столбце
-      </p>
     </section>
 
     {openTaskId ? <CalendarTaskDialog

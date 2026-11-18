@@ -305,6 +305,8 @@ export interface EngineerCalendar {
   readonly rows: readonly CalendarRow[];
   /** Задачи периода без инженера: координатору видно, что их ещё некому отдать. */
   readonly unassignedTasks: readonly CalendarTask[];
+  /** Задачи без инженера той же строкой, что у инженеров: сверху сетки, по своим дням. */
+  readonly unassignedRow?: CalendarRow;
   readonly totals: {
     /** Все задачи периода: и разложенные по дням, и без срока, и ещё не назначенные. */
     readonly taskCount: number;
@@ -321,6 +323,67 @@ function compareTasksInDay(left: CalendarTask, right: CalendarTask): number {
   if (Boolean(left.isOverdue) !== Boolean(right.isOverdue)) return left.isOverdue ? -1 : 1;
   if ((left.priority === "urgent") !== (right.priority === "urgent")) return left.priority === "urgent" ? -1 : 1;
   return left.number.localeCompare(right.number, "ru");
+}
+
+/** Строка «Не назначены»: у неё нет человека, поэтому и ссылки на страницу инженера. */
+export const UNASSIGNED_ENGINEER: CalendarEngineer = { id: "", fullName: "Не назначены", isActive: true };
+
+/** Задача в строке календаря одной полосой: с какого по какой видимый день и в каком ряду. */
+export interface CalendarBar {
+  readonly task: CalendarTask;
+  /** Первый и последний видимый день задачи — номера дней периода, с нуля. */
+  readonly start: number;
+  readonly end: number;
+  /** Ряд внутри строки: задачи в одни и те же дни встают друг под другом, а не налезают. */
+  readonly lane: number;
+  readonly continuesBefore: boolean;
+  readonly continuesAfter: boolean;
+  readonly dayCount: number;
+  /** День выезда, если он в показанном периоде. */
+  readonly visitIndex?: number;
+}
+
+/**
+ * Полосы строки (встреча 18.11: «календарь выглядит плохо» — многодневная задача
+ * повторялась в каждой клетке подписью «день 15 из 16»). Теперь задача — одна полоса через
+ * свои дни. Ряды раздаём жадно: длинные и ранние задачи сверху, свободный ряд — первый.
+ */
+export function calendarRowBars(row: Pick<CalendarRow, "cells">): { readonly bars: readonly CalendarBar[]; readonly lanes: number } {
+  const open = new Map<string, { -readonly [K in keyof Omit<CalendarBar, "end" | "lane">]: CalendarBar[K] }>();
+  const done: Omit<CalendarBar, "lane">[] = [];
+  row.cells.forEach((cell, index) => {
+    for (const placement of cell.placements) {
+      let bar = open.get(placement.task.id);
+      if (!bar) {
+        bar = {
+          task: placement.task,
+          start: index,
+          continuesBefore: placement.continuesBefore,
+          continuesAfter: placement.continuesAfter,
+          dayCount: placement.dayCount
+        };
+        open.set(placement.task.id, bar);
+      }
+      if (placement.isVisitDay) bar.visitIndex = index;
+      if (placement.isLastVisibleDay) {
+        done.push({ ...bar, end: index });
+        open.delete(placement.task.id);
+      }
+    }
+  });
+  const sorted = done.sort((left, right) => left.start - right.start
+    || (right.end - right.start) - (left.end - left.start)
+    || compareTasksInDay(left.task, right.task));
+  const laneEnds: number[] = [];
+  const bars = sorted.map((bar): CalendarBar => {
+    let lane = laneEnds.findIndex((end) => end < bar.start);
+    if (lane === -1) {
+      lane = laneEnds.length;
+      laneEnds.push(bar.end);
+    } else laneEnds[lane] = bar.end;
+    return { ...bar, lane };
+  });
+  return { bars, lanes: laneEnds.length };
 }
 
 /**
@@ -353,8 +416,7 @@ export function buildEngineerCalendar(input: {
     else byEngineer.set(task.engineerId, [task]);
   }
 
-  const rows = input.engineers.map((engineer): CalendarRow => {
-    const tasks = byEngineer.get(engineer.id) ?? [];
+  const buildRow = (engineer: CalendarEngineer, tasks: readonly CalendarTask[]): CalendarRow => {
     const perDay = new Map<string, CalendarPlacement[]>();
     const undated: CalendarTask[] = [];
     const visibleTaskIds = new Set<string>();
@@ -415,7 +477,8 @@ export function buildEngineerCalendar(input: {
       },
       undatedTasks: [...undated].sort(compareTasksInDay)
     };
-  });
+  };
+  const rows = input.engineers.map((engineer) => buildRow(engineer, byEngineer.get(engineer.id) ?? []));
 
   const undatedTaskCount = rows.reduce((sum, row) => sum + row.undatedTasks.length, 0);
   const placedTaskCount = new Set(rows.flatMap((row) => row.cells.flatMap((cell) => cell.placements.map((item) => item.task.id)))).size;
@@ -424,6 +487,7 @@ export function buildEngineerCalendar(input: {
     days,
     rows,
     unassignedTasks: [...unassigned].sort(compareTasksInDay),
+    unassignedRow: unassigned.length ? buildRow(UNASSIGNED_ENGINEER, unassigned) : undefined,
     totals: {
       // Считаем все задачи периода, иначе «Задач в периоде» спорило бы с блоком
       // нераспределённых и со столбцом «Без срока» на том же экране.
