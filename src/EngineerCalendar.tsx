@@ -1,5 +1,6 @@
 import { EntityLink, useEntityNav } from "./entity-links.js";
 import { MultiSelect } from "./MultiSelect.js";
+import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { m2Api, type AssignmentSuggestionRecord, type EngineerCalendarData, type TaskCardResponse } from "./m2-api.js";
 import {
@@ -187,10 +188,12 @@ function OwnDayList({ calendar, onOpenTask }: {
   </div>;
 }
 
-export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
+export function EngineerCalendarGrid({ calendar, title, onOpenTask, reserveBottom = 0 }: {
   readonly calendar: CalendarLayout;
   readonly title: string;
   readonly onOpenTask: (taskId: string) => void;
+  /** Место под строкой страниц внизу: сетка доходит до неё, а не до края экрана. */
+  readonly reserveBottom?: number;
 }) {
   // В длинном периоде названия не влезают: у коротких полос остаётся номер, полное — в подсказке.
   const dense = calendar.days.length >= DENSE_FROM_DAYS;
@@ -198,7 +201,7 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
   // Столбец «Без срока» — только если такие задачи есть: пустой столбец из прочерков не нужен.
   const showUndated = rows.some((row) => row.undatedTasks.length > 0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  useFillScreenHeight(scrollRef, rows.length);
+  useFillScreenHeight(scrollRef, rows.length, reserveBottom);
   return <div
     aria-label={`Календарь загрузки: ${title}`}
     className="engineer-calendar__scroll"
@@ -237,19 +240,19 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
  * 240 пикселей» с запасом, и снизу оставалась пустая полоса. Теперь считаем по месту сетки на
  * странице: в разделе «Инженеры» и на странице инженера она начинается на разной высоте.
  */
-function useFillScreenHeight(ref: React.RefObject<HTMLDivElement | null>, rowCount: number) {
+function useFillScreenHeight(ref: React.RefObject<HTMLDivElement | null>, rowCount: number, reserveBottom: number) {
   useEffect(() => {
     const element = ref.current;
     if (!element || typeof window === "undefined") return;
     const fit = () => {
       if (window.innerWidth <= 760) { element.style.maxHeight = ""; return; }
       const top = element.getBoundingClientRect().top + window.scrollY;
-      element.style.maxHeight = `${Math.max(420, window.innerHeight - top - 16)}px`;
+      element.style.maxHeight = `${Math.max(420, window.innerHeight - top - 16 - reserveBottom)}px`;
     };
     fit();
     window.addEventListener("resize", fit);
     return () => window.removeEventListener("resize", fit);
-  }, [ref, rowCount]);
+  }, [ref, rowCount, reserveBottom]);
 }
 
 /** Можно ли отсюда назначить или сменить инженера: решают этап задачи и права, как в «Задачах». */
@@ -410,6 +413,9 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask, engineerId }: {
   // Инженеры и этапы — по нескольку (18.11: «везде, где списки, выбор нескольких»).
   const [engineerFilter, setEngineerFilter] = useState<readonly string[]>(engineerId ? [engineerId] : []);
   const nav = useEntityNav();
+  // Инженеры постранично (18.11), как письма. «Не назначены» — на каждой странице сверху.
+  const { pageSize, setPageSize } = usePageSize("engineer-calendar");
+  const [pageIndex, setPageIndex] = useState(0);
   const [statusFilter, setStatusFilter] = useState<readonly string[]>([]);
   const [mode, setMode] = useState<CalendarMode>("week");
   const [range, setRange] = useState<CalendarRange>(() => calendarRange("week", today));
@@ -492,6 +498,11 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask, engineerId }: {
       && (engineerFilter.length === 0 || (task.engineerId !== undefined && engineerFilter.includes(task.engineerId))));
     return buildEngineerCalendar({ engineers, tasks, range: data.range, today });
   }, [data, today, engineerFilter, statusFilter]);
+  // Страницы — только в общем календаре: у одного инженера (своём или на его странице) строка одна.
+  const paged = !ownOnly && !engineerId;
+  const pageCount = Math.max(1, Math.ceil(calendar.rows.length / pageSize));
+  const shownPage = Math.min(pageIndex, pageCount - 1);
+  const pagedCalendar = paged ? { ...calendar, rows: calendar.rows.slice(shownPage * pageSize, (shownPage + 1) * pageSize) } : calendar;
   // Нажатие на задачу открывает саму задачу, как везде (18.11: «я должен передавать внутри календаря?»).
   // Инженера меняют в карточке задачи. Окно назначения — только там, где переходов между страницами нет.
   const openTask = (taskId: string) => {
@@ -515,7 +526,7 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask, engineerId }: {
         value={mode}
       />
       <div className="engineer-calendar-toolbar__filters">
-        {ownOnly || engineerId ? null : <MultiSelect compact emptyLabel="Все инженеры" label="Инженер" onChange={setEngineerFilter} options={data.loaded.engineers.map((item) => ({ value: item.id, label: item.fullName }))} searchPlaceholder="Фамилия инженера" value={engineerFilter} />}
+        {ownOnly || engineerId ? null : <MultiSelect compact emptyLabel="Все инженеры" label="Инженер" onChange={(next) => { setEngineerFilter(next); setPageIndex(0); }} options={data.loaded.engineers.map((item) => ({ value: item.id, label: item.fullName }))} searchPlaceholder="Фамилия инженера" value={engineerFilter} />}
         <MultiSelect compact emptyLabel="Все этапы" label="Этап" onChange={setStatusFilter} options={CALENDAR_STATUS_FILTER.map((code) => ({ value: code, label: TASK_STATUS_LABELS[code] ?? code }))} value={statusFilter} />
       </div>
       {mode === "custom" ? <div className="engineer-calendar-toolbar__custom">
@@ -539,7 +550,8 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask, engineerId }: {
               {/* Пока летит запрос нового периода, показываем прежний и помечаем ожидание:
                   раскладывать старые задачи по новым дням нельзя. */}
               <div className={ownOnly ? "own-calendar-grid" : undefined}>
-                <EngineerCalendarGrid calendar={calendar} onOpenTask={openTask} title={calendarRangeTitle(calendar.range, mode)} />
+                <EngineerCalendarGrid calendar={pagedCalendar} onOpenTask={openTask} reserveBottom={paged ? 64 : 0} title={calendarRangeTitle(calendar.range, mode)} />
+                {paged ? <RegistryPagination alwaysShow ariaLabel="Страницы календаря по инженерам" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={shownPage} pageSize={pageSize} total={calendar.rows.length} /> : null}
               </div>
               {ownOnly ? <OwnDayList calendar={calendar} onOpenTask={openTask} /> : null}
             </div>}
