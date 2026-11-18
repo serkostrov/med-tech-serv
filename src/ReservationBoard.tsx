@@ -2,6 +2,7 @@ import React, { useState, type DragEvent } from "react";
 import { BoardScroller } from "./BoardScroller.js";
 import type { StockReservationRecord, StockReservationStatus } from "./m2-api.js";
 import { toast } from "./ui.js";
+import { EntityLink } from "./entity-links.js";
 import {
   RESERVATION_BOARD_STATUSES,
   RESERVATION_STATUS_LABELS,
@@ -87,13 +88,13 @@ export function ReservationBoard({ items, canWrite, busyId, loading, onAction }:
           >
             <div className="task-board-card__open">
               <span className="task-board-card__top">{reservation.number}{note ? <i>{note}</i> : null}</span>
-              <strong>{reservation.articleNumber}</strong>
+              <strong><EntityLink target={{ kind: "part", id: reservation.partId }}>{reservation.articleNumber}</EntityLink></strong>
               <small>{reservation.partName} · {reservationQuantityText(reservation)}</small>
               <span className="task-board-card__foot">
                 {engineer
-                  ? <><span aria-hidden="true" className="task-board-card__ava">{initials(engineer)}</span><span className="task-board-card__eng" title={engineer}>{shortName(engineer)}</span></>
+                  ? <><span aria-hidden="true" className="task-board-card__ava">{initials(engineer)}</span>{reservation.issuedToId && reservation.issuedToName ? <EntityLink className="task-board-card__eng" target={{ kind: "engineer", id: reservation.issuedToId }} title={engineer}>{shortName(engineer)}</EntityLink> : <span className="task-board-card__eng" title={engineer}>{shortName(engineer)}</span>}</>
                   : <><span aria-hidden="true" className="task-board-card__ava task-board-card__ava--none">?</span><span className="task-board-card__eng task-board-card__eng--none">Инженер не назначен</span></>}
-                {reservation.taskNumber ? <span className="task-board-card__due">{reservation.taskNumber}</span> : null}
+                {reservation.taskNumber ? <EntityLink className="task-board-card__due" target={reservation.taskId ? { kind: "task", id: reservation.taskId } : undefined}>{reservation.taskNumber}</EntityLink> : null}
               </span>
             </div>
           </article>;

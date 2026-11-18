@@ -3,8 +3,9 @@ import { filterValues, joinFilterValues } from "./filter-values.js";
 import React, { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { m2Api, type StockReservationRecord } from "./m2-api.js";
 import { RegistryPagination, registryPageOffset, usePageSize } from "./RegistryPagination.js";
-import { Button, ConfirmationDialog, DataTableShell, FilterBar, MetricCard, PageIntro, PageTabs, ResourceState, Select, StatusBadge, ViewSwitch, toast } from "./ui.js";
+import { Button, ConfirmationDialog, DataTableShell, FilterBar, PageIntro, PageTabs, ResourceState, Select, StatusBadge, ViewSwitch, toast } from "./ui.js";
 import { ReservationBoard } from "./ReservationBoard.js";
+import { EntityLink } from "./entity-links.js";
 import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { companyDateTimeText } from "./task-dates.js";
@@ -24,7 +25,6 @@ import {
   reservationFilterOptions,
   reservationIssuedAt,
   reservationQuantityText,
-  reservationSummary,
   reservationTaskNote,
   reservationsByEngineer,
   type ReservationAction,
@@ -187,9 +187,7 @@ export function ReservationsPage() {
 
   // Карточки сверху считаем по всему загруженному, а не по отбору: это сводка склада, как на «Складе».
   // Закрытые резервы в неё всё равно не попадают, поэтому на доске она считается так же.
-  const summary = reservationSummary(view === "board" || tab === "active" ? items : []);
   const showActions = canWrite && tab === "active";
-  const counting = loading && items.length === 0;
   const options = useMemo(() => reservationFilterOptions(items), [items]);
   const visible = useMemo(() => filterReservations(items, appliedFilters), [items, appliedFilters]);
   // Постранично, как задачи и приборы (просьба 17.11): «показывать по 25 / 50 / 100».
@@ -259,12 +257,6 @@ export function ReservationsPage() {
       title="Резервы"
       titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать резервы" onValueChange={changeView} value={view} />}
     />
-    {/* На доске те же числа в заголовках колонок — карточки сверху только у списка. */}
-    {view === "list" && tab === "active" ? <div className="metric-grid metric-grid--three">
-      <MetricCard icon="inventory" label="Ждут сборки" tone="yellow" value={counting ? "…" : String(summary.toCollect)} />
-      <MetricCard icon="reservations" label="Собраны, можно выдавать" value={counting ? "…" : String(summary.ready)} />
-      <MetricCard icon="engineers" label="У инженеров" tone="purple" value={counting ? "…" : String(summary.withEngineers)} />
-    </div> : null}
     {/* На доске все состояния стоят колонками, вкладки ей не нужны. */}
     {view === "list" ? <PageTabs items={[{ value: "active", label: "Действующие" }, { value: "engineers", label: "У инженеров" }, { value: "closed", label: "Закрытые" }]} label="Резервы" onValueChange={changeTab} value={tab} /> : null}
     <FilterBar loading={loading} onReset={() => applyFilters(EMPTY_RESERVATION_FILTERS)} onSubmit={() => applyFilters()}>
@@ -300,10 +292,10 @@ export function ReservationsPage() {
           </header>
           <ul className="engineer-reservations__list">{group.items.map(({ reservation, days }) => <li key={reservation.id}>
             <div className="engineer-reservations__part">
-              <strong>{reservation.articleNumber}</strong>
+              <strong><EntityLink target={{ kind: "part", id: reservation.partId }}>{reservation.articleNumber}</EntityLink></strong>
               <span>{reservation.partName}</span>
               {/* Состояние запчасти уже входит в reservationQuantityText («2 шт. · новая»), второй раз не пишем. */}
-              <small>{reservation.number} · {reservationQuantityText(reservation)}{reservation.taskNumber ? ` · задача ${reservation.taskNumber}` : ""}</small>
+              <small>{reservation.number} · {reservationQuantityText(reservation)}{reservation.taskNumber ? <> · задача <EntityLink target={reservation.taskId ? { kind: "task", id: reservation.taskId } : undefined}>{reservation.taskNumber}</EntityLink></> : null}</small>
             </div>
             <div className="engineer-reservations__when">
               {/* Кто и когда выдал — одной подписью: последний шаг здесь всегда выдача, и его время то же самое. */}
@@ -329,10 +321,10 @@ export function ReservationsPage() {
             const note = reservationTaskNote(reservation);
             return <tr key={reservation.id}>
               <td data-label="Резерв"><strong className="reservations-table__nowrap">{reservation.number}</strong><small className="reservations-table__date">{formatDisplayDate(tab === "active" ? reservation.createdAt : reservation.updatedAt)}</small></td>
-              <td className="reservations-table__wide" data-label="Запчасть"><strong>{reservation.articleNumber}</strong><span className="reservations-table__name">{reservation.partName}</span></td>
+              <td className="reservations-table__wide" data-label="Запчасть"><EntityLink target={{ kind: "part", id: reservation.partId }}><strong>{reservation.articleNumber}</strong></EntityLink><span className="reservations-table__name">{reservation.partName}</span></td>
               <td className="reservations-table__nowrap" data-label="Количество">{reservationQuantityText(reservation)}</td>
-              <td data-label="Задача">{reservation.taskNumber ? <><strong className="reservations-table__nowrap">{reservation.taskNumber}</strong>{reservation.taskTitle ? <span className="reservations-table__name">{reservation.taskTitle}</span> : null}{note ? <span className="reservations-table__note">{note}</span> : null}</> : "—"}</td>
-              <td data-label="Инженер">{reservation.issuedToName ?? reservation.engineerName ?? (reservation.taskNumber ? <span className="reservations-table__none">Не назначен</span> : "—")}</td>
+              <td data-label="Задача">{reservation.taskNumber ? <><EntityLink target={reservation.taskId ? { kind: "task", id: reservation.taskId } : undefined}><strong className="reservations-table__nowrap">{reservation.taskNumber}</strong></EntityLink>{reservation.taskTitle ? <span className="reservations-table__name">{reservation.taskTitle}</span> : null}{note ? <span className="reservations-table__note">{note}</span> : null}</> : "—"}</td>
+              <td data-label="Инженер">{reservation.issuedToName && reservation.issuedToId ? <EntityLink target={{ kind: "engineer", id: reservation.issuedToId }}>{reservation.issuedToName}</EntityLink> : reservation.issuedToName ?? reservation.engineerName ?? (reservation.taskNumber ? <span className="reservations-table__none">Не назначен</span> : "—")}</td>
               <td className="reservations-table__wide" data-label="Состояние"><StatusBadge tone={RESERVATION_STATUS_TONES[reservation.status]}>{RESERVATION_STATUS_LABELS[reservation.status]}</StatusBadge><ReservationSteps reservation={reservation} /></td>
               {showActions ? <td className="reservations-table__wide"><div className="table-actions reservations-table__actions">{actions.map((action) => <Button
                 busy={busy && action !== "cancel"}
