@@ -569,7 +569,7 @@ export function FilterBar({
         </div> : null}
       </form>
       <Button className="filter-bar__mobile-trigger" icon="filter" onClick={() => setMobileOpen(true)} variant="secondary">Фильтры</Button>
-      <Sheet description={`Укажите, что показать в списке, и нажмите «${submitLabel}».`} onOpenChange={setMobileOpen} open={mobileOpen} title="Фильтры">
+      <Sheet onOpenChange={setMobileOpen} open={mobileOpen} title="Фильтры">
         <form className="filter-bar__mobile-form" onReset={() => onReset?.()} onSubmit={submitMobile}>
           <div className="filter-bar__fields">{search}{rest}</div>
           {actions}
@@ -622,7 +622,8 @@ export function ResourceState({
     <div className={"resource-state resource-state--" + status} role={status === "error" ? "alert" : "status"}>
       <span className="resource-state__icon"><Icon name={iconName} size={16} /></span>
       <strong>{title ?? labels[status]}</strong>
-      <p>{description ?? details[status]}</p>
+      {/* Встреча 18.11: «убрать пояснения, не нужны они нигде». Текст остаётся только у ошибки. */}
+      {status === "error" ? <p>{description ?? details[status]}</p> : null}
       {status === "error" && onRetry ? <Button onClick={onRetry} variant="secondary">Повторить</Button> : action}
     </div>
   );
@@ -656,7 +657,10 @@ const dialogSizeClass = {
   lg: "w-[min(100%-1.5rem,56rem)]"
 } as const;
 
-export function Dialog({ open, onOpenChange, title, description, children, footer, size = "md", busy = false, initialFocusRef }: DialogProps) {
+export function Dialog({ open, onOpenChange, title, description, children, footer, size = "md", busy = false, initialFocusRef, describeHidden = false }: DialogProps & {
+  /** Пояснение под заголовком окна только для экранного диктора: на экране его не видно (встреча 18.11). */
+  readonly describeHidden?: boolean;
+}) {
   return (
     <UiDialog onOpenChange={(next) => { if (!busy) onOpenChange(next); }} open={open}>
       <DialogContent
@@ -675,7 +679,7 @@ export function Dialog({ open, onOpenChange, title, description, children, foote
       >
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
-          {description ? <DialogDescription>{description}</DialogDescription> : null}
+          {description ? <DialogDescription className={describeHidden ? "sr-only" : undefined}>{description}</DialogDescription> : null}
         </DialogHeader>
         <div className="dialog-body">{children}</div>
         {footer ? <DialogFooter>{footer}</DialogFooter> : null}
@@ -736,6 +740,7 @@ export function DialogForm({
     <Dialog
       busy={busy}
       {...(description ? { description } : {})}
+      describeHidden={!danger}
       footer={
         <>
           <Button disabled={busy} onClick={() => onOpenChange(false)} variant="secondary">Отмена</Button>

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import { m2Api, type InventoryPartRecord, type PartAliasRecord, type PartModelLink, type PartUsageRecord, type StockMovementRecord, type StockReservationRecord } from "./m2-api.js";
-import { Button, Dialog, EntityDetailToolbar, IconButton, Notice, PageTabs, ResourceState, Select, StatusBadge, toast } from "./ui.js";
+import { Button, Dialog, EntityDetailToolbar, IconButton, PageTabs, ResourceState, Select, StatusBadge, toast } from "./ui.js";
 import { EntityLink } from "./entity-links.js";
 import { formatDisplayDate } from "./date-format.js";
 import { parseAmount } from "./price-list.js";
@@ -281,7 +281,6 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
       {canWrite && form ? <form className="dialog-form part-card__form" key={form} onSubmit={(event) => void submitForm(event)}>
         <h4 className="part-card__heading">{FORM_TITLES[form]}</h4>
         {formError ? <div className="form-error" role="alert">{formError}</div> : null}
-        {form === "adjustment" ? <Notice tone="info">Впишите, сколько запчастей этого состояния насчитали на полке. Разницу база проведёт встречным движением — прежние движения останутся как есть.</Notice> : null}
         <label>Состояние<Select defaultValue={formConditions.includes(defaultCondition) ? defaultCondition : formConditions[0] ?? "N"} name="condition">
           {formConditions.map((condition) => <option key={condition} value={condition}>
             {PART_CONDITION_LETTERS[condition]} · {PART_CONDITION_LABELS[condition]}
@@ -315,7 +314,6 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
   const aliasSection = <>
     <section className="part-card__section">
       <h3 className="part-card__heading">Артикулы поставщиков</h3>
-      <p className="part-card__hint">У одной запчасти бывает свой артикул у каждого поставщика. Склад и резервы находят позицию по любому из них.</p>
       {aliasError ? <div className="form-error" role="alert">{aliasError}</div> : null}
       {aliases.length ? <ul className="tag-list part-card__aliases">
         {aliases.map((alias) => <li className="tag" key={alias.id}>
@@ -399,7 +397,6 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
         {pageTab === "aliases" ? aliasSection : null}
         {pageTab === "engineers" ? <section className="part-card__section">
           <h3 className="part-card__heading">У инженеров</h3>
-          <p className="part-card__hint">Выдана инженерам и ещё не установлена и не возвращена на склад.</p>
           {atEngineers === null ? <ResourceState description="Подождите." status="loading" title="Загружаем" /> : atEngineers.length === 0 ? <p className="part-card__empty">Сейчас эта запчасть ни у кого из инженеров не числится.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Инженер</th><th>Состояние</th><th className="numeric">Количество</th><th>Задача</th><th>Выдана</th></tr></thead><tbody>
             {atEngineers.map((item) => <tr key={item.id}>
               <td>{item.issuedToId ? <EntityLink target={{ kind: "engineer", id: item.issuedToId, tab: "stock" }}>{item.issuedToName ?? item.engineerName ?? "Инженер"}</EntityLink> : item.issuedToName ?? item.engineerName ?? "—"}</td>
@@ -412,7 +409,6 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
         </section> : null}
         {pageTab === "equipment" ? <section className="part-card__section">
           <h3 className="part-card__heading">Подходит к моделям</h3>
-          <p className="part-card__hint">Отмечает склад. Запчасть будет видна во вкладке «Запчасти» у каждого прибора этих моделей — даже если её ещё ни разу не ставили.</p>
           {models === null ? <p className="part-card__empty">Загружаем…</p> : models.length ? <ul className="tag-list part-card__aliases">
             {models.map((link) => <li className="tag" key={link.modelId}>
               {[link.manufacturer, link.modelName].filter(Boolean).join(" ")}
@@ -429,7 +425,6 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
         </section> : null}
         {pageTab === "equipment" ? <section className="part-card__section">
           <h3 className="part-card__heading">Ставили на приборы</h3>
-          <p className="part-card__hint">На какие приборы эту запчасть выдавали и ставили по задачам — так видно, к каким приборам она подходит.</p>
           {usage === null ? <ResourceState description="Подождите." status="loading" title="Загружаем" /> : usageByEquipment.length === 0 ? <p className="part-card__empty">По задачам эту запчасть ещё не выдавали.</p> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Прибор</th><th className="numeric">Выдано</th><th className="numeric">Установлено</th><th>Последняя задача</th></tr></thead><tbody>
             {usageByEquipment.map((row) => <tr key={row.equipmentId}>
               <td><EntityLink target={{ kind: "equipment", id: row.equipmentId, tab: "parts" }}>{row.label}</EntityLink></td>

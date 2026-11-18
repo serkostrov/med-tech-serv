@@ -329,7 +329,6 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
             <span className="muted">в сумму счёта не входит</span>
           </header>
           <InvoiceItemsTable guarantee items={groups.guarantee} />
-          <p className="form-hint">Эти работы сделаны по гарантии: в счёте они видны, но платить за них не нужно. Сумма показана справочно.</p>
         </section> : null}
         <section aria-labelledby="invoice-history-title" className="task-section">
           <header className="task-section__head"><h3 id="invoice-history-title">История статусов</h3></header>
@@ -404,7 +403,6 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
           required
           value={adjustmentDraft}
         />
-          <span className="form-hint">Со знаком: «−500» уменьшит счёт, «500» увеличит{amounts.adjustment !== 0 ? ", «0» уберёт" : ""}.</span>
           {amounts.adjustment !== 0
             ? <button className="link-button" onClick={() => setAdjustmentDraft("0")} type="button">Убрать скидку или надбавку</button>
             : null}

@@ -446,7 +446,7 @@ export function PricePage() {
         </label>
         {isBackdatedPrice(validFromDraft, today) ? <label className="field-check dialog-form-grid__wide">
           <input checked={backdateConfirmed} onChange={(event) => setBackdateConfirmed(event.target.checked)} type="checkbox" />
-          <span>Да, цена задним числом, с {formatIsoCalendarDate(validFromDraft)}<small className="form-hint">Прошлая цена закроется этим днём. Черновики счетов за работы с этой даты после «Обновить по прайсу» пересчитаются по новой цене; выставленные и переданные в 1С счета не изменятся.</small></span>
+          <span>Да, цена задним числом, с {formatIsoCalendarDate(validFromDraft)}</span>
         </label> : null}
         <label className="field-check dialog-form-grid__wide">
           <input checked={guaranteeDraft} onChange={(event) => setGuaranteeDraft(event.target.checked)} type="checkbox" />

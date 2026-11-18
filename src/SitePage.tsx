@@ -117,7 +117,7 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
     </section> : null}
 
     {tab === "people" ? <section className="task-section" aria-labelledby="site-people">
-      <header className="task-section__head"><h3 id="site-people">Люди и реквизиты</h3><span className="muted">меняются в разделе «Клиенты»</span></header>
+      <header className="task-section__head"><h3 id="site-people">Люди и реквизиты</h3></header>
       {people.length === 0 ? <div className="task-section__empty"><p>Людей у площадки пока нет.</p></div> : <ul className="site-page__people">
         {people.map((person) => <li className={person.isActive ? undefined : "is-inactive"} key={person.key}>
           <strong>{person.fullName}{person.isPrimary ? <small> · основной контакт</small> : null}{person.isActive ? null : <small> · отключён</small>}</strong>

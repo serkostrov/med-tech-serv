@@ -107,9 +107,6 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
       <label>С<DatePicker aria-label="Изменения с даты" onChange={(value) => change("from", value)} value={filters.from} /></label>
       <label>По<DatePicker aria-label="Изменения по дату" onChange={(value) => change("to", value)} value={filters.to} /></label>
     </FilterBar>
-    {/* Денег в журнале почти нет по замыслу: суммы, цены и реквизиты вырезаются при записи.
-        Обещать их на экране нельзя — остаётся сказать, где они всё-таки сохраняются. */}
-    <Notice tone="info">Суммы, цены и реквизиты в журнал не пишутся. Исключение — события счетов: по ним суммы сохраняются и видны тем, у кого есть право на финансы.</Notice>
     {moneyHidden ? <Notice tone="warning">В событиях счетов показаны не все поля: денежные значения открывает право «Просмотр финансов».</Notice> : null}
     <section className="card card--table" aria-label="Журнал изменений">
       <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Что меняли в системе" />
@@ -230,9 +227,6 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
     {successSourceAvailable
       ? null
       : <Notice tone="warning">Удачные входы ведёт служба входа, и её журнал сейчас недоступен: ниже только неудачные попытки.</Notice>}
-    {/* Журнал входов легко прочитать как доказательство, а он им не является:
-        в неудачной попытке записан набранный адрес, а адрес обращения передаёт прокси. */}
-    <Notice tone="info">В неудачной попытке записан набранный адрес: набрать чужой адрес может кто угодно, поэтому имя сотрудника рядом с ним — только подсказка. Адрес обращения приходит от обратного прокси.</Notice>
     <section className="card card--table" aria-label="Журнал входов">
       <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Кто входил в систему" />
       {loading && items.length === 0

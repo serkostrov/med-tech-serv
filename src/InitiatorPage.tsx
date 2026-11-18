@@ -119,7 +119,6 @@ function InitiatorTaskCard({ task, onBack }: { readonly task: TaskApiRecord; rea
         <dl>{facts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}</dl>
         {task.callReason ? <><h3>Что случилось</h3><p className="initiator-card__text">{task.callReason}</p></> : null}
         {result.filter(([, value]) => value).map(([label, value]) => <div key={label}><h3>{label}</h3><p className="initiator-card__text">{value}</p></div>)}
-        {task.status !== "closed" && task.status !== "cancelled" ? <p className="form-hint">Сроки и инженера назначает координатор. Если что-то изменилось, напишите ему ответом на письмо по заявке.</p> : null}
       </section>
     </div>
   );
@@ -204,7 +203,7 @@ function InitiatorRequestForm({ onClose, onCreated }: { readonly onClose: () => 
         <label>Что нужно сделать *<Select onChange={(event) => setWorkTypeCode(event.target.value)} value={workTypeCode}>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
         <label>Срочность<Select onChange={(event) => setPriority(event.target.value as RequestPriority)} value={priority}><option value="planned">Плановая</option><option value="urgent">Срочная — реакция 24 часа</option></Select></label>
         <label className="dialog-form-grid__wide">Что случилось *<Textarea name="description" placeholder="Например: не проходит калибровка, ошибка температуры кюветы" required rows={3} /></label>
-        <label>Выполнить до<DatePicker onChange={setUntil} value={until} /><span className="form-hint">Можно не указывать: координатор согласует срок.</span></label>
+        <label>Выполнить до<DatePicker onChange={setUntil} value={until} /></label>
       </div>
     </DialogForm>
   );

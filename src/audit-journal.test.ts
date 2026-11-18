@@ -208,8 +208,9 @@ describe("журналы: что уходит в базу", () => {
     assert.match(api, /p_limit: limit/u);
     const page = await readFile(new URL("./JournalsPage.tsx", import.meta.url), "utf8");
     assert.match(page, /RegistryPagination/u);
-    // Экран не обещает денег, которых в журнале нет.
-    assert.match(page, /Суммы, цены и реквизиты в журнал не пишутся/u);
+    // Встреча 18.11: пояснения убраны; предупреждение о скрытых суммах осталось.
+    assert.doesNotMatch(page, /Суммы, цены и реквизиты в журнал не пишутся/u);
+    assert.match(page, /денежные значения открывает право «Просмотр финансов»/u);
   });
 });
 

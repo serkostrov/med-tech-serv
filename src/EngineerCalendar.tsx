@@ -352,7 +352,6 @@ function CalendarTaskDialog({ taskId, onClose, onAssigned }: {
         {canChange ? <div className="engineer-picker-field">
           <span className="engineer-picker-field__label">{card.canReassign === true ? "Кому передать" : "Кого назначить"}</span>
           <EngineerPicker items={suggestions} onChange={setEngineerId} state={suggestionsState} value={engineerId} />
-          <p className="form-hint">Подсказка считает занятость на срок этой задачи и ничего не запрещает: решение за вами.</p>
         </div> : <p className="form-hint">{assignRefusal(card)}</p>}
       </div> : null}
     </Dialog>

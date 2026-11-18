@@ -283,10 +283,6 @@ export function ReservationsPage() {
           title={filtered ? "Резервов по этим условиям нет" : "Резервов пока нет"}
         />
         : <>
-          <p className="reservation-board__note">{canWrite
-            ? "Перенесите карточку в соседнюю колонку: собрать, выдать инженеру, принять обратно."
-            : "Собирать и выдавать запчасти может кладовщик."
-          } Старые закрытые — в «Списке».</p>
           <ReservationBoard busyId={busyId} canWrite={canWrite} items={visible} loading={loading} onAction={runFromRow} />
         </>}
     </> : tab === "engineers" ? <DataTableShell

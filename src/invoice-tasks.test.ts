@@ -35,7 +35,8 @@ describe("задачи для нового счёта", () => {
     assert.match(app, /const invoiceableTasks = tasksAvailableForInvoice\(tasks, invoices\)/u);
     assert.match(app, /className="workflow-task-picker" role="group">\{invoiceableTasks\.map\(/u);
     assert.doesNotMatch(app, /className="workflow-task-picker" role="group">\{tasks\.map\(/u);
-    assert.match(app, /Задачи, которые уже есть в счёте, здесь не показаны\./u);
+    // Встреча 18.11: пояснение под списком убрано.
+    assert.doesNotMatch(app, /Задачи, которые уже есть в счёте, здесь не показаны\./u);
   });
 
   it("счёт не удаляют, а отменяют: кнопка у черновика и выставленного счёта, с подтверждением", async () => {

@@ -2771,7 +2771,7 @@ function EquipmentCard({
             <FileGallery emptyText={readOnly ? "К прибору пока не прикреплены файлы." : "К прибору пока не прикреплены файлы. Их можно добавить в паспорте: «Изменить»."} files={record.fileRecords} />
           </section> : null}
           {detailTab === "tasks" ? <section className="task-section" aria-labelledby={`equipment-all-tasks-${record.id}`}>
-            <header className="task-section__head"><h3 id={`equipment-all-tasks-${record.id}`}>Все задачи прибора</h3><span className="muted">сначала свежие</span></header>
+            <header className="task-section__head"><h3 id={`equipment-all-tasks-${record.id}`}>Все задачи прибора</h3></header>
             {allTasks === null ? <div className="task-section__empty"><p>Загружаем задачи…</p></div> : allTasks.length === 0 ? <div className="task-section__empty"><p>Задач по этому прибору ещё не было.</p></div> : <div className="table-scroll"><table className="data-table engineer-page__table"><thead><tr><th scope="col">Задача</th><th scope="col">Инженер</th><th scope="col">Срок</th><th scope="col">Этап</th></tr></thead><tbody>
               {allTasks.map((task) => <tr key={task.id}>
                 <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
@@ -2784,13 +2784,13 @@ function EquipmentCard({
           </section> : null}
           {detailTab === "plan" ? <EquipmentPlanTab device={{ id: record.id, serialNumber: record.serial, manufacturer: record.manufacturer, model: record.model, status: record.status, ...(record.organization ? { organization: record.organization } : {}), ...(record.place ? { site: record.place } : {}) }} readOnly={readOnly} /> : null}
           {detailTab === "parts" ? <section className="task-section" aria-labelledby={`equipment-model-parts-${record.id}`}>
-            <header className="task-section__head"><h3 id={`equipment-model-parts-${record.id}`}>Подходят к {record.manufacturer} {record.model}</h3><span className="muted">отмечает склад на странице запчасти</span></header>
+            <header className="task-section__head"><h3 id={`equipment-model-parts-${record.id}`}>Подходят к {record.manufacturer} {record.model}</h3></header>
             {modelParts === null ? <div className="task-section__empty"><p>Загружаем…</p></div> : modelParts.length === 0 ? <div className="task-section__empty"><p>Склад ещё не отметил запчасти для этой модели. Это делается на странице запчасти: «Приборы и модели» → «Отметить».</p></div> : <ul className="equipment-model-parts">
               {modelParts.map((link) => <li key={link.partId}><EntityLink target={{ kind: "part", id: link.partId }}><span className="engineer-page__number">{link.articleNumber}</span> {link.partName}</EntityLink></li>)}
             </ul>}
           </section> : null}
           {detailTab === "parts" ? <section className="task-section" aria-labelledby={`equipment-parts-${record.id}`}>
-            <header className="task-section__head"><h3 id={`equipment-parts-${record.id}`}>Ставили на этот прибор</h3><span className="muted">что выдавали и ставили по его задачам</span></header>
+            <header className="task-section__head"><h3 id={`equipment-parts-${record.id}`}>Ставили на этот прибор</h3></header>
             {partUsage === null ? <div className="task-section__empty"><p>Загружаем запчасти…</p></div> : partUsage.length === 0 ? <div className="task-section__empty"><p>По задачам этого прибора запчасти ещё не выдавали.</p></div> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Запчасть</th><th className="numeric" scope="col">Кол-во</th><th scope="col">Состояние</th><th scope="col">Задача</th><th scope="col">Когда</th></tr></thead><tbody>
               {partUsage.map((item, index) => <tr key={`${item.partId}-${item.taskId}-${index}`}>
                 <td><EntityLink target={{ kind: "part", id: item.partId }}><span className="engineer-page__number">{item.articleNumber}</span> {item.partName}</EntityLink></td>
@@ -3574,7 +3574,7 @@ function AdminReferencesPage() {
         <CardHeader action={<Button icon="plus" onClick={beginCreate}>Добавить запись</Button>} headingId="reference-admin-title" meta={`${formatRussianCount(records.filter((record) => record.isActive).length, ["активная запись", "активные записи", "активных записей"])} · ${formatRussianCount(records.filter((record) => !record.isActive).length, ["неактивная", "неактивные", "неактивных"])}`} title={selected.label} />
         <div className="reference-admin-hint">
           {REFERENCE_CATALOG_USAGE[selected.key] ? <p><strong>Где используется.</strong> {REFERENCE_CATALOG_USAGE[selected.key]}</p> : null}
-          <p className="muted">Стрелки меняют порядок в выпадающих списках, карандаш — изменить название, перечёркнутый глаз — скрыть из новых заявок (история остаётся).</p>
+          
         </div>
         <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th>{showParams ? <th scope="col">Параметры</th> : null}<th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
           return <tr className={!record.isActive ? "reference-admin-table__inactive" : ""} key={record.id}>
@@ -3747,7 +3747,6 @@ function FinancePage() {
               : "Все закрытые задачи уже есть в счетах. Задача снова появится здесь, если её счёт отменят."}</p>
             : <div aria-labelledby="invoice-tasks-label" className="workflow-task-picker" role="group">{invoiceableTasks.map((task) => <label key={task.id}><input checked={selectedTaskIds.includes(task.id)} onChange={() => toggleTask(task.id)} type="checkbox" /> <span><strong>{task.number}</strong> · {task.title}<small>{task.customer?.siteName ?? "Без площадки"}</small></span></label>)}</div>}
           {invoiceableTasks.length > 0 ? <p className="form-hint">{selectedTaskIds.length === 0 ? "Выберите хотя бы одну закрытую задачу." : selectedTaskIds.length === 1 ? "Выбрана 1 задача." : `Выбрано задач: ${selectedTaskIds.length}.`}</p> : null}
-          {invoiceableTasks.length > 0 && invoiceableTasks.length < tasks.length ? <p className="form-hint">Задачи, которые уже есть в счёте, здесь не показаны.</p> : null}
         </div>
         <label>Плательщик
           <Select disabled={selectedTaskIds.length === 0} onChange={(event) => setPayerId(event.target.value)} required={selectedTaskIds.length > 0} value={payerId}>

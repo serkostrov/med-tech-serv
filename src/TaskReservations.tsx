@@ -282,7 +282,6 @@ export function ResultReservationChecks({ reservations, hasEquipment = true }: {
     <p className="form-hint">У задачи не выбран прибор, поэтому отметить установку нельзя. Попросите координатора указать прибор.</p>
   </fieldset>;
   return <fieldset className="field-wide result-checks result-parts"><legend>Запчасти со склада</legend>
-    <p className="form-hint">Отметьте, что из выданного встало на прибор. Неотмеченное останется за вами, пока склад не примет возврат.</p>
     {issued.map((reservation) => <label className="field-check result-parts__row" key={reservation.id}>
       <input
         defaultChecked={reservation.installMarked}

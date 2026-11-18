@@ -200,7 +200,8 @@ describe("shared UI architecture", () => {
     assert.match(app, /PartsMultiPicker/u);
     assert.match(app, /replaceTaskParts/u);
     assert.match(picker, /parts-multi-picker/u);
-    assert.match(picker, /не списываем/u);
+    // Встреча 18.11: пояснение «со склада сразу ничего не списываем» убрано.
+    assert.doesNotMatch(picker, /не списываем/u);
     assert.match(picker, /Гарантийный/u);
     assert.match(picker, /Для продажи/u);
     assert.match(css, /\.parts-multi-picker__chip/u);

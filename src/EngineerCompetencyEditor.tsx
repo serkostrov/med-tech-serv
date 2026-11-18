@@ -150,9 +150,7 @@ export function EngineerCompetencyEditor({
               </ul>
             </div>
           ) : null}
-          {problem
-            ? <p className="competency-editor__problem" role="alert">{problem}</p>
-            : <p className="form-hint">Линейка — начало названия модели: «BC» подходит к BC-5000 и BC-6800. По производителю и линейке CRM подсказывает, кого назначить на прибор.</p>}
+          {problem ? <p className="competency-editor__problem" role="alert">{problem}</p> : null}
         </>
       )}
     </div>
