@@ -102,6 +102,7 @@ export function StockReceiptImport({ open, onOpenChange, onDone }: {
 
   return <Dialog
     busy={applying}
+    describeHidden
     description="Файл .xlsx или .csv: артикул, количество, состояние и цена. Пока не нажмёте «Оприходовать», на складе ничего не изменится."
     footer={<>
       <Button disabled={applying} onClick={() => onOpenChange(false)} variant="secondary">Закрыть</Button>

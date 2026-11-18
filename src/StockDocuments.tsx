@@ -106,13 +106,13 @@ export function StockDocumentDialog({ document, onClose, asPage = false }: {
       <header className="task-head">
         <div className="task-head__meta"><span className="task-head__number">{document.number}</span><KindBadge kind={document.kind} /></div>
         <h1>{STOCK_DOCUMENT_KIND_LABELS[document.kind]} {document.number}</h1>
-        <p>{stockDocumentHint(document)}</p>
         <div className="engineer-page__actions"><Button busy={exporting} busyLabel="Готовим файл…" disabled={!lines || lines.length === 0} onClick={() => void exportOne()} variant="secondary">Скачать в Excel</Button></div>
       </header>
       <section className="task-section">{content}</section>
     </div>;
   }
   return <Dialog
+    describeHidden
     description={document ? stockDocumentHint(document) : undefined}
     footer={<>
       <Button onClick={onClose} variant="secondary">Закрыть</Button>

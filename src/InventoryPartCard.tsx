@@ -439,6 +439,7 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
   }
   return <Dialog
     busy={saving}
+    describeHidden
     description={`Остатки по состояниям, артикулы поставщиков и всё, что происходило с позицией.${part.isActive ? "" : " Позиция снята с учёта."}`}
     onOpenChange={onOpenChange}
     open={open}

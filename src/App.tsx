@@ -1337,22 +1337,23 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   ];
   const resultRows = resultRowsAll.filter(([, value, always]) => always || value !== undefined);
   const reworkNote = task.status === "in_progress" && task.reworkComment ? task.reworkComment : undefined;
-  const nextStep: { readonly title: string; readonly hint: string; readonly tone?: "warning" } | null =
-    canAssign ? { title: "Назначьте инженера", hint: "Задача ждёт исполнителя. После назначения инженер получит уведомление." }
-      : workflowActions.some((action) => action.code === "accept") ? (card.isTaskEngineer ? { title: "Примите задачу", hint: "Подтвердите, что берёте задачу в работу. Координатор увидит, что вы приступили." } : { title: `Задача ждёт, когда инженер${card.engineer ? ` ${card.engineer.fullName}` : ""} её примет`, hint: "Принять за инженера можно, если он подтвердил выезд по телефону." })
-        : reworkNote && isTaskEngineer ? { title: "Задачу вернули на доработку", hint: `Что исправить: ${reworkNote}. Поправьте результат или фото и снова передайте на проверку.${photosMissing ? ` Фото с выезда ${photoCount} из ${MIN_CLOSURE_PHOTOS}: добавьте ещё ${formatRussianCount(photosMissing, ["фотографию", "фотографии", "фотографий"])}.` : ""}`, tone: "warning" }
+  const nextStep: { readonly title: string; readonly hint?: string; readonly tone?: "warning" } | null =
+    // Встреча 18.11: «убрать пояснения». В плашке — что сейчас с задачей; текст ниже только там,
+    // где это данные: что исправить и сколько фото не хватает.
+    canAssign ? { title: "Назначьте инженера" }
+      : workflowActions.some((action) => action.code === "accept") ? (card.isTaskEngineer ? { title: "Примите задачу" } : { title: `Задача ждёт, когда инженер${card.engineer ? ` ${card.engineer.fullName}` : ""} её примет` })
+        : reworkNote && isTaskEngineer ? { title: "Задачу вернули на доработку", hint: `Что исправить: ${reworkNote}.${photosMissing ? ` Фото с выезда: ${photoCount} из ${MIN_CLOSURE_PHOTOS}.` : ""}`, tone: "warning" }
           : workflowActions.some((action) => action.code === "submit_for_review") && resultFilled ? (photosMissing
-            ? { title: "Загрузите фото с выезда", hint: `Для проверки нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, сейчас ${photoCount}. Добавьте ещё ${formatRussianCount(photosMissing, ["фотографию", "фотографии", "фотографий"])} во вкладке «Работа и акт» или в форме результата.`, tone: "warning" as const }
-            : { title: "Всё заполнено, можно передать на проверку", hint: "Координатор проверит акт и фото и закроет задачу." })
-            : needsResult && isTaskEngineer ? { title: "Заполните результат работ", hint: hasActPhoto ? "Опишите причину вызова и работы, отметьте пункты акта. Потом появится кнопка «Передать на проверку»." : "Опишите работы и загрузите фото подписанного акта. Потом появится кнопка «Передать на проверку»." }
-              : needsResult ? { title: `Задача в работе у инженера${card.engineer ? ` ${card.engineer.fullName}` : ""}`, hint: reworkNote ? `Возвращена на доработку: ${reworkNote}` : "Инженер заполнит результат и передаст задачу на проверку. При необходимости результат можно дописать за него." }
-                : workflowActions.some((action) => action.code === "activate") ? { title: "Задача запланирована", hint: "Когда подойдёт срок, отметьте её как новую, чтобы назначить инженера." }
-                  : task.status === "under_review" && !canCloseReview && !canReturnReview ? { title: "Задача на проверке", hint: "Координатор проверяет акт и фото. Если нужно что-то исправить, задача вернётся с комментарием." }
-                    : workflowActions.length ? { title: "Следующий шаг", hint: "Выберите действие по задаче." }
-                      : null;
+            ? { title: "Загрузите фото с выезда", hint: `Нужно минимум ${MIN_CLOSURE_PHOTOS}, сейчас ${photoCount}.`, tone: "warning" as const }
+            : { title: "Всё заполнено, можно передать на проверку" })
+            : needsResult && isTaskEngineer ? { title: "Заполните результат работ" }
+              : needsResult ? { title: `Задача в работе у инженера${card.engineer ? ` ${card.engineer.fullName}` : ""}`, ...(reworkNote ? { hint: `Возвращена на доработку: ${reworkNote}` } : {}) }
+                : workflowActions.some((action) => action.code === "activate") ? { title: "Задача запланирована" }
+                  : task.status === "under_review" && !canCloseReview && !canReturnReview ? { title: "Задача на проверке" }
+                    : null;
   // Строки печатной формы правятся из самой печатной формы (кнопка «Строки акта»).
   const actRowsDialog = (
-    <Dialog description="Строки нужны только для печатной формы акта и в задаче не сохраняются. Заполните их перед печатью." footer={<Button onClick={() => setActRowsEditing(false)}>Готово</Button>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Строки печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
+    <Dialog describeHidden description="Строки нужны только для печатной формы акта и в задаче не сохраняются. Заполните их перед печатью." footer={<Button onClick={() => setActRowsEditing(false)}>Готово</Button>} onOpenChange={setActRowsEditing} open={actRowsEditing} size="lg" title="Строки печатного акта"><section className="work-act-row-editor work-act-row-editor--dialog">
       <h3>Оборудование</h3>
       <div className="work-act-row-editor__list">{actEquipmentRows.map((item, index) => <div className="work-act-row-editor__equipment" key={`equipment-${index}`}><input aria-label={`Наименование прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, name: event.target.value } : row))} placeholder="Наименование прибора" value={item.name} /><input aria-label={`Серийный номер прибора ${index + 1}`} onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => rowIndex === index ? { ...row, serialNumber: event.target.value } : row))} placeholder="Серийный номер" value={item.serialNumber} /><input aria-label={`Показание счётчика прибора ${index + 1}`} inputMode="decimal" onChange={(event) => setActEquipmentRows((current) => current.map((row, rowIndex) => {
         if (rowIndex !== index) return row;
@@ -1388,7 +1389,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <p>{[card.workType?.name, task.customer?.siteName].filter(Boolean).join(" · ")}</p>
     </header>
     {nextStep ? <section aria-label="Следующий шаг" className={`task-next-step${nextStep.tone === "warning" ? " task-next-step--warning" : ""}`}>
-      <div className="task-next-step__text"><strong>{nextStep.title}</strong><span>{nextStep.hint}</span></div>
+      <div className="task-next-step__text"><strong>{nextStep.title}</strong>{nextStep.hint ? <span>{nextStep.hint}</span> : null}</div>
       <div className="task-next-step__actions">
         {needsResult ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={workflowActions.length || !isTaskEngineer ? "secondary" : "primary"}>{!isTaskEngineer ? "Заполнить результат за инженера" : resultFilled ? "Изменить результат и фото" : "Заполнить результат и фото"}</Button> : null}
         {canAssign ? <Button disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)}>Назначить инженера</Button> : null}
@@ -1594,6 +1595,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}
+      describeHidden
       description="Подсказка показывает компетенции по прибору и занятость в дни задачи. Ничего не запрещает: выбор за вами."
       footer={<>
         <Button disabled={busy} onClick={() => setAssignDialogOpen(false)} variant="secondary">Отмена</Button>

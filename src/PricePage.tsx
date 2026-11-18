@@ -81,6 +81,7 @@ function PriceHistoryDialog({ line, today, canWrite, onClose, onDelete, onEdit }
   readonly onEdit: (line: PriceLine) => void;
 }) {
   return <Dialog
+    describeHidden
     description="Какая цена действовала и с какого по какое число. В счёт берётся цена, которая действовала в день работ."
     footer={<>
       <Button onClick={onClose} variant="secondary">Закрыть</Button>

@@ -100,8 +100,8 @@ describe("окончания в числах", () => {
     assert.match(app, /formatRussianCount\(catalogs\.length, \["справочник", "справочника", "справочников"\]\)/u);
     assert.match(app, /formatRussianCount\(templates\.length, \["шаблон", "шаблона", "шаблонов"\]\)/u);
     assert.match(app, /formatRussianCount\(invoices\.length, \["документ", "документа", "документов"\]\)/u);
-    // 15: в карточке задачи у числа появилось существительное.
-    assert.equal(app.match(/formatRussianCount\(photosMissing, \["фотографию", "фотографии", "фотографий"\]\)/gu)?.length, 2);
+    // 15: в карточке задачи у числа фото — «из»: «Фото с выезда: 1 из 2» (встреча 18.11: без «добавьте ещё»).
+    assert.match(app, /Фото с выезда: \$\{photoCount\} из \$\{MIN_CLOSURE_PHOTOS\}/u);
     // «Изменится 2 строки» — согласован и глагол.
     assert.match(price, /russianCountForm\(items\.length, \["Изменится", "Изменятся", "Изменятся"\]\)/u);
   });
