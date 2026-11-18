@@ -36,3 +36,27 @@ export function mailBoxFilter(box: MailBox): { readonly statuses?: readonly stri
     default: return {};
   }
 }
+
+const MONTHS_GENITIVE = ["января", "февраля", "марта", "апреля", "мая", "июня", "июля", "августа", "сентября", "октября", "ноября", "декабря"];
+
+/**
+ * Когда пришло письмо, по-человечески (18.11: «получено — нихуя непонятно»):
+ * «Сегодня» / «Вчера» / «11 ноября» и отдельно время «13:12». Год — только если не текущий.
+ * Время московское, как у всей системы.
+ */
+export function mailReceivedParts(iso: string, now: Date = new Date()): { readonly day: string; readonly time: string } {
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return { day: "—", time: "" };
+  const parts = (value: Date) => {
+    const map = Object.fromEntries(new Intl.DateTimeFormat("ru-RU", { timeZone: "Europe/Moscow", year: "numeric", month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false }).formatToParts(value).map((part) => [part.type, part.value]));
+    return { year: Number(map.year), month: Number(map.month), day: Number(map.day), time: `${map.hour}:${map.minute}` };
+  };
+  const at = parts(date);
+  const today = parts(now);
+  const yesterday = parts(new Date(now.getTime() - 24 * 3600 * 1000));
+  const same = (a: { year: number; month: number; day: number }, b: { year: number; month: number; day: number }) => a.year === b.year && a.month === b.month && a.day === b.day;
+  const day = same(at, today) ? "Сегодня"
+    : same(at, yesterday) ? "Вчера"
+    : `${at.day} ${MONTHS_GENITIVE[at.month - 1]}${at.year === today.year ? "" : ` ${at.year}`}`;
+  return { day, time: at.time };
+}

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { mailBoxFilter, mailInBox } from "./mail-boxes.js";
+import { mailBoxFilter, mailInBox, mailReceivedParts } from "./mail-boxes.js";
 
 describe("вкладки писем", () => {
   it("потенциальные задачи — открытые письма без отметки «не заявка»", () => {
@@ -26,5 +26,15 @@ describe("вкладки писем", () => {
     assert.deepEqual(mailBoxFilter("tasks").statuses, ["converted", "reply"]);
     assert.match(mailBoxFilter("junk").or ?? "", /^status\.eq\.ignored,and\(/);
     assert.deepEqual(mailBoxFilter("all"), {});
+  });
+});
+
+describe("когда пришло письмо", () => {
+  const now = new Date("2026-11-18T10:00:00Z");
+  it("сегодня, вчера и дата без года", () => {
+    assert.deepEqual(mailReceivedParts("2026-11-18T09:12:00Z", now), { day: "Сегодня", time: "12:12" });
+    assert.deepEqual(mailReceivedParts("2026-11-17T19:47:00Z", now), { day: "Вчера", time: "22:47" });
+    assert.deepEqual(mailReceivedParts("2026-11-11T10:12:00Z", now), { day: "11 ноября", time: "13:12" });
+    assert.deepEqual(mailReceivedParts("2025-12-31T10:00:00Z", now), { day: "31 декабря 2025", time: "13:00" });
   });
 });

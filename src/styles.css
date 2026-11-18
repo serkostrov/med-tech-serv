@@ -9631,3 +9631,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .mail-compose__menu .mail-compose__picker { border: 0; padding: 0; max-height: 240px; }
 .mail-compose__menu-actions { display: flex; justify-content: space-between; gap: 8px; padding-top: 8px; border-top: 1px solid var(--color-border-soft); }
 .mail-compose__foot { justify-content: space-between; }
+.mail-received strong { display: block; font-weight: 600; white-space: nowrap; }
+.mail-received small { color: var(--color-muted); font-size: 12.5px; }
+.table-actions.mail-actions { gap: 14px; }
