@@ -45,7 +45,13 @@ export function EngineersPage({ initialEngineerId, initialTab }: {
   // Список или календарь загрузки. Календарь показываем тому, кто и так видит все задачи
   // (координатор, руководитель): у остальных ролей база его не отдаст, и предлагать
   // кнопку, которая приведёт к отказу, незачем.
-  const [view, setView] = useState<"list" | "calendar">("list");
+  const [view, setView] = useState<"list" | "calendar">(() => (typeof window !== "undefined" && (window.history.state as { engineersView?: string } | null)?.engineersView === "calendar") ? "calendar" : "list");
+  // Вид помнится в шаге истории: из календаря открыли задачу, «Назад» — снова календарь.
+  useEffect(() => {
+    if (typeof window === "undefined" || selectedId) return;
+    const state = (window.history.state ?? {}) as Record<string, unknown>;
+    if (state.engineersView !== view) window.history.replaceState({ ...state, engineersView: view }, "");
+  }, [view, selectedId]);
   const [canSeeCalendar, setCanSeeCalendar] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);

@@ -1,4 +1,4 @@
-import { EntityLink } from "./entity-links.js";
+import { EntityLink, useEntityNav } from "./entity-links.js";
 import { MultiSelect } from "./MultiSelect.js";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { m2Api, type AssignmentSuggestionRecord, type EngineerCalendarData, type TaskCardResponse } from "./m2-api.js";
@@ -197,9 +197,12 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
   const rows = calendar.unassignedRow ? [calendar.unassignedRow, ...calendar.rows] : calendar.rows;
   // Столбец «Без срока» — только если такие задачи есть: пустой столбец из прочерков не нужен.
   const showUndated = rows.some((row) => row.undatedTasks.length > 0);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  useFillScreenHeight(scrollRef, rows.length);
   return <div
     aria-label={`Календарь загрузки: ${title}`}
     className="engineer-calendar__scroll"
+    ref={scrollRef}
     role="region"
     tabIndex={0}
   >
@@ -226,6 +229,27 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask }: {
       {rows.map((row) => <CalendarRowView dense={dense} key={row.engineer.id || "unassigned"} onOpenTask={onOpenTask} row={row} showUndated={showUndated} />)}
     </div>
   </div>;
+}
+
+/**
+ * Сетка листается внутри себя, чтобы шапка с днями стояла на месте, — и доходит до низа экрана
+ * (18.11: «поле надо продлить до конца, почему оно обрезано»). Раньше высота была «экран минус
+ * 240 пикселей» с запасом, и снизу оставалась пустая полоса. Теперь считаем по месту сетки на
+ * странице: в разделе «Инженеры» и на странице инженера она начинается на разной высоте.
+ */
+function useFillScreenHeight(ref: React.RefObject<HTMLDivElement | null>, rowCount: number) {
+  useEffect(() => {
+    const element = ref.current;
+    if (!element || typeof window === "undefined") return;
+    const fit = () => {
+      if (window.innerWidth <= 760) { element.style.maxHeight = ""; return; }
+      const top = element.getBoundingClientRect().top + window.scrollY;
+      element.style.maxHeight = `${Math.max(420, window.innerHeight - top - 16)}px`;
+    };
+    fit();
+    window.addEventListener("resize", fit);
+    return () => window.removeEventListener("resize", fit);
+  }, [ref, rowCount]);
 }
 
 /** Можно ли отсюда назначить или сменить инженера: решают этап задачи и права, как в «Задачах». */
@@ -374,15 +398,18 @@ const CALENDAR_STATUS_FILTER: readonly string[] = ["planned", "new", "assigned",
  * задачи (встреча 16.11: «два фильтра — тип задачи и инженер»). Инженер видит только
  * себя — это решает и база (engineer_calendar_scope), — а задачу открывает своей карточкой.
  */
-export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
+export function EngineerCalendar({ ownOnly = false, onOpenTask, engineerId }: {
   /** Календарь инженера: только его задачи, без фильтра по людям и без «не назначенных». */
   readonly ownOnly?: boolean;
+  /** Календарь одного инженера на его странице (18.11): только его задачи, без выбора инженеров. */
+  readonly engineerId?: string;
   /** Открыть задачу своей карточкой вместо окна назначения. */
   readonly onOpenTask?: (taskId: string) => void;
 } = {}) {
   const today = companyToday();
   // Инженеры и этапы — по нескольку (18.11: «везде, где списки, выбор нескольких»).
-  const [engineerFilter, setEngineerFilter] = useState<readonly string[]>([]);
+  const [engineerFilter, setEngineerFilter] = useState<readonly string[]>(engineerId ? [engineerId] : []);
+  const nav = useEntityNav();
   const [statusFilter, setStatusFilter] = useState<readonly string[]>([]);
   const [mode, setMode] = useState<CalendarMode>("week");
   const [range, setRange] = useState<CalendarRange>(() => calendarRange("week", today));
@@ -465,7 +492,13 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
       && (engineerFilter.length === 0 || (task.engineerId !== undefined && engineerFilter.includes(task.engineerId))));
     return buildEngineerCalendar({ engineers, tasks, range: data.range, today });
   }, [data, today, engineerFilter, statusFilter]);
-  const openTask = (taskId: string) => { if (onOpenTask) onOpenTask(taskId); else setOpenTaskId(taskId); };
+  // Нажатие на задачу открывает саму задачу, как везде (18.11: «я должен передавать внутри календаря?»).
+  // Инженера меняют в карточке задачи. Окно назначения — только там, где переходов между страницами нет.
+  const openTask = (taskId: string) => {
+    if (onOpenTask) onOpenTask(taskId);
+    else if (nav) nav.open({ kind: "task", id: taskId });
+    else setOpenTaskId(taskId);
+  };
   const showToday = today >= range.from && today <= range.to;
   return <>
     <div className="engineer-calendar-toolbar">
@@ -482,7 +515,7 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
         value={mode}
       />
       <div className="engineer-calendar-toolbar__filters">
-        {ownOnly ? null : <MultiSelect compact emptyLabel="Все инженеры" label="Инженер" onChange={setEngineerFilter} options={data.loaded.engineers.map((item) => ({ value: item.id, label: item.fullName }))} searchPlaceholder="Фамилия инженера" value={engineerFilter} />}
+        {ownOnly || engineerId ? null : <MultiSelect compact emptyLabel="Все инженеры" label="Инженер" onChange={setEngineerFilter} options={data.loaded.engineers.map((item) => ({ value: item.id, label: item.fullName }))} searchPlaceholder="Фамилия инженера" value={engineerFilter} />}
         <MultiSelect compact emptyLabel="Все этапы" label="Этап" onChange={setStatusFilter} options={CALENDAR_STATUS_FILTER.map((code) => ({ value: code, label: TASK_STATUS_LABELS[code] ?? code }))} value={statusFilter} />
       </div>
       {mode === "custom" ? <div className="engineer-calendar-toolbar__custom">

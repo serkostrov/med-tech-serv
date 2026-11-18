@@ -7,6 +7,7 @@ import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { Button, EntityDetailToolbar, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
 import { TaskStageBoard } from "./TaskStageBoard.js";
+import { EngineerCalendar } from "./EngineerCalendar.js";
 
 /**
  * Страница инженера (встреча 18.11): «зайти и увидеть всю картину по инженеру» — задачи
@@ -131,6 +132,8 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
 
   const tabs = [
     { value: "tasks" as const, label: "Задачи", badge: tasks?.filter((task) => task.status !== "cancelled").length ?? 0 },
+    // Календарь этого инженера (18.11: «почему в карточке инженера я не вижу его календарь?»).
+    { value: "calendar" as const, label: "Календарь" },
     { value: "equipment" as const, label: "Приборы", badge: equipment.length },
     { value: "competencies" as const, label: "Компетенции", badge: engineer.competencies.length },
     ...(engineer.hasOwnStock ? [{ value: "stock" as const, label: "Склад", badge: stockRows.length }] : [])
@@ -153,6 +156,8 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
     {shownTab === "tasks" ? (tasks === null
       ? <ResourceState description="Подождите, задачи инженера сейчас появятся." status="loading" title="Загружаем задачи" />
       : <TaskStageBoard label={`Задачи инженера ${engineer.fullName}`} show={{}} tasks={tasks.filter((task) => task.status !== "cancelled")} />) : null}
+
+    {shownTab === "calendar" ? <EngineerCalendar engineerId={engineer.id} key={engineer.id} /> : null}
 
     {shownTab === "equipment" ? <section className="task-section" aria-labelledby="engineer-equipment-title">
       <header className="task-section__head"><h3 id="engineer-equipment-title">Приборы инженера</h3></header>

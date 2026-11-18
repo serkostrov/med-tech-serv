@@ -15,7 +15,7 @@ export type EntityTarget =
   | { readonly kind: "part"; readonly id: string }
   | { readonly kind: "site"; readonly id: string };
 
-export type EngineerPageTab = "tasks" | "equipment" | "competencies" | "stock";
+export type EngineerPageTab = "tasks" | "calendar" | "equipment" | "competencies" | "stock";
 export type EquipmentCardTab = "history" | "tasks" | "meters" | "files" | "movements" | "plan" | "parts";
 
 export interface EntityNavigation {
