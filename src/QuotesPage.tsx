@@ -9,6 +9,8 @@ import {
 } from "./quotes.js";
 import { downloadWorkbook } from "./registry-export.js";
 import { MultiSelect } from "./MultiSelect.js";
+import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
+import { nameRepeats } from "./name-repeats.js";
 import { companyToday } from "./task-dates.js";
 import {
   Button, CardHeader, DatePicker, DialogForm, EntityDetailToolbar, IconButton, Input, PageIntro, ResourceState, Select, StatusBadge, toast
@@ -47,6 +49,11 @@ export function QuotesPage() {
 
   const today = companyToday();
   const shown = useMemo(() => (quotes ?? []).filter((quote) => statusFilter.length === 0 || statusFilter.includes(quote.status)), [quotes, statusFilter]);
+  // Постранично (18.11), как письма и счета.
+  const { pageSize, setPageSize } = usePageSize("quotes");
+  const [pageIndex, setPageIndex] = useState(0);
+  const shownPageIndex = Math.min(pageIndex, Math.max(0, Math.ceil(shown.length / pageSize) - 1));
+  const shownPage = shown.slice(shownPageIndex * pageSize, (shownPageIndex + 1) * pageSize);
 
   const editorDialog = editor ? <QuoteHeaderDialog
     key={editor.mode === "edit" ? editor.quote.id : "new"}
@@ -104,15 +111,16 @@ export function QuotesPage() {
             <th scope="col">Действует до</th>
             <th scope="col">Статус</th>
           </tr></thead>
-          <tbody>{shown.map((quote) => <tr className="clickable-row" key={quote.id} onClick={() => setOpenId(quote.id)}>
+          <tbody>{shownPage.map((quote) => <tr className="clickable-row" key={quote.id} onClick={() => setOpenId(quote.id)}>
             <td data-label="Номер"><button className="text-button" onClick={(event) => { event.stopPropagation(); setOpenId(quote.id); }} type="button">{quote.number}</button></td>
             <td className="cell-wide" data-label="Название"><strong>{quote.name}</strong></td>
-            <td data-label="Клиент">{[quote.siteName, quote.payerName].filter(Boolean).join(" · ") || "—"}</td>
+            <td data-label="Клиент">{quoteClientText(quote) || "—"}</td>
             <td className="numeric" data-label="Сумма">{formatMoney(quote.totalAmount)}</td>
             <td data-label="Действует до">{quote.validUntil ? formatDisplayDate(quote.validUntil) : "—"}{quoteOverdue(quote, today) ? <small className="quote-overdue">срок прошёл</small> : null}</td>
             <td data-label="Статус"><StatusBadge tone={QUOTE_STATUS_TONES[quote.status]}>{QUOTE_STATUS_LABELS[quote.status]}</StatusBadge></td>
           </tr>)}</tbody>
         </table></div>}
+      {shown.length ? <RegistryPagination alwaysShow ariaLabel="Страницы КП" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={shownPageIndex} pageSize={pageSize} total={shown.length} /> : null}
     </section>
     {editorDialog}
   </>;
@@ -230,6 +238,8 @@ function QuoteCard({ id, canWrite, onBack, onEdit, refresh }: {
     })))], `${quote.number}.xlsx`).catch((exportError: unknown) => toast.error(exportError instanceof Error ? exportError.message : "Не получилось выгрузить КП"));
   };
   const actions = canWrite ? quoteActions(quote.status) : [];
+  const cancelAction = quote.status === "draft" ? actions.find((action) => action.to === "rejected") : undefined;
+  const topActions = actions.filter((action) => action !== cancelAction);
 
   return (
     <div className="quote-card">
@@ -245,12 +255,12 @@ function QuoteCard({ id, canWrite, onBack, onEdit, refresh }: {
           {overdue ? <span className="task-head__flag task-head__flag--late">срок действия прошёл</span> : null}
         </div>
         <h1>{quote.name}</h1>
-        <p>{[quote.siteName, quote.payerName].filter(Boolean).join(" · ") || "Клиент не указан"}{quote.validUntil ? ` · действует до ${formatDisplayDate(quote.validUntil)}` : ""}</p>
+        <p>{quoteClientText(quote) || "Клиент не указан"}{quote.validUntil ? ` · действует до ${formatDisplayDate(quote.validUntil)}` : ""}</p>
       </header>
 
       {actions.length > 0 || editable ? <div className="quote-card__actions">
-        {actions.map((action) => <Button busy={busy} disabled={busy || (action.to === "sent" && items.length === 0)} key={action.to} onClick={() => void changeStatus(action.to, action.label)} variant={action.primary ? "primary" : "secondary"}>{action.label}</Button>)}
-        {editable ? <Button onClick={() => onEdit(quote)} variant="ghost">Изменить название и клиента</Button> : null}
+        {topActions.map((action) => <Button busy={busy} disabled={busy || (action.to === "sent" && items.length === 0)} key={action.to} onClick={() => void changeStatus(action.to, action.label)} variant={action.primary ? "primary" : "secondary"}>{action.label}</Button>)}
+        {editable ? <Button className="quote-card__edit" icon="edit" onClick={() => onEdit(quote)} variant="secondary">Изменить</Button> : null}
         {quote.status === "draft" && items.length === 0 ? <span className="form-hint">Пустое КП клиенту не отправить: сначала добавьте позиции.</span> : null}
         {quote.status === "sent" && overdue ? <span className="form-hint">Срок действия прошёл: отметьте «Срок истёк» или верните в черновик и продлите.</span> : null}
       </div> : null}
@@ -279,6 +289,8 @@ function QuoteCard({ id, canWrite, onBack, onEdit, refresh }: {
             <tfoot><tr><th colSpan={3} scope="row">Итого</th><td className="numeric"><strong>{formatMoney(quote.totalAmount)}</strong></td>{editable ? <td /> : null}</tr></tfoot>
           </table></div>}
       </section>
+      {/* Как в задаче и счёте (18.11): «Изменить» — справа сверху, отмена — красной кнопкой справа снизу. */}
+      {cancelAction ? <div className="quote-card__foot"><Button busy={busy} onClick={() => void changeStatus(cancelAction.to, cancelAction.label)} variant="danger">{cancelAction.label}</Button></div> : null}
 
       {adding === "part" ? <QuotePartDialog onAdded={async () => { setAdding(null); await load(); }} onClose={() => setAdding(null)} quoteId={quote.id} /> : null}
       {adding === "work" ? <QuoteWorkDialog onAdded={async () => { setAdding(null); await load(); }} onClose={() => setAdding(null)} quoteId={quote.id} /> : null}
@@ -444,4 +456,9 @@ function QuoteWorkDialog({ quoteId, onClose, onAdded }: { readonly quoteId: stri
       </div>
     </DialogForm>
   );
+}
+
+/** Клиент КП: площадка и плательщик, плательщик — только если не повторяет площадку (18.11). */
+function quoteClientText(quote: Pick<QuoteApiRecord, "siteName" | "payerName">): string {
+  return [quote.siteName, nameRepeats(quote.payerName, quote.siteName) ? undefined : quote.payerName].filter(Boolean).join(" · ");
 }

@@ -9661,3 +9661,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Ссылки внизу карточки доски (задачи счёта): вне кнопки карточки, свой переход (18.11). */
 .status-board-card__links { padding: 0 12px 10px; color: var(--color-muted); font-size: 12px; }
 .status-board-card__links small { font-size: 12px; }
+/* КП: «Изменить» справа в строке действий, отмена — красной кнопкой справа под позициями. */
+.quote-card__edit { margin-left: auto; }
+.quote-card__foot { display: flex; justify-content: flex-end; margin-top: 12px; }
+/* Суммы в таблицах не переносятся посередине. */
+.data-table td.numeric { white-space: nowrap; }
