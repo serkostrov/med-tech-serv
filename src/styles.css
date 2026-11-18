@@ -9530,3 +9530,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .filter-bar__field { min-width: 0; }
 .multi-select__trigger { min-width: 0; max-width: 100%; }
 .multi-select__trigger > span { min-width: 0; flex: 1 1 auto; }
+
+/* Вкладки писем: потенциальные задачи, с задачей, не заявки, все (встреча 18.11). */
+.mail-boxes { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+.mail-boxes__tab { display: inline-flex; align-items: center; gap: 8px; min-height: 36px; padding: 6px 14px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); color: var(--color-ink-soft); font: inherit; font-size: 14px; font-weight: 600; cursor: pointer; }
+.mail-boxes__tab:hover { border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border)); color: var(--color-accent-dark); }
+.mail-boxes__tab.is-active { border-color: var(--color-accent); background: var(--color-accent); color: #fff; }
+.mail-boxes__count { min-width: 22px; padding: 1px 7px; border-radius: 999px; background: var(--color-canvas); color: var(--color-ink-soft); font-size: 12px; text-align: center; }
+.mail-boxes__tab.is-active .mail-boxes__count { background: rgb(255 255 255 / 22%); color: #fff; }
+.mail-boxes__hint { margin: 0 0 12px; color: var(--color-muted); font-size: 13px; }

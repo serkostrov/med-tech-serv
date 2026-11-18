@@ -77,6 +77,9 @@ export interface MailInboxRecord {
   readonly autoreplySent?: boolean;
   readonly autoreplyError?: string;
   readonly attachments?: readonly MailAttachment[];
+  /** Служба решила, что это не заявка: рассылка с «отписаться» или, по разбору нейросети, письмо не про ремонт. */
+  readonly notRequest?: boolean;
+  readonly notRequestReason?: string;
 }
 
 export interface MailAttachment {

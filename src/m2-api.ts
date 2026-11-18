@@ -1,3 +1,4 @@
+import { mailBoxFilter, type MailBox } from "./mail-boxes.js";
 import { filterValues } from "./filter-values.js";
 import type { Permission, WorkingRole } from "./domain/access.js";
 import { availableTaskActions, type AvailableTaskAction } from "./domain/task-actions.js";
@@ -770,6 +771,8 @@ function mailRecord(row: Record<string, unknown>): MailInboxRecord {
     equipmentLabel: optionalText(payload, "equipmentLabel"),
     description: optionalText(payload, "description"),
     lowConfidence: flag("lowConfidence"),
+    notRequest: flag("notRequest"),
+    notRequestReason: optionalText(payload, "notRequestReason"),
     body: optionalText(row, "body"),
     rawStorageKey: optionalText(row, "raw_storage_key"),
     wasParsed: Boolean(row.parsed_at),
@@ -3289,10 +3292,13 @@ export class M2ApiClient {
     return { new: fresh.count ?? 0, overdue: overdue.count ?? 0, underReview: review.count ?? 0 };
   }
 
-  public async mailInbox(query: { readonly search?: string; readonly status?: string; readonly limit?: number; readonly offset?: number } = {}): Promise<MailInboxResponse> {
+  public async mailInbox(query: { readonly search?: string; readonly status?: string; readonly box?: MailBox; readonly limit?: number; readonly offset?: number } = {}): Promise<MailInboxResponse> {
     const limit = query.limit ?? 25;
     const offset = query.offset ?? 0;
     let request = this.db().from("mail_messages").select(MAIL_SELECT, { count: "exact" }).order("received_at", { ascending: false }).range(offset, offset + limit - 1);
+    const box = mailBoxFilter(query.box ?? "all");
+    if (box.statuses) request = request.in("status", [...box.statuses]);
+    if (box.or) request = request.or(box.or);
     if (query.status) request = request.eq("status", query.status);
     const search = query.search?.trim().replace(/[,()%*\\]/gu, " ").trim();
     if (search) request = request.or(`sender.ilike.%${search}%,subject.ilike.%${search}%`);
@@ -3304,6 +3310,33 @@ export class M2ApiClient {
       limit,
       offset
     };
+  }
+
+  /** Сколько писем в каждой вкладке раздела «Письма». */
+  public async mailBoxCounts(): Promise<Readonly<Record<MailBox, number>>> {
+    const count = async (box: MailBox) => {
+      const filter = mailBoxFilter(box);
+      let request = this.db().from("mail_messages").select("id", { count: "exact", head: true });
+      if (filter.statuses) request = request.in("status", [...filter.statuses]);
+      if (filter.or) request = request.or(filter.or);
+      const { count: total, error } = await request;
+      throwIfError(error);
+      return total ?? 0;
+    };
+    const [potential, tasks, junk, all] = await Promise.all([count("potential"), count("tasks"), count("junk"), count("all")]);
+    return { potential, tasks, junk, all };
+  }
+
+  /** Письмо из «Не заявок» вернуть в потенциальные задачи: снять отметку службы «не заявка». */
+  public async markMailAsRequest(id: string): Promise<void> {
+    const { data, error } = await this.db().from("mail_messages").select("parsed_payload, status").eq("id", id).maybeSingle();
+    throwIfError(error);
+    const row = asRow(data);
+    const payload = { ...asRow(row.parsed_payload), notRequest: false };
+    const update: Record<string, unknown> = { parsed_payload: payload };
+    if (row.status === "ignored") update.status = "parsed";
+    const saved = await this.db().from("mail_messages").update(update).eq("id", id);
+    throwIfError(saved.error);
   }
 
   public async updateMailInbox(id: string, input: { readonly status: "pending" | "parsed" | "ignored" | "converted"; readonly taskId?: string }): Promise<MailInboxRecord> {

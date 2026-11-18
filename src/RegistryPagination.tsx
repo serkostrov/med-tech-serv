@@ -57,9 +57,12 @@ export function RegistryPagination({
   onPageSizeChange,
   pageIndex,
   pageSize,
-  total
+  total,
+  alwaysShow = false
 }: {
   readonly ariaLabel: string;
+  /** Показывать строку «1–3 из 3» и выбор размера, даже когда всё помещается на одну страницу. */
+  readonly alwaysShow?: boolean;
   readonly onPageChange: (pageIndex: number) => void;
   /** Если передан, рядом со страницами можно выбрать, сколько строк показывать. */
   readonly onPageSizeChange?: (pageSize: number) => void;
@@ -69,8 +72,8 @@ export function RegistryPagination({
 }) {
   const pages = registryPageCount(total, pageSize);
   // Выбор размера нужен, только когда строк больше самой маленькой страницы.
-  const canChangeSize = Boolean(onPageSizeChange) && total > Math.min(...PAGE_SIZE_OPTIONS);
-  if (pages <= 1 && !canChangeSize) return null;
+  const canChangeSize = Boolean(onPageSizeChange) && (alwaysShow || total > Math.min(...PAGE_SIZE_OPTIONS));
+  if (pages <= 1 && !canChangeSize && !alwaysShow) return null;
   const first = total === 0 ? 0 : registryPageOffset(pageIndex, pageSize) + 1;
   const last = Math.min(total, registryPageOffset(pageIndex + 1, pageSize));
   return <div className="registry-pagination flex flex-wrap items-center justify-end gap-3 px-4 py-3 text-sm text-muted-foreground" aria-label={ariaLabel} role="navigation">
