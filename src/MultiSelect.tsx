@@ -14,8 +14,12 @@ export const MULTI_SELECT_SEARCH_FROM = 11;
  * Список раскрывается под кнопкой внутри страницы (не поверх неё), поэтому работает
  * и в панели «Фильтры», и в мобильной шторке.
  */
-export function MultiSelect({ label, options, value, onChange, emptyLabel = "Все", searchPlaceholder = "Найти", compact = false }: {
+export function MultiSelect({ label, options, value, onChange, emptyLabel = "Все", searchPlaceholder = "Найти", compact = false, allOption = true, invalid = false }: {
   readonly label: string;
+  /** Строка «Все» в списке: в фильтрах она сбрасывает отбор, в поле формы не нужна. */
+  readonly allOption?: boolean;
+  /** Поле формы не заполнено: рамка красная. */
+  readonly invalid?: boolean;
   /** Подпись над кнопкой не показывать (строка фильтров без подписей, как у приборов). */
   readonly compact?: boolean;
   readonly options: readonly MultiSelectOption[];
@@ -55,19 +59,19 @@ export function MultiSelect({ label, options, value, onChange, emptyLabel = "В�
 
   return <div className={`multi-select${compact ? " multi-select--compact" : ""}`} data-filter-active={value.length > 0 ? "true" : "false"} ref={wrap}>
     <span className={compact ? "sr-only" : "multi-select__label"} id={labelId}>{label}</span>
-    <button aria-controls={listId} aria-expanded={open} aria-labelledby={labelId} className={`multi-select__trigger${value.length ? " multi-select__trigger--active" : ""}`} onClick={() => setOpen((current) => !current)} title={value.length ? value.map(labelOf).join(", ") : undefined} type="button">
+    <button aria-controls={listId} aria-expanded={open} aria-invalid={invalid || undefined} aria-labelledby={labelId} className={`multi-select__trigger${value.length && allOption ? " multi-select__trigger--active" : ""}${invalid ? " multi-select__trigger--invalid" : ""}`} onClick={() => setOpen((current) => !current)} title={value.length ? value.map(labelOf).join(", ") : undefined} type="button">
       <span>{filterSummary(value, labelOf, emptyLabel)}</span>
       <svg aria-hidden="true" height="14" viewBox="0 0 24 24" width="14"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" strokeLinecap="round" strokeWidth="2" /></svg>
     </button>
     {open ? <div className="multi-select__panel" id={listId}>
       {searchable ? <input aria-label={`${label}: поиск`} autoFocus className="multi-select__search" onChange={(event) => setQuery(event.target.value)} placeholder={searchPlaceholder} type="search" value={query} /> : null}
       <div aria-labelledby={labelId} className="multi-select__options" role="group">
-        <label className="multi-select__option multi-select__option--all"><input checked={value.length === 0} onChange={() => onChange([])} type="checkbox" /><span>{emptyLabel}</span></label>
+        {allOption ? <label className="multi-select__option multi-select__option--all"><input checked={value.length === 0} onChange={() => onChange([])} type="checkbox" /><span>{emptyLabel}</span></label> : null}
         {shown.map((option) => <label className="multi-select__option" key={option.value}><input checked={value.includes(option.value)} onChange={() => toggle(option.value)} type="checkbox" /><span>{option.label}</span></label>)}
         {shown.length === 0 ? <p className="multi-select__empty">Ничего не нашли</p> : null}
       </div>
       <div className="multi-select__footer">
-        <span>{value.length ? `Выбрано: ${value.length}` : "Можно выбрать несколько"}</span>
+        <span>{value.length ? `Выбрано: ${value.length}` : ""}</span>
         <button onClick={() => setOpen(false)} type="button">Готово</button>
       </div>
     </div> : null}
@@ -75,9 +79,8 @@ export function MultiSelect({ label, options, value, onChange, emptyLabel = "В�
 }
 
 /**
- * Несколько видов работ в задаче одним полем (встреча 18.11: «просто вид работ мультиселектом,
- * пусть они будут равнозначными»). Все виды показаны кнопками, нажатые — выбраны.
- * Первый выбранный база хранит как вид работ задачи, остальные — дополнительными,
+ * Несколько видов работ в задаче одним полем (встреча 18.11): выпадающий список с галочками,
+ * как в фильтрах. Первый выбранный база хранит как вид работ задачи, остальные — дополнительными,
  * но на экране они равны.
  */
 export function WorkTypesPicker({ options, value, onChange, error }: {
@@ -86,21 +89,8 @@ export function WorkTypesPicker({ options, value, onChange, error }: {
   readonly onChange: (next: readonly string[]) => void;
   readonly error?: string | null;
 }) {
-  const labelId = useId();
-  const toggle = (code: string) => onChange(value.includes(code) ? value.filter((item) => item !== code) : [...value, code]);
-  const unknown = value.filter((code) => !options.some((option) => option.value === code));
-  return <div aria-labelledby={labelId} className="work-types-picker field-wide" role="group">
-    <span className="work-types-picker__label" id={labelId}>Вид работ *</span>
-    <div className="work-types-picker__chips">
-      {options.map((option) => {
-        const selected = value.includes(option.value);
-        return <button aria-pressed={selected} className={`work-types-picker__chip${selected ? " is-selected" : ""}`} key={option.value} onClick={() => toggle(option.value)} type="button">
-          {selected ? <svg aria-hidden="true" height="13" viewBox="0 0 24 24" width="13"><path d="m5 12 5 5 9-10" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5" /></svg> : null}
-          {option.label}
-        </button>;
-      })}
-      {unknown.map((code) => <button aria-pressed className="work-types-picker__chip is-selected" key={code} onClick={() => toggle(code)} type="button">{code}</button>)}
-    </div>
-    <small className={error ? "work-types-picker__error" : undefined}>{error ?? "Можно выбрать несколько — например, инсталляция и ремонт. В счёте у каждого вида своя строка по своей цене."}</small>
+  return <div className="work-types-picker field-wide">
+    <MultiSelect allOption={false} emptyLabel="Не выбран" invalid={Boolean(error)} label="Вид работ *" onChange={onChange} options={options} value={value} />
+    {error ? <small className="work-types-picker__error">{error}</small> : null}
   </div>;
 }

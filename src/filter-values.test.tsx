@@ -38,10 +38,11 @@ describe("фильтр с несколькими значениями", () => {
 });
 
 describe("вид работ одним полем", () => {
-  it("выбранные виды нажаты, остальные — нет", () => {
-    const html = renderToStaticMarkup(<WorkTypesPicker onChange={() => undefined} options={[{ value: "repair", label: "Ремонт" }, { value: "install", label: "Инсталляция" }]} value={["install"]} />);
-    assert.match(html, /aria-pressed="true"[^>]*>.*Инсталляция/);
-    assert.match(html, /aria-pressed="false"[^>]*>Ремонт/);
+  it("выпадающий список с галочками, как в фильтрах: выбранные видны на кнопке, строки «Все» нет", () => {
+    const html = renderToStaticMarkup(<WorkTypesPicker onChange={() => undefined} options={[{ value: "repair", label: "Ремонт" }, { value: "install", label: "Инсталляция" }]} value={["install", "repair"]} />);
+    assert.match(html, /Вид работ \*/);
+    assert.match(html, /Инсталляция, Ремонт/);
+    assert.doesNotMatch(html, /Можно выбрать несколько/);
   });
 });
 

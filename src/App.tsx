@@ -736,7 +736,6 @@ export function TaskMailThread({ messages, canReply, loading, error, onReload, o
   const replyTo = taskMailReplyAddress(messages);
   const replySubject = taskMailReplySubject(messages);
   const templates = taskMailReplyTemplates({ taskNumber, engineerName, period });
-  const length = [...draft.trim()].length;
   const useTemplate = (text: string) => {
     // Заготовку не вписываем поверх начатого текста: дописываем ниже.
     setDraft((current) => current.trim() ? `${current.trimEnd()}\n\n${text}` : text);
@@ -814,21 +813,27 @@ export function TaskMailThread({ messages, canReply, loading, error, onReload, o
         rows={6}
         value={draft}
       />
-      <div className="mail-compose__files">
-        {attachedFiles.length ? <ul aria-label="Файлы к ответу" className="mail-compose__attached">
-          {attachedFiles.map((file) => <li key={file.id}><span>{file.originalName}</span><small>{fileSizeLabel(file.byteSize)}</small><button aria-label={`Убрать «${file.originalName}»`} onClick={() => toggleAttached(file.id)} type="button">×</button></li>)}
-        </ul> : null}
-        <div className="mail-compose__file-actions">
-          {allFiles.length ? <Button aria-expanded={pickingFiles} className="button--compact" onClick={() => setPickingFiles((open) => !open)} variant="secondary">{pickingFiles ? "Скрыть файлы задачи" : `Приложить файлы задачи · ${allFiles.length}`}</Button> : null}
-          {onUploadFiles ? <><Button busy={uploading} busyLabel="Загружаем…" className="button--compact" onClick={() => fileInput.current?.click()} variant="ghost">Загрузить с компьютера</Button><input hidden multiple onChange={(event) => void uploadFromComputer(event.target.files)} ref={fileInput} type="file" /></> : null}
-          {attachProblem ? <span className="mail-compose__warning">{attachProblem}</span> : attachedFiles.length ? <span className="muted">{formatRussianCount(attachedFiles.length, ["файл", "файла", "файлов"])} · {fileSizeLabel(attachedBytes)}</span> : null}
-        </div>
-        {pickingFiles ? <ul aria-label="Файлы задачи" className="mail-compose__picker">
-          {allFiles.map((file) => <li key={file.id}><label><input checked={attached.includes(file.id)} onChange={() => toggleAttached(file.id)} type="checkbox" /><span>{file.originalName}</span><small>{fileSizeLabel(file.byteSize)}</small></label></li>)}
-        </ul> : null}
-      </div>
+      {attachedFiles.length ? <ul aria-label="Файлы к ответу" className="mail-compose__attached">
+        {attachedFiles.map((file) => <li key={file.id}><span>{file.originalName}</span><small>{fileSizeLabel(file.byteSize)}</small><button aria-label={`Убрать «${file.originalName}»`} onClick={() => toggleAttached(file.id)} type="button">×</button></li>)}
+      </ul> : null}
+      {/* 18.11: одна скрепка вместо двух кнопок и без пояснений — как в почте. */}
       <footer className="mail-compose__foot">
-        <p>Клиент получит письмо ответом на свою заявку, его ответ вернётся сюда.{length > 0 ? <span className="mail-compose__count"> · {length.toLocaleString("ru")} симв.</span> : null}</p>
+        <div className="mail-compose__clip">
+          {allFiles.length || onUploadFiles ? <button aria-expanded={pickingFiles} aria-label="Приложить файлы" className="mail-compose__clip-button" onClick={() => setPickingFiles((open) => !open)} title="Приложить файлы" type="button">
+            <svg aria-hidden="true" height="18" viewBox="0 0 24 24" width="18"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" /></svg>
+            {attachedFiles.length ? <span className="mail-compose__clip-count">{attachedFiles.length}</span> : null}
+          </button> : null}
+          {attachProblem ? <span className="mail-compose__warning">{attachProblem}</span> : null}
+          {pickingFiles ? <div className="mail-compose__menu" role="dialog" aria-label="Файлы к ответу">
+            {allFiles.length ? <ul className="mail-compose__picker">
+              {allFiles.map((file) => <li key={file.id}><label><input checked={attached.includes(file.id)} onChange={() => toggleAttached(file.id)} type="checkbox" /><span>{file.originalName}</span><small>{fileSizeLabel(file.byteSize)}</small></label></li>)}
+            </ul> : null}
+            <div className="mail-compose__menu-actions">
+              {onUploadFiles ? <><Button busy={uploading} busyLabel="Загружаем…" className="button--compact" onClick={() => fileInput.current?.click()} variant="ghost">С компьютера…</Button><input hidden multiple onChange={(event) => void uploadFromComputer(event.target.files)} ref={fileInput} type="file" /></> : null}
+              <Button className="button--compact" onClick={() => setPickingFiles(false)}>Готово</Button>
+            </div>
+          </div> : null}
+        </div>
         <div className="mail-compose__actions">
           {draft ? <Button disabled={sending} onClick={() => setDraft("")} variant="ghost">Очистить</Button> : null}
           <Button busy={sending} busyLabel="Отправляем…" disabled={sending || Boolean(refusal)} icon="mail" type="submit">Отправить</Button>
@@ -1518,7 +1523,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         </> : null}
         {detailTab === "history" ? <section className="task-section" aria-label="История задачи"><TaskHistory journal={card.journal} /></section> : null}
         {detailTab === "props" ? <section aria-label="Свойства задачи" className="task-props task-props--tab">
-          <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setEditWorkTypes([...new Set([task.workTypeCode ?? card.workType?.code ?? "", ...(task.extraWorkTypeCodes ?? [])].filter(Boolean))]); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
+          <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setEditWorkTypes([...new Set([task.workTypeCode ?? card.workType?.code ?? "", ...(task.extraWorkTypeCodes ?? [])].filter(Boolean))]); setOverviewEditing(true); }} icon="edit" variant="secondary">Изменить</Button> : null}</header>
           <dl>
             <div><dt>Инженер</dt><dd>{card.engineer?.fullName ? <EntityLink target={card.engineer.id ? { kind: "engineer", id: card.engineer.id } : undefined}>{card.engineer.fullName}</EntityLink> : <span className="is-empty">Не назначен</span>}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить</button> : canAssign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Назначить</button> : null}</dd></div>
             <div><dt>Срок</dt><dd>{task.periodFrom || task.periodTo ? formatTaskDateRange(task.periodFrom, task.periodTo) : <span className="is-empty">Не указан</span>}</dd></div>
@@ -1542,7 +1547,8 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             {task.continuationTaskId ? <div><dt>Продолжение</dt><dd><button className="text-button" onClick={() => void onOpenRelated(task.continuationTaskId!)} type="button">{task.continuationTaskNumber ?? task.continuationTaskId}</button></dd></div> : null}
             {task.isMaintenancePlan ? <div><dt>План ТО</dt><dd>Создана по плану</dd></div> : null}
           </dl> : null}
-          {canCancel ? <button className="task-props__cancel" disabled={busy} onClick={() => setActionDialog("cancel")} type="button">Отменить задачу</button> : null}
+          {/* 18.11: «Изменить» — справа сверху, «Отменить» — справа снизу, обе заметными кнопками. */}
+          {canCancel ? <div className="task-props__foot"><Button disabled={busy} onClick={() => setActionDialog("cancel")} variant="danger">Отменить задачу</Button></div> : null}
         </section> : null}
       </div>
     </div>
