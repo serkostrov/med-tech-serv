@@ -11,6 +11,7 @@ import {
   toast
 } from "./ui.js";
 import { formatDisplayDateTime } from "./date-format.js";
+import { EntityLink } from "./entity-links.js";
 import { formatMoney } from "./price-list.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { XLSX_MIME } from "./xlsx.js";
@@ -61,7 +62,7 @@ function InvoiceItemsTable({ items, guarantee = false }: { readonly items: reado
     <tbody>{invoiceItemsInOrder(items).map((item) => {
       const modifier = invoiceModifierLabel(item.modifier);
       return <tr key={item.id}>
-        <td data-label="Задача">{item.taskNumber ?? <span className="is-empty">Без задачи</span>}</td>
+        <td data-label="Задача">{item.taskNumber ? <EntityLink target={item.taskId ? { kind: "task", id: item.taskId } : undefined}>{item.taskNumber}</EntityLink> : <span className="is-empty">Без задачи</span>}</td>
         <td className="cell-wide" data-label="Позиция">
           <strong>{item.description}</strong>
           <small>{invoiceItemTypeLabel(item.itemType)}{modifier ? ` · ${modifier}` : ""}</small>
@@ -291,7 +292,8 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
       <p>{[inn ? `ИНН ${inn}` : null, kpp ? `КПП ${kpp}` : null, actions.next ? null : invoiceStatusNote(status)].filter(Boolean).join(" · ")}</p>
     </header>
     {actions.next ? <section aria-label="Следующий шаг" className="task-next-step">
-      <div className="task-next-step__text"><strong>{actions.next.title}</strong><span>{actions.next.hint}</span></div>
+      {/* 18.11: в плашке только что сделать; пояснения «работы — по прайсу…» убраны. */}
+      <div className="task-next-step__text"><strong>{actions.next.title}</strong></div>
       <div className="task-next-step__actions">
         <Button onClick={() => start(actions.next!.kind)}>{actions.next.label}</Button>
       </div>
@@ -318,9 +320,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
             />
             : <>
               <InvoiceItemsTable items={groups.billable} />
-              {withoutPrice.length > 0
-                ? <p className="form-hint">{invoiceMissingPriceHint(withoutPrice, status === "draft")}</p>
-                : null}
+
             </>}
         </section>
         {groups.guarantee.length > 0 ? <section aria-labelledby="invoice-guarantee-title" className="task-section">
@@ -368,7 +368,8 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
             <div><dt>Передан в 1С</dt><dd>{invoice.transferredAt ? formatDisplayDateTime(invoice.transferredAt) : <span className="is-empty">Ещё нет</span>}</dd></div>
             <div><dt>Задач в счёте</dt><dd>{invoice.taskIds.length === 0 ? <span className="is-empty">Нет</span> : String(invoice.taskIds.length)}</dd></div>
           </dl>
-          {actions.canCancel ? <button className="task-props__cancel" onClick={() => start("cancel")} type="button">Отменить счёт</button> : null}
+          {/* Как в задаче (18.11): заметной красной кнопкой справа снизу, а не ссылкой слева. */}
+          {actions.canCancel ? <div className="task-props__foot"><Button onClick={() => start("cancel")} variant="danger">Отменить счёт</Button></div> : null}
         </section>
       </aside>
     </div>

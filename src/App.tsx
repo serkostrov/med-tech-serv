@@ -3643,6 +3643,9 @@ const INVOICE_BOARD_COLUMNS: readonly StatusBoardColumn[] = [
 
 function FinancePage() {
   const [invoiceView, setInvoiceView] = useState<"board" | "list">("board");
+  // Список счетов постранично (18.11), как письма и инженеры.
+  const { pageSize: invoicePageSize, setPageSize: setInvoicePageSize } = usePageSize("invoices");
+  const [invoicePageIndex, setInvoicePageIndex] = useState(0);
   const [invoices, setInvoices] = useState<readonly InvoiceApiRecord[]>([]);
   const [tasks, setTasks] = useState<readonly TaskApiRecord[]>([]);
   const [equipment, setEquipment] = useState<readonly EquipmentApiRecord[]>([]);
@@ -3740,6 +3743,8 @@ function FinancePage() {
       onChanged={() => void reloadInvoiceTasks().catch(() => undefined)}
     />;
   }
+  const invoicePageShown = Math.min(invoicePageIndex, Math.max(0, Math.ceil(invoices.length / invoicePageSize) - 1));
+  const invoicePage = invoices.slice(invoicePageShown * invoicePageSize, (invoicePageShown + 1) * invoicePageSize);
   return <><PageIntro actions={<Button icon="plus" onClick={openForm}>Выставить счёт</Button>} description="Выберите закрытые задачи — плательщик подставится из прибора. Если нужен другой, укажите причину." title="Счета" titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать счета" onValueChange={setInvoiceView} value={invoiceView} />} />
     <DialogForm busy={saving} description="Счёт создастся по выбранным закрытым задачам. Плательщик подставится из прибора." error={formError} onOpenChange={(open) => { if (open) openForm(); else closeForm(); }} onSubmit={submit} open={formOpen} submitDisabled={!canCreateInvoice} submitLabel="Создать счёт" title="Новый счёт">
       <div className="invoice-form">
@@ -3762,12 +3767,6 @@ function FinancePage() {
         {payerOverridden ? <label>Почему другой плательщик *<AutoTextarea name="payerOverrideReason" required rows={2} /></label> : null}
       </div>
     </DialogForm>
-    {/* На доске те же числа стоят в заголовках колонок: карточки сверху нужны только списку. */}
-    {invoiceView === "list" ? <div className="metric-grid metric-grid--three">
-      <MetricCard detail="ещё не выставлены" icon="finance" label="Черновики счетов" tone="blue" value={String(invoices.filter((item) => item.status === "draft").length)} />
-      <MetricCard detail="ожидают передачи" icon="mail" label="Выставлено" tone="purple" value={String(invoices.filter((item) => item.status === "issued").length)} />
-      <MetricCard detail="передано в 1С" icon="check" label="Закрыто" tone="green" value={String(invoices.filter((item) => item.status === "transferred_to_1c").length)} />
-    </div> : null}
     {invoiceView === "board" ? <StatusBoard<InvoiceApiRecord>
       columns={INVOICE_BOARD_COLUMNS}
       emptyText="Счетов в этом статусе нет."
@@ -3779,13 +3778,20 @@ function FinancePage() {
       renderCard={(invoice) => <>
         <span className="task-board-card__top">{invoice.number}</span>
         <strong>{invoice.payer.name}</strong>
-        <small>{invoice.taskIds.length ? `Задачи: ${invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}` : "Без задач"}</small>
         <span className="task-board-card__foot"><span className="task-board-card__due">от {formatTaskDate(invoice.createdAt)}</span></span>
       </>}
+      renderLinks={(invoice) => <InvoiceTaskLinks invoice={invoice} tasks={tasks} />}
     /> : null}
-    {invoiceView === "list" ? <section className="card card--table"><CardHeader meta={formatRussianCount(invoices.length, ["документ", "документа", "документов"])} title="Последние счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th>{canCancelInvoices ? <th scope="col"><span className="sr-only">Действия</span></th> : null}</tr></thead><tbody>{invoices.map((invoice) => <tr className="data-table__selectable" key={invoice.id} onClick={() => setOpenInvoice(invoice)}><td><strong>{invoice.number}</strong></td><td>{invoice.taskIds.map((id) => tasks.find((task) => task.id === id)?.number ?? id).join(", ")}</td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td>{canCancelInvoices ? <td onClick={(event) => event.stopPropagation()}>{invoice.status === "draft" || invoice.status === "issued" ? <div className="table-actions"><Button className="button--compact" onClick={() => setCancelling(invoice)} variant="ghost">Отменить счёт</Button></div> : null}</td> : null}</tr>)}</tbody></table></div>}</section> : null}
+    {invoiceView === "list" ? <section className="card card--table"><CardHeader meta={formatRussianCount(invoices.length, ["документ", "документа", "документов"])} title="Счета" />{loading && invoices.length === 0 ? <ResourceState description="Подождите, счета сейчас появятся." status="loading" title="Загружаем счета" /> : invoices.length === 0 ? <ResourceState description="Выставьте счёт по закрытой задаче — он появится в этом списке." status="empty" title="Счетов пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задачи</th><th scope="col">Плательщик</th><th scope="col">Статус</th>{canCancelInvoices ? <th scope="col"><span className="sr-only">Действия</span></th> : null}</tr></thead><tbody>{invoicePage.map((invoice) => <tr className="data-table__selectable" key={invoice.id} onClick={() => setOpenInvoice(invoice)}><td><strong>{invoice.number}</strong></td><td><InvoiceTaskLinks invoice={invoice} tasks={tasks} bare /></td><td>{invoice.payer.name}</td><td><StatusBadge tone={invoiceTone(invoice.status)}>{invoiceLabel[invoice.status]}</StatusBadge></td>{canCancelInvoices ? <td onClick={(event) => event.stopPropagation()}>{invoice.status === "draft" || invoice.status === "issued" ? <div className="table-actions"><Button className="button--compact" onClick={() => setCancelling(invoice)} variant="ghost">Отменить счёт</Button></div> : null}</td> : null}</tr>)}</tbody></table></div>}{invoices.length ? <RegistryPagination alwaysShow ariaLabel="Страницы счетов" onPageChange={setInvoicePageIndex} onPageSizeChange={(size) => { setInvoicePageSize(size); setInvoicePageIndex(0); }} pageIndex={invoicePageShown} pageSize={invoicePageSize} total={invoices.length} /> : null}</section> : null}
     {/* Счёт не удаляют, а отменяют (0024): он остаётся в списке, задачи можно выставить снова. */}
     <ConfirmationDialog cancelLabel="Не отменять" confirmLabel="Отменить счёт" description={cancelling ? <>Счёт {cancelling.number} останется в списке со статусом «Отменён», его задачи можно будет выставить в новый счёт. Вернуть отменённый счёт в работу нельзя.</> : null} onConfirm={async () => { if (!cancelling) return; await m2Api.cancelInvoice(cancelling.id); toast.success(`Счёт ${cancelling.number} отменён`); void reloadInvoiceTasks().catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Счёт отменён, но список не обновился. Обновите страницу.")); }} onOpenChange={(open) => { if (!open) setCancelling(null); }} open={Boolean(cancelling)} title={cancelling ? `Отменить счёт ${cancelling.number}?` : "Отменить счёт?"} /></>;
+}
+
+/** Задачи счёта ссылками: на доске — «Задачи: …» внизу карточки, в списке — просто номера. */
+function InvoiceTaskLinks({ invoice, tasks, bare = false }: { readonly invoice: InvoiceApiRecord; readonly tasks: readonly TaskApiRecord[]; readonly bare?: boolean }) {
+  if (!invoice.taskIds.length) return bare ? <>—</> : <small>Без задач</small>;
+  const links = invoice.taskIds.map((id, index) => <React.Fragment key={id}>{index ? ", " : null}<EntityLink target={{ kind: "task", id }}>{tasks.find((task) => task.id === id)?.number ?? "задача"}</EntityLink></React.Fragment>);
+  return bare ? <>{links}</> : <small>Задачи: {links}</small>;
 }
 
 function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, entityRoute = {}, onReturnToEquipment, onTaskRouteChange, taskDrill, onOpenTasks }: {

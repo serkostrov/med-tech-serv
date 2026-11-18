@@ -30,7 +30,9 @@ interface ColumnState<Item> {
 
 export const STATUS_BOARD_PAGE_SIZE = 30;
 
-export function StatusBoard<Item>({ columns, load, queryKey, itemKey, renderCard, onOpen, label, emptyText = "Здесь пока пусто.", pageSize = STATUS_BOARD_PAGE_SIZE, focusKey }: {
+export function StatusBoard<Item>({ columns, load, queryKey, itemKey, renderCard, renderLinks, onOpen, label, emptyText = "Здесь пока пусто.", pageSize = STATUS_BOARD_PAGE_SIZE, focusKey }: {
+  /** Ссылки внизу карточки (задачи, инженер): вне кнопки карточки, у них свой переход. */
+  readonly renderLinks?: (item: Item) => ReactNode;
   /** Колонка, к которой доска прокручивается при открытии (текущий месяц в плане ТО). */
   readonly focusKey?: string;
   readonly columns: readonly StatusBoardColumn[];
@@ -95,6 +97,7 @@ export function StatusBoard<Item>({ columns, load, queryKey, itemKey, renderCard
         {page?.loading ? <p className="task-board__empty">Загружаем…</p> : null}
         {items.map((item) => <article className="task-board-card status-board-card" key={itemKey(item)}>
           <button className="task-board-card__open" onClick={() => onOpen(item)} type="button">{renderCard(item)}</button>
+          {renderLinks ? <div className="status-board-card__links">{renderLinks(item)}</div> : null}
         </article>)}
         {!page?.loading && items.length === 0 && !page?.error ? <p className="task-board__empty">{column.outside ? "Не входит в отбор" : emptyText}</p> : null}
         {page?.error ? <p className="task-board__empty">{page.error}</p> : null}

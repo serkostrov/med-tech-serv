@@ -9657,3 +9657,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Таблица в карточке обрезает углы; открытый список в её шапке (статус КП) не должен обрезаться. */
 .card:has(.multi-select__panel), .data-table-shell:has(.multi-select__panel) { overflow: visible; }
 .multi-select__panel--up { top: auto; bottom: 100%; margin-top: 0; margin-bottom: 4px; }
+
+/* Ссылки внизу карточки доски (задачи счёта): вне кнопки карточки, свой переход (18.11). */
+.status-board-card__links { padding: 0 12px 10px; color: var(--color-muted); font-size: 12px; }
+.status-board-card__links small { font-size: 12px; }
