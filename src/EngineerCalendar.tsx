@@ -492,7 +492,7 @@ export function EngineerCalendar({ ownOnly = false, onOpenTask }: {
     <section aria-labelledby="engineer-calendar-title" className="card card--table engineer-calendar">
       <CardHeader
         headingId="engineer-calendar-title"
-        meta={`${formatRussianCount(calendar.days.length, ["день", "дня", "дней"])} · ${formatRussianCount(calendar.totals.taskCount, ["задача", "задачи", "задач"])}${calendar.totals.undatedTaskCount ? ` · без срока: ${calendar.totals.undatedTaskCount}` : ""}`}
+        meta={`${formatRussianCount(calendar.days.length, ["день", "дня", "дней"])}${calendar.totals.undatedTaskCount ? ` · без срока: ${calendar.totals.undatedTaskCount}` : ""}`}
         title="Календарь загрузки"
       />
       {loadError && calendar.rows.length === 0

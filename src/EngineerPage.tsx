@@ -163,7 +163,7 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
           {group.items.map((task) => <tr key={task.id}>
             <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
             <td>{task.equipmentId ? <EntityLink target={{ kind: "equipment", id: task.equipmentId }}>{equipmentText(task)}</EntityLink> : "—"}</td>
-            <td>{group.key === "done" ? formatDisplayDate(task.completedAt ?? task.visitDate) || "—" : <>{task.periodTo ? `до ${formatDisplayDate(task.periodTo)}` : "—"}{task.isOverdue ? <small className="danger-text"> · просрочена</small> : null}</>}</td>
+            <td className="cell-date">{group.key === "done" ? formatDisplayDate(task.completedAt ?? task.visitDate) || "—" : <>{task.periodTo ? `до ${formatDisplayDate(task.periodTo)}` : "—"}{task.isOverdue ? <small className="danger-text"> · просрочена</small> : null}</>}</td>
             <td><StatusBadge tone={STATUS_TONE[task.status] ?? "neutral"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
           </tr>)}
         </tbody></table></div>}

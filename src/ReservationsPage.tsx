@@ -259,7 +259,8 @@ export function ReservationsPage() {
       title="Резервы"
       titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать резервы" onValueChange={changeView} value={view} />}
     />
-    {view === "board" || tab === "active" ? <div className="metric-grid metric-grid--three">
+    {/* На доске те же числа в заголовках колонок — карточки сверху только у списка. */}
+    {view === "list" && tab === "active" ? <div className="metric-grid metric-grid--three">
       <MetricCard icon="inventory" label="Ждут сборки" tone="yellow" value={counting ? "…" : String(summary.toCollect)} />
       <MetricCard icon="reservations" label="Собраны, можно выдавать" value={counting ? "…" : String(summary.ready)} />
       <MetricCard icon="engineers" label="У инженеров" tone="purple" value={counting ? "…" : String(summary.withEngineers)} />
@@ -283,9 +284,9 @@ export function ReservationsPage() {
         />
         : <>
           <p className="reservation-board__note">{canWrite
-            ? "Перенесите карточку в соседнюю колонку, чтобы собрать запчасть, выдать её инженеру или принять обратно."
-            : "Доска только показывает: собирать и выдавать запчасти может кладовщик."
-          } В «Установлена» и «Возвращена» видно последние сто закрытых резервов; снятые резервы и остальные закрытые — в списке, на вкладке «Закрытые».</p>
+            ? "Перенесите карточку в соседнюю колонку: собрать, выдать инженеру, принять обратно."
+            : "Собирать и выдавать запчасти может кладовщик."
+          } Старые закрытые — в «Списке».</p>
           <ReservationBoard busyId={busyId} canWrite={canWrite} items={visible} loading={loading} onAction={runFromRow} />
         </>}
     </> : tab === "engineers" ? <DataTableShell

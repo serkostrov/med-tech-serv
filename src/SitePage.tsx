@@ -40,7 +40,7 @@ function TaskRows({ tasks, done }: { readonly tasks: readonly TaskApiRecord[]; r
       <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
       <td>{task.equipmentId ? <EntityLink target={{ kind: "equipment", id: task.equipmentId }}>{equipmentText(task)}</EntityLink> : "—"}</td>
       <td>{task.engineerId ? <EntityLink target={{ kind: "engineer", id: task.engineerId }}>{task.engineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>
-      <td>{done ? formatDisplayDate(task.completedAt ?? task.visitDate) || "—" : <>{task.periodTo ? `до ${formatDisplayDate(task.periodTo)}` : "—"}{task.isOverdue ? <small className="danger-text"> · просрочена</small> : null}</>}</td>
+      <td className="cell-date">{done ? formatDisplayDate(task.completedAt ?? task.visitDate) || "—" : <>{task.periodTo ? `до ${formatDisplayDate(task.periodTo)}` : "—"}{task.isOverdue ? <small className="danger-text"> · просрочена</small> : null}</>}</td>
       <td><StatusBadge tone={STATUS_TONE[task.status] ?? "neutral"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
     </tr>)}
   </tbody></table></div>;

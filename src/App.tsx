@@ -57,6 +57,7 @@ import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { EquipmentPlanTab, MaintenancePlanPage } from "./MaintenancePlan.js";
 import { SitePage } from "./SitePage.js";
+import { nameRepeats } from "./name-repeats.js";
 import { attentionFilter, taskAttentionItems, type TaskAttentionCounts, type TaskAttentionKey } from "./task-attention.js";
 import { EQUIPMENT_SPEND_PERIODS, equipmentSpendEmptyText, equipmentSpendLines, equipmentSpendRange, type EquipmentSpend, type EquipmentSpendPeriod } from "./equipment-spend.js";
 import { assertNotFutureCompanyMoment, companyDateText, companyDateTimeText, companyDateTimeToIso, companyTime, companyToday, isFutureCompanyDate, taskCalendarDate, taskPeriodProblem } from "./task-dates.js";
@@ -2780,8 +2781,13 @@ function EquipmentCard({
             </dl>
             <dl>
               <div><dt>Площадка</dt><dd>{placeUnset ? <span className="is-empty">Не указана</span> : <EntityLink target={record.siteId ? { kind: "site", id: record.siteId } : undefined}>{record.place}</EntityLink>}{readOnly ? null : <button className="text-button" onClick={() => setChangeKind("site_change")} type="button">{placeUnset ? "Указать" : "Сменить"}</button>}</dd></div>
-              <div><dt>Организация</dt><dd>{organizationUnset ? <span className="is-empty">Не указана</span> : record.organization}</dd></div>
-              {readOnly ? null : <div><dt>Плательщик</dt><dd>{payerUnset ? <span className="is-empty">Не указан</span> : record.payer}<button className="text-button" onClick={() => setChangeKind("payer_change")} type="button">{payerUnset ? "Указать" : "Сменить"}</button></dd></div>}
+              {/* Организация и плательщик часто одно и то же юрлицо: тогда одна строка вместо двух одинаковых. */}
+              {!readOnly && !organizationUnset && !payerUnset && nameRepeats(record.payer, record.organization)
+                ? <div><dt>Организация и плательщик</dt><dd>{record.payer}<button className="text-button" onClick={() => setChangeKind("payer_change")} type="button">Сменить плательщика</button></dd></div>
+                : <>
+                  <div><dt>Организация</dt><dd>{organizationUnset ? <span className="is-empty">Не указана</span> : record.organization}</dd></div>
+                  {readOnly ? null : <div><dt>Плательщик</dt><dd>{payerUnset ? <span className="is-empty">Не указан</span> : record.payer}<button className="text-button" onClick={() => setChangeKind("payer_change")} type="button">{payerUnset ? "Указать" : "Сменить"}</button></dd></div>}
+                </>}
             </dl>
             <dl>
               <div><dt>Счётчик</dt><dd>{record.lastMeterReading === undefined ? <span className="is-empty">Нет показаний</span> : record.lastMeterReading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}<small>обновляется после закрытия задачи</small></dd></div>
@@ -3180,7 +3186,8 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
           <span className="task-board-card__top">S/N {record.serial}</span>
           <strong>{record.manufacturer} {record.model}</strong>
           <small>{record.place}</small>
-          {record.payer !== "Не указан" ? <span className="task-board-card__foot"><span className="task-board-card__eng">{record.payer}</span></span> : null}
+          {/* Плательщик, повторяющий площадку, не показываем (встреча 18.11: «дублирующая информация»). */}
+          {record.payer !== "Не указан" && !nameRepeats(record.payer, record.place) ? <span className="task-board-card__foot"><span className="task-board-card__eng">{record.payer}</span></span> : null}
         </>}
       /> : null}
       {registryView === "list" ? <section className="card card--table" aria-labelledby="equipment-table-title">
@@ -3715,11 +3722,12 @@ function FinancePage() {
         {payerOverridden ? <label>Почему другой плательщик *<AutoTextarea name="payerOverrideReason" required rows={2} /></label> : null}
       </div>
     </DialogForm>
-    <div className="metric-grid metric-grid--three">
+    {/* На доске те же числа стоят в заголовках колонок: карточки сверху нужны только списку. */}
+    {invoiceView === "list" ? <div className="metric-grid metric-grid--three">
       <MetricCard detail="ещё не выставлены" icon="finance" label="Черновики счетов" tone="blue" value={String(invoices.filter((item) => item.status === "draft").length)} />
       <MetricCard detail="ожидают передачи" icon="mail" label="Выставлено" tone="purple" value={String(invoices.filter((item) => item.status === "issued").length)} />
       <MetricCard detail="передано в 1С" icon="check" label="Закрыто" tone="green" value={String(invoices.filter((item) => item.status === "transferred_to_1c").length)} />
-    </div>
+    </div> : null}
     {invoiceView === "board" ? <StatusBoard<InvoiceApiRecord>
       columns={INVOICE_BOARD_COLUMNS}
       emptyText="Счетов в этом статусе нет."

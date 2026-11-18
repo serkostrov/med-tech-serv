@@ -9607,3 +9607,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .equipment-model-parts li { padding: 8px 12px; border: 1px solid var(--color-border-soft); border-radius: 9px; }
 .part-card__alias-form .ui-select { flex: 1 1 260px; min-width: 220px; }
 
+/* Разбор на простоту (встреча 18.11): номера, артикулы и даты в таблицах не рвутся посередине. */
+.stock-documents-table td[data-label="Номер"], .stock-documents-table td[data-label="Дата"] { white-space: nowrap; }
+.data-table td:first-child > .entity-link strong, .data-table td:first-child > .text-button { white-space: nowrap; }
+.inventory-table__article, .data-table td > .entity-link > strong { white-space: nowrap; }
+.engineer-page__table td.cell-date { white-space: nowrap; }
