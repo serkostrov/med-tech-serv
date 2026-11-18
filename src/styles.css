@@ -9493,3 +9493,40 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .mail-compose__count { font-variant-numeric: tabular-nums; }
 .mail-compose__actions { display: flex; gap: 8px; }
 @media (max-width: 640px) { .mail-compose__actions { width: 100%; } .mail-compose__actions > * { flex: 1; } }
+
+/* Поиск в выборе инженера: появляется, когда инженеров больше 10 (встреча 18.11). */
+.engineer-picker-search { display: grid; gap: 8px; }
+.engineer-picker-search__input { width: 100%; min-height: 36px; padding: 0 12px; border: 1px solid var(--color-border); border-radius: var(--radius-md); background: var(--color-surface); font: inherit; font-size: 14px; }
+.engineer-picker-search__input:focus { outline: 2px solid color-mix(in srgb, var(--color-accent) 35%, transparent); outline-offset: 1px; }
+
+/* Фильтр с выбором нескольких значений (встреча 18.11). */
+.multi-select { position: relative; display: grid; gap: 4px; min-width: 0; }
+.multi-select__label { color: var(--color-muted); font-size: 12px; font-weight: 600; }
+.multi-select__trigger { display: flex; align-items: center; justify-content: space-between; gap: 6px; width: 100%; min-height: 38px; padding: 7px 10px; border: 1px solid var(--color-border); border-radius: 9px; background: var(--color-surface); color: var(--color-ink); font: inherit; font-size: 14px; text-align: left; cursor: pointer; }
+.multi-select__trigger > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.multi-select__trigger svg { flex: none; color: var(--color-muted); }
+.multi-select__trigger--active { border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border)); background: var(--color-accent-soft); color: var(--color-accent-dark); font-weight: 600; }
+.multi-select__panel { position: absolute; z-index: 40; top: 100%; left: 0; display: grid; gap: 6px; width: max(100%, 260px); margin-top: 4px; padding: 8px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: 0 10px 28px rgb(23 35 44 / 16%); }
+.multi-select__search { width: 100%; min-height: 34px; padding: 0 10px; border: 1px solid var(--color-border); border-radius: 8px; font: inherit; font-size: 13px; }
+.multi-select__options { display: grid; gap: 1px; max-height: 280px; overflow: auto; }
+.filter-bar .multi-select__option, .multi-select__option { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: 7px; color: var(--color-ink); font-size: 13px; font-weight: 500; cursor: pointer; }
+.multi-select__option:hover { background: var(--color-canvas); }
+.multi-select__option--all { border-bottom: 1px solid var(--color-border-soft); border-radius: 7px 7px 0 0; }
+.filter-bar .multi-select__option input[type="checkbox"], .multi-select__option input[type="checkbox"] { flex: none; width: 16px; height: 16px; min-height: 0; margin: 0; padding: 0; accent-color: var(--color-accent); }
+.multi-select__empty { margin: 4px 8px; color: var(--color-muted); font-size: 13px; }
+.multi-select__footer { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 6px 4px 0; border-top: 1px solid var(--color-border-soft); color: var(--color-muted); font-size: 12px; }
+.multi-select__footer button { padding: 5px 12px; border: 0; border-radius: 7px; background: var(--color-accent); color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.filter-bar--v2 .filter-bar__panel .multi-select__label { font-size: 12px; color: var(--color-muted); }
+
+/* Вид работ в задаче: все виды кнопками, нажатые выбраны (встреча 18.11). */
+.work-types-picker { display: grid; gap: 6px; }
+.work-types-picker__label { color: var(--color-ink); font-size: 12px; font-weight: 600; }
+.work-types-picker__chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.work-types-picker__chip { display: inline-flex; align-items: center; gap: 5px; min-height: 32px; padding: 5px 12px; border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface); color: var(--color-ink-soft); font: inherit; font-size: 13px; font-weight: 600; cursor: pointer; }
+.work-types-picker__chip:hover { border-color: color-mix(in srgb, var(--color-accent) 45%, var(--color-border)); color: var(--color-accent-dark); }
+.work-types-picker__chip.is-selected { border-color: var(--color-accent); background: var(--color-accent); color: #fff; }
+.work-types-picker small { color: var(--color-muted); font-size: 12px; }
+.work-types-picker small.work-types-picker__error { color: var(--color-danger); }
+.filter-bar__field { min-width: 0; }
+.multi-select__trigger { min-width: 0; max-width: 100%; }
+.multi-select__trigger > span { min-width: 0; flex: 1 1 auto; }

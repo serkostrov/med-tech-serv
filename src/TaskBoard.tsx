@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState, type DragEvent, type ReactNode, type UIEvent } from "react";
 import { BoardScroller } from "./BoardScroller.js";
+import { filterValues } from "./filter-values.js";
 import type { EquipmentApiRecord, ReferenceCatalogValue, TaskApiRecord } from "./m2-api.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES, TASK_STATUS_TRANSITIONS } from "./domain/task-status.js";
 import { toast, type StatusTone } from "./ui.js";
@@ -201,11 +202,12 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
   // с подписью «Не входит в отбор» (просьба 17.11: «почему не полностью доска показывается»).
   const columns = useMemo(() => [...activeStatuses, ...missing].filter((status) => {
     const code = status.code ?? status.id;
-    if (visibleStatus && code === visibleStatus) return true;
+    if (filterValues(visibleStatus).includes(code)) return true;
     if (!showCompleted && isCompletedBoardStatus(status)) return false;
     return true;
   }), [activeStatuses, missing, showCompleted, visibleStatus]);
-  const outsideSelection = (code: string) => Boolean(visibleStatus) && code !== visibleStatus;
+  // Отбор по статусам (можно несколько): остальные колонки видны бледными, без карточек.
+  const outsideSelection = (code: string) => filterValues(visibleStatus).length > 0 && !filterValues(visibleStatus).includes(code);
   const [pages, setPages] = useState<Readonly<Record<string, ColumnPage>>>({});
   // Для обновления колонок после переноса: свежие данные, номер изменения каждой колонки,
   // сколько переносов в ней ещё идёт и номер загрузки доски (меняется вместе с фильтрами).

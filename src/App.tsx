@@ -88,6 +88,8 @@ import { EquipmentFolderPicker } from "./EquipmentFolderPicker.js";
 import { preselectedEngineerId } from "./engineer-competencies.js";
 import { rankAssignmentCandidates } from "./engineer-calendar.js";
 import { EngineerPicker } from "./EngineerPicker.js";
+import { MultiSelect, WorkTypesPicker } from "./MultiSelect.js";
+import { filterValues, joinFilterValues } from "./filter-values.js";
 import { PartsMultiPicker, type SelectedTaskPart } from "./PartsMultiPicker.js";
 import { AccessAdminPage } from "./AccessAdminPage.js";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
@@ -268,37 +270,6 @@ function TaskTable({ tasks, equipment, engineers, onOpen, selectedTaskIds, onTog
   );
 }
 
-/**
- * Ещё виды работ к основному (встреча 16.11: «инсталляция и ремонт в одной задаче»).
- * Чипы с крестиком и список «Добавить вид работ»; основной в список не попадает.
- * В счёте у каждого вида будет своя строка по своей цене — это и написано под полем.
- */
-function ExtraWorkTypesField({ value, onChange, mainCode, workTypes }: {
-  readonly value: readonly string[];
-  readonly onChange: (next: readonly string[]) => void;
-  readonly mainCode: string;
-  readonly workTypes: readonly ReferenceCatalogValue[];
-}) {
-  const codeOf = (item: ReferenceCatalogValue) => item.code ?? item.id;
-  const nameOf = (code: string) => workTypes.find((item) => codeOf(item) === code)?.name ?? code;
-  const shown = value.filter((code) => code !== mainCode);
-  const available = workTypes.filter((item) => item.isActive && codeOf(item) !== mainCode && !shown.includes(codeOf(item)));
-  return <div className="extra-work-types field-wide">
-    <span className="extra-work-types__label">Ещё виды работ</span>
-    <div className="extra-work-types__chips">
-      {shown.map((code) => <span className="extra-work-types__chip" key={code}>
-        {nameOf(code)}
-        <button aria-label={`Убрать «${nameOf(code)}»`} onClick={() => onChange(shown.filter((item) => item !== code))} type="button">×</button>
-      </span>)}
-      {available.length ? <Select aria-label="Добавить вид работ" onChange={(event) => { if (event.target.value) onChange([...shown, event.target.value]); }} value="">
-        <option value="">+ Добавить вид работ</option>
-        {available.map((item) => <option key={item.id} value={codeOf(item)}>{item.name}</option>)}
-      </Select> : null}
-    </div>
-    <small>Если в задаче несколько работ — например, инсталляция и ремонт. В счёте у каждой будет своя строка по своей цене.</small>
-  </div>;
-}
-
 function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], canAssignEngineer = false, initialTitle = "", initialWorkTypeCode, initialComment = "", initialEquipment, mail, onOpenChange, onCreated, onEquipmentAttached }: {
   readonly open: boolean;
   /** Инженеры для необязательного назначения сразу при создании. */
@@ -324,6 +295,9 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
   const [equipmentId, setEquipmentId] = useState("");
   const [workTypeCode, setWorkTypeCode] = useState(defaultWorkType);
   const [extraWorkTypes, setExtraWorkTypes] = useState<readonly string[]>([]);
+  // На экране виды работ равны; первый выбранный база хранит как вид работ задачи.
+  const selectedWorkTypes = workTypeCode ? [workTypeCode, ...extraWorkTypes.filter((code) => code !== workTypeCode)] : extraWorkTypes;
+  const changeWorkTypes = (next: readonly string[]) => { setWorkTypeCode(next[0] ?? ""); setExtraWorkTypes(next.slice(1)); };
   const [priority, setPriority] = useState<"planned" | "urgent">("planned");
   const [initiatorContactId, setInitiatorContactId] = useState("");
   const [siteContactId, setSiteContactId] = useState("");
@@ -552,6 +526,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
     const periodProblem = taskPeriodProblem({ periodFrom, periodTo, ...(callDate ? { callDate } : {}) });
     if (periodProblem) return fail(periodProblem);
     if (callDate && isFutureCompanyDate(callDate)) return fail("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
+    if (!workTypeCode) return fail("Выберите вид работ: нажмите на один или несколько видов");
     const comment = String(data.get("comment") ?? "").trim();
     const workModifier = String(data.get("workModifier") ?? "");
     setBusy(true);
@@ -664,8 +639,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
       </label>
       <h3 className="task-form-step field-wide"><span>3</span>Что сделать</h3>
       <label className="field-wide">Название задачи *<input defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, не включается анализатор" required /></label>
-      <label>Вид работ *<Select onChange={(event) => setWorkTypeCode(event.target.value)} required value={workTypeCode}>{activeWorkTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
-      <ExtraWorkTypesField mainCode={workTypeCode} onChange={setExtraWorkTypes} value={extraWorkTypes} workTypes={activeWorkTypes} />
+      <WorkTypesPicker onChange={changeWorkTypes} options={activeWorkTypes.map((item) => ({ value: item.code ?? item.id, label: item.name }))} value={selectedWorkTypes} />
       {/* Гарантию решает координатор при создании: инженер этого может и не знать (встреча 16.11). */}
       <label>Гарантия<Select defaultValue="" name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label>
       <label className="task-priority-check">
@@ -832,7 +806,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
   const [actRowsEditing, setActRowsEditing] = useState(false);
   const [resultEditing, setResultEditing] = useState(false);
   const [overviewEditing, setOverviewEditing] = useState(false);
-  const [editExtraWorkTypes, setEditExtraWorkTypes] = useState<readonly string[]>([]);
+  const [editWorkTypes, setEditWorkTypes] = useState<readonly string[]>([]);
   // Вкладки карточки: свойства, работа и акт (результат и файлы), запчасти, письмо клиента, история.
   // «Свойства» — вкладка, а не правая колонка (просьба 17.11); инженер сразу попадает в «Работу и акт».
   const [detailTab, setDetailTab] = useState<"props" | "work" | "parts" | "history" | "mail">(initialTab === "history" ? "history" : initialTab === "parts" ? "parts" : initialTab === "mail" ? "mail" : initialTab === "overview" && !card.isTaskEngineer ? "props" : "work");
@@ -1041,6 +1015,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       const visitValue = String(data.get("visitDate") ?? "").trim();
       const visitDate = visitValue ? taskCalendarDate(visitValue) : undefined;
       if (isFutureCompanyDate(callDate)) throw new Error("Дата вызова не может быть из будущего: заявка не могла поступить позже сегодняшнего дня");
+      if (editWorkTypes.length === 0) throw new Error("Выберите хотя бы один вид работ");
       const periodProblem = taskPeriodProblem({ periodFrom, periodTo, callDate });
       if (periodProblem) throw new Error(periodProblem);
       if (visitDate && visitDate < callDate) throw new Error("Дата выезда не может быть раньше даты вызова");
@@ -1053,10 +1028,10 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       } : {};
       await m2Api.updateTaskOverview(task.id, {
         title: String(data.get("title") ?? "").trim(),
-        workTypeCode: String(data.get("workTypeCode") ?? "").trim(),
+        workTypeCode: editWorkTypes[0] ?? "",
         priority: data.get("urgent") === "on" ? "urgent" : "planned",
         workModifier: (String(data.get("workModifier") ?? "") || null) as "G" | "N" | null,
-        extraWorkTypeCodes: editExtraWorkTypes.filter((code) => code !== String(data.get("workTypeCode") ?? "")),
+        extraWorkTypeCodes: editWorkTypes.slice(1),
         periodFrom,
         periodTo,
         callDate,
@@ -1489,7 +1464,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
         </> : null}
         {detailTab === "history" ? <section className="task-section" aria-label="История задачи"><TaskHistory journal={card.journal} /></section> : null}
         {detailTab === "props" ? <section aria-label="Свойства задачи" className="task-props task-props--tab">
-          <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setEditExtraWorkTypes(task.extraWorkTypeCodes ?? []); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
+          <header className="task-props__head"><h2>Свойства</h2>{canManageTask ? <Button onClick={() => { setFormError(null); setEditWorkTypes([...new Set([task.workTypeCode ?? card.workType?.code ?? "", ...(task.extraWorkTypeCodes ?? [])].filter(Boolean))]); setOverviewEditing(true); }} variant="ghost">Изменить</Button> : null}</header>
           <dl>
             <div><dt>Инженер</dt><dd>{card.engineer?.fullName ?? <span className="is-empty">Не назначен</span>}{canReassign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Сменить</button> : canAssign ? <button className="text-button" disabled={busy || suggestions.length === 0} onClick={() => setAssignDialogOpen(true)} type="button">Назначить</button> : null}</dd></div>
             <div><dt>Срок</dt><dd>{task.periodFrom || task.periodTo ? formatTaskDateRange(task.periodFrom, task.periodTo) : <span className="is-empty">Не указан</span>}</dd></div>
@@ -1555,7 +1530,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
       <FileDropField accept="image/*,video/*" emptyTitle="Перетащите фото и видео сюда" hint={`Нужно минимум ${MIN_CLOSURE_PHOTOS} фото с выезда, всего до 10 фото и 2 видео на задачу (уже есть ${photoCount} фото и ${videoCount} видео). Можно выбрать сразу несколько.`} multiple name="fieldMedia" title="Фото и видео с выезда" />
     </DialogForm>
     {partsEditing ? <Dialog footer={<><Button disabled={busy} onClick={() => setPartsEditing(false)} variant="secondary">Отмена</Button><Button busy={busy} form="task-parts-editor-form" type="submit">Сохранить позиции</Button></>} onOpenChange={setPartsEditing} open={partsEditing} size="lg" title="Использованные запчасти"><form className="task-parts-editor" id="task-parts-editor-form" onSubmit={(event) => void saveParts(event)}><div className="task-parts-editor__head"><span>Артикул</span><span>Наименование</span><span>Количество</span><span>Г/Н/Б</span><span /></div>{partDrafts.map((part, index) => <div className="task-parts-editor__row" key={part.key}><input aria-label={`Артикул позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { articleNumber: event.target.value })} required value={part.articleNumber} /><input aria-label={`Наименование позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { name: event.target.value })} required value={part.name} /><input aria-label={`Количество позиции ${index + 1}`} inputMode="decimal" min="0.001" onChange={(event) => updatePartDraft(index, { quantity: event.target.value })} required step="0.001" type="number" value={part.quantity} /><Select aria-label={`Состояние позиции ${index + 1}`} onChange={(event) => updatePartDraft(index, { condition: event.target.value as TaskPartPosition["condition"] })} value={part.condition}><option value="G">Г · гарантийная</option><option value="N">Н · новая</option><option value="B">Б · б/у</option></Select><button aria-label={`Удалить позицию ${index + 1}`} className="task-parts-editor__remove" onClick={() => setPartDrafts((current) => current.filter((_, partIndex) => partIndex !== index))} type="button">×</button></div>)}{partDrafts.length === 0 ? <p className="muted">Добавьте хотя бы одну позицию или сохраните пустой список.</p> : null}<button className="task-parts-add" onClick={addPartDraft} type="button">+ Добавить позицию</button></form></Dialog> : null}
-    <DialogForm busy={busy} description="Изменятся название, вид работ, гарантия, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><label>Вид работ<Select defaultValue={task.workTypeCode ?? card.workType?.code ?? ""} name="workTypeCode" required>{workTypes.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><ExtraWorkTypesField mainCode={task.workTypeCode ?? card.workType?.code ?? ""} onChange={setEditExtraWorkTypes} value={editExtraWorkTypes} workTypes={workTypes.filter((item) => item.isActive)} /><label>Гарантия<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
+    <DialogForm busy={busy} description="Изменятся название, вид работ, гарантия, срочность и даты заявки." error={formError} key={`overview-edit-${task.id}-${overviewEditing ? "open" : "closed"}`} onOpenChange={setOverviewEditing} onSubmit={saveOverview} open={overviewEditing} size="lg" submitLabel="Сохранить изменения" title="Основные параметры задачи"><label className="field-wide">Название<input defaultValue={task.title} maxLength={200} name="title" required /></label><WorkTypesPicker onChange={setEditWorkTypes} options={workTypes.filter((item) => item.isActive).map((item) => ({ value: item.code ?? item.id, label: item.name }))} value={editWorkTypes} /><label>Гарантия<Select defaultValue={task.workModifier ?? ""} name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label><label className="task-priority-check"><input defaultChecked={task.priority === "urgent"} name="urgent" type="checkbox" value="on" /><span className="task-priority-check__text"><strong>Срочная</strong><small>Реакция до 24 ч · иначе плановая</small></span></label><div className="dialog-form-row-3"><label>Дата вызова<DatePicker defaultValue={task.callDate?.slice(0, 10)} max={companyToday()} maxMessage="Заявка не могла поступить позже сегодняшнего дня" name="callDate" required /></label><label>Период с<DatePicker defaultValue={task.periodFrom?.slice(0, 10)} name="periodFrom" required /></label><label>Период по<DatePicker defaultValue={task.periodTo?.slice(0, 10)} name="periodTo" required /></label></div><label>Дата выезда<DatePicker defaultValue={task.visitDate?.slice(0, 10)} name="visitDate" /></label></DialogForm>
     <DialogForm busy={busy} danger={actionDialog === "cancel"} description={actionDialog === "cancel" ? "Задача будет отменена. Укажите причину — она попадёт в журнал." : "Заявка вернётся инженеру. Напишите, что нужно доработать."} onOpenChange={(open) => { if (!open) setActionDialog(null); }} onSubmit={async (event) => { event.preventDefault(); const comment = String(new FormData(event.currentTarget).get("comment") ?? ""); if (actionDialog && await perform(actionDialog, comment)) setActionDialog(null); }} open={actionDialog !== null} submitLabel={actionDialog === "cancel" ? "Отменить задачу" : "Вернуть инженеру"} title={actionDialog === "cancel" ? "Отмена задачи" : "Возврат на доработку"}><label className="field-wide">{actionDialog === "cancel" ? "Причина отмены" : "Что нужно доработать"}<AutoTextarea autoFocus maxLength={1000} name="comment" required rows={4} /></label></DialogForm>
     <Dialog
       busy={busy}
@@ -1859,10 +1834,21 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
   const [boardAssignEngineer, setBoardAssignEngineer] = useState("");
   const [boardAssignBusy, setBoardAssignBusy] = useState(false);
   const [boardAssignError, setBoardAssignError] = useState<string | null>(null);
+  // Тот же список, что в карточке задачи: компетенции, занятость в дни задачи и поиск, когда инженеров много.
+  const [boardSuggestions, setBoardSuggestions] = useState<readonly AssignmentSuggestionRecord[]>([]);
+  const [boardSuggestionsState, setBoardSuggestionsState] = useState<"loading" | "ready">("ready");
   const assignFromBoard = (task: TaskApiRecord) => new Promise<boolean>((resolve) => {
     setBoardAssignEngineer("");
     setBoardAssignError(null);
+    setBoardSuggestions([]);
+    setBoardSuggestionsState("loading");
     setBoardAssign({ task, resolve });
+    void m2Api.taskCard(task.id)
+      .then((card) => m2Api.taskAssignmentSuggestions(task.id, card.equipment?.manufacturer ?? "", card.equipment?.model, { periodFrom: card.task.periodFrom, periodTo: card.task.periodTo, visitDate: card.task.visitDate }))
+      .then((items) => setBoardSuggestions(rankAssignmentCandidates(items)))
+      // Подсказка не загрузилась — выбираем из простого списка инженеров.
+      .catch(() => setBoardSuggestions(engineers.map((engineer) => ({ engineerId: engineer.id, fullName: engineer.fullName, isAvailable: true, previouslyWorkedWithEquipment: false }))))
+      .finally(() => setBoardSuggestionsState("ready"));
   });
   const cancelBoardAssign = () => {
     const pending = boardAssign;
@@ -2034,7 +2020,7 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
     || appliedFilters.drillTitle);
   const loadBoardColumn = async (status: string, offset: number, limit: number) => {
     // Отбор по этапу: остальные колонки видны пустыми («Не входит в отбор»), запрос не нужен.
-    if (appliedFilters.status && status !== appliedFilters.status) return { items: [], total: 0, manualOrder: false };
+    if (filterValues(appliedFilters.status).length && !filterValues(appliedFilters.status).includes(status)) return { items: [], total: 0, manualOrder: false };
     const page = await m2Api.tasksPage({
       ...taskPageQuery(appliedFilters),
       status,
@@ -2161,13 +2147,13 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
           <Button onClick={() => void applyFilters(EMPTY_TASK_FILTERS)} variant="secondary">Показать все задачи</Button>
         </div>
       </section> : null}
-      {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><label>Статус<Select onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value, overdue: false }))} value={filters.status}><option value="">Все</option>{taskStatuses.filter((item) => item.isActive).map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Инженер<Select onChange={(event) => setFilters((current) => ({ ...current, engineerId: event.target.value }))} value={filters.engineerId}><option value="">Все</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><label>Площадка<Select onChange={(event) => setFilters((current) => ({ ...current, siteId: event.target.value }))} value={filters.siteId}><option value="">Все</option>{siteNames.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}</Select></label><label>Вид работ<Select onChange={(event) => setFilters((current) => ({ ...current, workTypeCode: event.target.value }))} value={filters.workTypeCode}><option value="">Все</option>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Гарантия<Select onChange={(event) => setFilters((current) => ({ ...current, guarantee: event.target.value }))} value={filters.guarantee}><option value="">Все</option><option value="G">Гарантийные</option><option value="none">Не гарантия</option><option value="N">Вина клиента</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
+      {registryView !== "mail" ? <FilterBar loading={loading} onReset={() => void applyFilters(EMPTY_TASK_FILTERS)} onSubmit={() => applyFilters()}><label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер или название" type="search" value={filters.search} /></label><MultiSelect label="Статус" onChange={(next) => setFilters((current) => ({ ...current, status: joinFilterValues(next), overdue: false }))} options={taskStatuses.filter((item) => item.isActive).map((item) => ({ value: item.code ?? item.id, label: item.name }))} value={filterValues(filters.status)} /><MultiSelect label="Инженер" onChange={(next) => setFilters((current) => ({ ...current, engineerId: joinFilterValues(next) }))} options={[{ value: "none", label: "Без инженера" }, ...engineers.map((engineer) => ({ value: engineer.id, label: engineer.fullName }))]} searchPlaceholder="Фамилия инженера" value={filterValues(filters.engineerId)} /><MultiSelect label="Площадка" onChange={(next) => setFilters((current) => ({ ...current, siteId: joinFilterValues(next) }))} options={siteNames.map((site) => ({ value: site.id, label: site.name }))} searchPlaceholder="Название площадки" value={filterValues(filters.siteId)} /><MultiSelect label="Вид работ" onChange={(next) => setFilters((current) => ({ ...current, workTypeCode: joinFilterValues(next) }))} options={workTypes.map((item) => ({ value: item.code ?? item.id, label: item.name }))} value={filterValues(filters.workTypeCode)} /><label>Срочность<Select onChange={(event) => setFilters((current) => ({ ...current, priority: event.target.value }))} value={filters.priority}><option value="">Все</option><option value="urgent">Срочные</option><option value="planned">Плановые</option></Select></label><label>Гарантия<Select onChange={(event) => setFilters((current) => ({ ...current, guarantee: event.target.value }))} value={filters.guarantee}><option value="">Все</option><option value="G">Гарантийные</option><option value="none">Не гарантия</option><option value="N">Вина клиента</option></Select></label><label>Период с<DatePicker onChange={(periodFrom) => setFilters((current) => ({ ...current, periodFrom }))} value={filters.periodFrom} /></label><label>Период по<DatePicker onChange={(periodTo) => setFilters((current) => ({ ...current, periodTo }))} value={filters.periodTo} /></label><label>Сортировка<Select onChange={(event) => setFilters((current) => ({ ...current, sort: event.target.value as TaskRegistryFilters["sort"] }))} value={filters.sort}><option value="updated_desc">Сначала обновлённые</option><option value="updated_asc">Сначала давно обновлённые</option><option value="deadline_asc">По сроку ↑</option><option value="deadline_desc">По сроку ↓</option></Select></label></FilterBar> : null}
 
       {registryView === "list" && selectedTaskIds.size > 0 ? <section className="card task-bulk-actions"><CardHeader meta={`Выбрано: ${selectedTaskIds.size}`} title="Действия с выбранными задачами" /><div className="task-bulk-actions__grid"><label>Инженер<Select aria-label="Инженер для выбранных задач" onChange={(event) => setBulkEngineerId(event.target.value)} value={bulkEngineerId}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label><Button busy={bulkBusy} busyLabel="Назначаем…" disabled={!bulkEngineerId} onClick={() => void bulkAssign()}>Назначить инженера</Button><label>Период с<DatePicker onChange={setBulkPeriodFrom} value={bulkPeriodFrom} /></label><label>Период по<DatePicker onChange={setBulkPeriodTo} value={bulkPeriodTo} /></label><Button busy={bulkBusy} busyLabel="Сохраняем…" disabled={!bulkPeriodFrom || !bulkPeriodTo} onClick={() => void bulkChangePeriod()} variant="secondary">Сменить срок</Button></div></section> : null}
 
       <DialogForm busy={boardAssignBusy} description="Задача встанет в «Назначена» на то место, куда вы её перенесли. Инженер получит уведомление." error={boardAssignError} onOpenChange={(open) => { if (!open) cancelBoardAssign(); }} onSubmit={(event) => void submitBoardAssign(event)} open={boardAssign !== null} submitLabel="Назначить" title={boardAssign ? `Назначить инженера · ${boardAssign.task.number}` : "Назначить инженера"}>
         {boardAssign ? <p className="form-hint">{boardAssign.task.title}</p> : null}
-        <label>Инженер<Select autoFocus onChange={(event) => setBoardAssignEngineer(event.target.value)} required value={boardAssignEngineer}><option value="">Выберите инженера</option>{engineers.map((engineer) => <option key={engineer.id} value={engineer.id}>{engineer.fullName}</option>)}</Select></label>
+        <EngineerPicker items={boardSuggestions} onChange={setBoardAssignEngineer} state={boardSuggestionsState} value={boardAssignEngineer} />
       </DialogForm>
       {registryView === "board" ? <TaskBoard engineers={engineers} equipment={equipment} loadColumn={loadBoardColumn} onMove={moveTaskOnBoard} {...(canAssignEngineer ? { onAssign: assignFromBoard } : {})} {...(canArrangeBoard && !boardFiltered ? { onReorder: saveBoardPositions } : {})} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} queryKey={`${JSON.stringify(appliedFilters)}#${boardRefresh}`} showCompleted={showCompletedBoard} statuses={taskStatuses} tasks={tasks} visibleStatus={appliedFilters.status} /> : registryView === "list" ? <div className="workspace-grid workspace-grid--tasks workspace-grid--single">
         <section className="card card--table" aria-labelledby="tasks-table-title">

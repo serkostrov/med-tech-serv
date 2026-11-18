@@ -534,7 +534,8 @@ export function FilterBar({
   // отличается от первого пункта списка («Все», «Сначала обновлённые»).
   useEffect(() => {
     const fieldsInForm = [...(formRef.current?.querySelectorAll<HTMLElement>(".filter-bar__field") ?? [])];
-    const count = fieldsInForm.filter((field) => [...field.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input:not([type=hidden]), select")].some((control) => {
+    // Выбор нескольких значений (MultiSelect) сам говорит, выбрано ли что-то.
+    const count = fieldsInForm.filter((field) => field.querySelector("[data-filter-active=\"true\"]") !== null || [...field.querySelectorAll<HTMLInputElement | HTMLSelectElement>("input:not([type=hidden]):not([type=checkbox]):not(.multi-select__search), select")].some((control) => {
       if (control instanceof HTMLSelectElement) return control.options.length > 0 && control.value !== (control.options[0]?.value ?? "");
       return control.value.trim() !== "";
     })).length;

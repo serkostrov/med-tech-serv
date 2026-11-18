@@ -1,3 +1,4 @@
+import { filterValues } from "./filter-values.js";
 import type { Permission, WorkingRole } from "./domain/access.js";
 import { availableTaskActions, type AvailableTaskAction } from "./domain/task-actions.js";
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
@@ -3176,6 +3177,7 @@ export class M2ApiClient {
       lt: (column: string, value: string) => T;
       not: (column: string, operator: string, value: string) => T;
       is: (column: string, value: null) => T;
+      in: (column: string, values: readonly string[]) => T;
     }>(request: T): T => {
       let next = request;
       // Период: задачи, срок которых пересекается с выбранным периодом.
@@ -3184,14 +3186,25 @@ export class M2ApiClient {
       if (query.overdue) {
         next = next.lt("deadline_to", companyToday()).not("status_code", "in", "(closed,cancelled)");
       }
-      if (query.status) next = next.eq("status_code", query.status);
-      if (query.engineerId === "none") next = next.is("engineer_id", null);
-      else if (query.engineerId) next = next.eq("engineer_id", query.engineerId);
+      // Фильтры с несколькими значениями приходят строкой через запятую (встреча 18.11).
+      const statuses = filterValues(query.status);
+      // Одно значение — прежний запрос «равно», несколько — «одно из».
+      if (statuses.length === 1) next = next.eq("status_code", statuses[0]!);
+      else if (statuses.length) next = next.in("status_code", statuses);
+      const engineerIds = filterValues(query.engineerId);
+      const namedEngineers = engineerIds.filter((id) => id !== "none");
+      if (engineerIds.includes("none") && namedEngineers.length) next = next.or(`engineer_id.is.null,engineer_id.in.(${namedEngineers.join(",")})`);
+      else if (engineerIds.includes("none")) next = next.is("engineer_id", null);
+      else if (namedEngineers.length === 1) next = next.eq("engineer_id", namedEngineers[0]!);
+      else if (namedEngineers.length) next = next.in("engineer_id", namedEngineers);
       if (query.equipmentId) next = next.eq("equipment_id", query.equipmentId);
       if (query.openOnly) next = next.not("status_code", "in", "(closed,cancelled)");
-      if (query.siteId) next = next.eq("site_id", query.siteId);
-      // Вид работ — основной или дополнительный (0060).
-      if (query.workTypeCode) next = next.or(`work_type_code.eq.${query.workTypeCode},extra_work_type_codes.cs.{${query.workTypeCode}}`);
+      const siteIds = filterValues(query.siteId);
+      if (siteIds.length === 1) next = next.eq("site_id", siteIds[0]!);
+      else if (siteIds.length) next = next.in("site_id", siteIds);
+      // Вид работ — основной или дополнительный (0060); любой из выбранных.
+      const workTypeCodes = filterValues(query.workTypeCode);
+      if (workTypeCodes.length) next = next.or(`work_type_code.in.(${workTypeCodes.join(",")}),extra_work_type_codes.ov.{${workTypeCodes.join(",")}}`);
       if (query.priority) next = next.eq("priority", query.priority);
       if (query.maintenancePlan !== undefined) next = next.eq("is_maintenance_plan", query.maintenancePlan ? "true" : "false");
       if (query.guarantee === "none") next = next.is("work_modifier", null);
