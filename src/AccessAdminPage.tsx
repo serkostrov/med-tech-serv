@@ -3,6 +3,7 @@ import type { AccessRoleResponse } from "./types.js";
 import type { Permission, WorkingRole } from "./domain/access.js";
 import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey, permissionsForBaseRole, permissionSummary, roleDisableText } from "./access-admin.js";
 import { m2Api, type AccessUserRecord } from "./m2-api.js";
+import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { NotificationChannelsField } from "./NotificationChannels.js";
 import { changedPreferences, preferenceMatrix, type NotificationPreferenceMatrix } from "./notification-channels.js";
 import { toTechnicalCode } from "./slug.js";
@@ -56,6 +57,8 @@ export function AccessAdminPage() {
   const [roles, setRoles] = useState<readonly AccessRoleResponse[]>([]);
   const [permissions, setPermissions] = useState<readonly Permission[]>([]);
   const [users, setUsers] = useState<readonly AccessUserRecord[]>([]);
+  const { pageSize: usersPageSize, setPageSize: setUsersPageSize } = usePageSize("staff");
+  const [usersPageIndex, setUsersPageIndex] = useState(0);
   // Кто смотрит список: себе вход не отключают, и кнопки «Отключить» у своей строки нет.
   const [viewerId, setViewerId] = useState("");
   // Роль, по которой считаются права самого вошедшего: её он не правит и не отключает.
@@ -86,6 +89,9 @@ export function AccessAdminPage() {
     return () => { alive = false; };
   }, [userEditor]);
   const selectedUserRole = roles.find((role) => role.key === userRoleKey);
+  // Сотрудники постранично (18.11), как письма и инженеры.
+  const usersPageShown = Math.min(usersPageIndex, Math.max(0, Math.ceil(users.length / usersPageSize) - 1));
+  const usersPage = users.slice(usersPageShown * usersPageSize, (usersPageShown + 1) * usersPageSize);
   const adminCount = activeAdminCount(users.map((user) => ({ id: user.id, isActive: user.isActive, role: user.role })));
   const permissionGroups = useMemo(() => {
     const groups = new Map<string, Permission[]>();
@@ -201,11 +207,11 @@ export function AccessAdminPage() {
     <PageTabs label="Сотрудники и роли" items={[{ value: "roles", label: "Роли", badge: roles.filter((role) => role.isActive).length }, { value: "users", label: "Сотрудники", badge: users.filter((user) => user.isActive).length }]} onValueChange={setTab} value={tab} />
     {loading && roles.length === 0 ? <ResourceState description="Подождите, сотрудники и роли сейчас появятся." status="loading" title="Загружаем доступ" /> : null}
     {!loading && tab === "roles" ? <section className="card card--table"><CardHeader meta={`Активных: ${roles.filter((role) => role.isActive).length} из ${roles.length}`} title="Роли" />{roles.length === 0 ? <ResourceState description="Добавьте роль, чтобы назначать её сотрудникам." status="empty" title="Ролей пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Роль</th><th>Тип</th><th>Права</th><th>Статус</th><th aria-label="Действия" /></tr></thead><tbody>{roles.map((role) => <tr key={role.key}><td><strong>{role.name}</strong>{role.key === viewerRoleKey ? <small>ваша роль</small> : null}{role.builtIn ? <small>системная</small> : null}</td><td>{baseRoleLabels[role.baseRole]}</td><td>{role.permissions.length}</td><td><StatusBadge tone={role.isActive ? "success" : "neutral"}>{role.isActive ? "Активна" : "Неактивна"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить роль" onClick={() => openRole(role)} />{role.key !== "admin" && canChangeRolePermissions(role.key, viewerRoleKey) ? <IconButton icon={role.isActive ? "disable" : "enable"} label={role.isActive ? "Отключить" : "Включить"} onClick={() => setPendingState({ kind: "role", id: role.key, label: role.name, isActive: role.isActive })} /> : null}</div></td></tr>)}</tbody></table></div>}</section> : null}
-    {!loading && tab === "users" ? <section className="card card--table"><CardHeader meta={`Активных: ${users.filter((user) => user.isActive).length} из ${users.length}`} title="Сотрудники" />{users.length === 0 ? <ResourceState description="Добавьте человека, чтобы он мог войти в систему." status="empty" title="Сотрудников пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Сотрудник</th><th>E-mail</th><th>Роль</th><th>Статус</th><th aria-label="Действия" /></tr></thead><tbody>{users.map((user) => {
+    {!loading && tab === "users" ? <section className="card card--table"><CardHeader meta={`Активных: ${users.filter((user) => user.isActive).length} из ${users.length}`} title="Сотрудники" />{users.length === 0 ? <ResourceState description="Добавьте человека, чтобы он мог войти в систему." status="empty" title="Сотрудников пока нет" /> : <div className="table-scroll"><table className="data-table"><thead><tr><th>Сотрудник</th><th>E-mail</th><th>Роль</th><th>Статус</th><th aria-label="Действия" /></tr></thead><tbody>{usersPage.map((user) => {
       // Запрет держит база (миграция 0035); здесь о нём говорят до подтверждения, а не после.
       const disableBlock = employeeDisableBlock(user, { id: viewerId, activeAdminCount: adminCount });
       return <tr key={user.id}><td><strong>{user.fullName}</strong>{disableBlock ? <small title={disableBlock.reason}>{disableBlock.note}</small> : null}</td><td>{user.email}</td><td>{roles.find((role) => role.key === (user.accessRoleKey ?? user.role))?.name ?? baseRoleLabels[user.role as WorkingRole] ?? "—"}</td><td><StatusBadge tone={user.isActive ? "success" : "neutral"}>{user.isActive ? "Активен" : "Неактивен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить" onClick={() => openUser(user)} />{disableBlock ? null : <IconButton icon={user.isActive ? "disable" : "enable"} label={user.isActive ? "Отключить" : "Включить"} onClick={() => setPendingState({ kind: "user", id: user.id, label: user.fullName, isActive: user.isActive })} />}</div></td></tr>;
-    })}</tbody></table></div>}</section> : null}
+    })}</tbody></table></div>}{users.length ? <RegistryPagination alwaysShow ariaLabel="Страницы сотрудников" onPageChange={setUsersPageIndex} onPageSizeChange={(size) => { setUsersPageSize(size); setUsersPageIndex(0); }} pageIndex={usersPageShown} pageSize={usersPageSize} total={users.length} /> : null}</section> : null}
 
     <DialogForm busy={saving} description={editedRole ? "Название и права применятся сразу." : "Новая роль появится в списке и её можно будет назначить сотруднику."} error={formError} key={roleEditor?.mode === "edit" ? roleEditor.key : "new-role"} onOpenChange={(open) => { if (!open) { setRoleEditor(null); setFormError(null); } }} onSubmit={saveRole} open={roleEditor !== null} size="lg" submitLabel={editedRole ? "Сохранить роль" : "Создать роль"} title={editedRole ? "Изменить роль" : "Новая роль"}>
       <div className="dialog-form-grid"><label className="dialog-form-grid__wide">Название<input defaultValue={editedRole?.name} name="name" required /></label><label>Тип роли<Select disabled={editedRole?.builtIn} name="baseRole" onChange={(event) => { const next = event.target.value; setRoleBase(next); if (!editedRole) setRolePermissions(permissionsForBaseRole(roles, next)); }} value={roleBase}>{Object.entries(baseRoleLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</Select>{!editedRole ? <small>Права подставятся как у роли «{baseRoleLabels[roleBase as WorkingRole] ?? roleBase}»</small> : null}</label></div>

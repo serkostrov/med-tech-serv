@@ -2,6 +2,7 @@ import { EntityLink } from "./entity-links.js";
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { PayerOption, SiteOption } from "./customer-selection.js";
 import { m2Api } from "./m2-api.js";
+import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { assertRequisites } from "./requisites.js";
 import {
@@ -54,6 +55,9 @@ export function CustomerReferencesPage() {
   // Раскрытые площадки: по умолчанию все свёрнуты, чтобы список читался целиком.
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set());
   const [search, setSearch] = useState("");
+  // Постранично (18.11). Хуки — до раннего выхода «загружаем»: порядок хуков не должен меняться.
+  const { pageSize: sitePageSize, setPageSize: setSitePageSize } = usePageSize("customers");
+  const [sitePageIndex, setSitePageIndex] = useState(0);
   // Во время поиска найденные площадки раскрыты; щелчок по заголовку сворачивает их.
   const [closedInSearch, setClosedInSearch] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => { setClosedInSearch(new Set()); }, [search]);
@@ -197,13 +201,15 @@ export function CustomerReferencesPage() {
     return haystack.includes(query);
   });
   const inactiveCount = sites.filter((site) => !site.isActive).length;
+  const sitePageShown = Math.min(sitePageIndex, Math.max(0, Math.ceil(visibleSites.length / sitePageSize) - 1));
+  const sitePage = visibleSites.slice(sitePageShown * sitePageSize, (sitePageShown + 1) * sitePageSize);
 
   return <>
     <div className="customer-references">
       <div className="registry-toolbar">
         <label className="registry-toolbar__search" htmlFor="customer-search">
           <span className="sr-only">Поиск клиентов</span>
-          <input id="customer-search" onChange={(event) => setSearch(event.target.value)} placeholder="Площадка, адрес, человек или ИНН" type="search" value={search} />
+          <input id="customer-search" onChange={(event) => { setSearch(event.target.value); setSitePageIndex(0); }} placeholder="Площадка, адрес, человек или ИНН" type="search" value={search} />
         </label>
         {inactiveCount > 0 ? <button aria-pressed={showInactive} className={`toggle-chip${showInactive ? " toggle-chip--on" : ""}`} onClick={() => setShowInactive((value) => !value)} type="button">Отключённые · {inactiveCount}</button> : null}
         <span className="registry-toolbar__spacer" />
@@ -215,7 +221,7 @@ export function CustomerReferencesPage() {
         : visibleSites.length === 0
           ? <ResourceState description="Измените поиск или покажите отключённые площадки." status="filtered-empty" title="Ничего не найдено" />
           : <div className="customer-site-list">
-          {visibleSites.map((site) => {
+          {sitePage.map((site) => {
             const people = sitePeople(site);
             const peopleOpen = query ? !closedInSearch.has(site.id) : collapsed.has(site.id);
             const activePeople = people.filter((person) => person.isActive).length;
@@ -302,13 +308,14 @@ export function CustomerReferencesPage() {
               </div> : null}
             </article>;
           })}
+          {/* Постранично (18.11), как письма и инженеры: площадок у сервиса сотни. */}
+          <RegistryPagination alwaysShow ariaLabel="Страницы клиентов" onPageChange={setSitePageIndex} onPageSizeChange={(size) => { setSitePageSize(size); setSitePageIndex(0); }} pageIndex={sitePageShown} pageSize={sitePageSize} total={visibleSites.length} />
         </div>}
 
       {orphanPayers.length > 0 ? <section className="customer-orphans card">
         <div className="customer-orphans__header">
           <div>
             <h2>Без площадки</h2>
-            <p>Старые записи. Привяжите к площадке — станут обычными людьми в блоке.</p>
           </div>
           <span className="muted">{formatRussianCount(orphanPayers.filter((item) => item.isActive).length, ["активная запись", "активные записи", "активных записей"])}</span>
         </div>
