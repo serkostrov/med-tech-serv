@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { m2Api } from "./m2-api.js";
 import { MultiSelect } from "./MultiSelect.js";
+import { EntityLink, type EntityTarget } from "./entity-links.js";
 import { filterValues, joinFilterValues } from "./filter-values.js";
 import {
   CardHeader,
@@ -141,7 +142,7 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
                         </button>
                         <small>{auditEntityLabel(event.entityType)}{event.outcome === "denied" ? " · отказано" : ""}</small>
                       </td>
-                      <td data-label="Где">{auditPlaceLabel(event)}{auditEntityTitle(event) ? <small>{auditEntityTitle(event)}</small> : null}</td>
+                      <td data-label="Где">{auditPlaceLabel(event)}{auditEntityTitle(event) ? <small>{auditEntityLink(event) ? <EntityLink target={auditEntityLink(event)}>{auditEntityTitle(event)}</EntityLink> : auditEntityTitle(event)}</small> : null}</td>
                       <td className="cell-wide" data-label="Что изменилось">{auditChangeSummary(event) || "—"}</td>
                     </tr>
                     {open ? <tr className="journal-table__detail" id={`journal-event-${event.id}`}><td colSpan={5}>
@@ -289,4 +290,11 @@ export function JournalsPage() {
     />
     {section === "changes" ? <ChangesJournal people={people} /> : <LoginsJournal people={people} />}
   </>;
+}
+
+/** Объект события ссылкой (18.11: «всё ссылками»): только сама задача или сам прибор, не их строки. */
+function auditEntityLink(event: { readonly entityType: string; readonly entityId: string; readonly tableName?: string }): EntityTarget | undefined {
+  if (event.entityType === "task" && event.tableName === "tasks") return { kind: "task", id: event.entityId };
+  if (event.entityType === "equipment" && event.tableName === "equipment") return { kind: "equipment", id: event.entityId };
+  return undefined;
 }

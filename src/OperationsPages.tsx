@@ -160,12 +160,8 @@ export function EngineersPage({ initialEngineerId, initialTab }: {
       title="Инженеры"
       titleAside={canSeeCalendar ? <ViewSwitch items={[{ value: "list", label: "Список" }, { value: "calendar", label: "Календарь" }]} label="Как показать инженеров" onValueChange={setView} value={view} /> : undefined}
     />
+    {/* 18.11: карточки с цифрами над списком убраны — те же числа стоят в строках инженеров. */}
     {view === "calendar" && canSeeCalendar ? <EngineerCalendar /> : <>
-    <div className="metric-grid metric-grid--three">
-      <MetricCard icon="engineers" label="Активные инженеры" value={String(active.length)} />
-      <MetricCard icon="tasks" label="Открытые задачи" tone="yellow" value={String(assigned)} />
-      <MetricCard icon="clock" label="Просроченные" tone="orange" value={String(overdue)} />
-    </div>
     <DataTableShell meta={formatRussianCount(engineers.length, ["человек", "человека", "человек"])} title="Загрузка">{loading && engineers.length === 0 ? <ResourceState description="Подождите, список инженеров сейчас появится." status="loading" title="Загружаем инженеров" /> : engineers.length === 0 ? <ResourceState description="Когда появятся сотрудники с ролью инженера, они отобразятся здесь." status="empty" title="Инженеров пока нет" /> : <div className="table-scroll engineer-load-scroll"><table className="data-table engineer-load-table"><thead><tr><th>Инженер</th><th>Компетенции</th><th>Загрузка</th><th className="numeric">Открытые</th><th className="numeric">В работе</th><th className="numeric">Просрочено</th><th>Состояние</th><th><span className="sr-only">Действия</span></th></tr></thead><tbody>{pageEngineers.map((engineer) => <tr className={engineer.isActive ? "" : "reference-admin-table__inactive"} key={engineer.id}><td className="engineer-load-table__wide" data-label="Инженер"><button className="entity-link engineer-load-table__name" onClick={() => openEngineer(engineer.id)} title="Открыть страницу инженера" type="button"><strong>{engineer.fullName}</strong></button>{engineer.hasOwnStock ? <small className="muted"> · свой склад</small> : null}</td><td className="engineer-load-table__wide" data-label="Компетенции"><CompetencyTags engineer={engineer} /></td><td className="engineer-load-table__wide" data-label="Загрузка"><div aria-label={`Загрузка: ${formatRussianCount(engineer.assignedTaskCount, ["задача", "задачи", "задач"])}`} className="load-cell"><span><i style={{ width: `${Math.max(4, engineer.assignedTaskCount / maxLoad * 100)}%` }} /></span></div></td><td className="numeric" data-label="Открытые">{engineer.assignedTaskCount}</td><td className="numeric" data-label="В работе">{engineer.inProgressTaskCount}</td><td className="numeric" data-label="Просрочено"><strong className={engineer.overdueTaskCount ? "danger-text" : ""}>{engineer.overdueTaskCount}</strong></td><td data-label="Состояние"><StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Неактивен" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge></td><td><div className="table-actions"><IconButton icon="edit" label="Изменить карточку" onClick={() => openEditor(engineer)} /></div></td></tr>)}</tbody></table></div>}{engineers.length ? <RegistryPagination alwaysShow ariaLabel="Страницы инженеров" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={shownPage} pageSize={pageSize} total={engineers.length} /> : null}</DataTableShell>
     </>}
     {editor}
@@ -655,7 +651,6 @@ export function ReportsPage({ onOpenTasks }: {
             value={String(report.metrics.closedCount)}
           />
           <MetricCard
-            detail={report.metrics.taskCount === 0 ? "нет открытых заявок" : report.metrics.overdueCount === 0 ? "все в сроке" : "срок уже вышел"}
             icon="clock"
             label="Просрочено"
             {...openMetric("overdue")}
@@ -663,7 +658,6 @@ export function ReportsPage({ onOpenTasks }: {
             value={String(report.metrics.overdueCount)}
           />
           <MetricCard
-            detail={report.metrics.taskCount === 0 ? "нет заявок за период" : openCount === 0 ? "все закрыты или отменены" : "ещё в работе"}
             icon="engineers"
             label="Открытые"
             {...openMetric("open")}
@@ -687,7 +681,7 @@ export function ReportsPage({ onOpenTasks }: {
                 <ReportBars empty="Нет разбивки по статусам." items={report.tasksByStatus} {...openCut("status")} />
               </section>
               <section className="card">
-                <CardHeader meta="что делали" title="Виды работ" />
+                <CardHeader title="Виды работ" />
                 <ReportBars empty="Виды работ за период не указаны." items={report.tasksByWorkType} {...openCut("work_type")} />
               </section>
               <section className="card analytics-grid__wide">

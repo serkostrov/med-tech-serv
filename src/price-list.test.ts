@@ -494,11 +494,12 @@ describe("прайс: экран и его место в приложении", 
     assert.doesNotMatch(page, /window\.(?:alert|confirm|prompt)\s*\(/u);
   });
 
-  it("рисуется до загрузки данных: заголовок, сводка и «идёт загрузка»", () => {
+  it("рисуется до загрузки данных: заголовок и «идёт загрузка», без карточек с цифрами", () => {
     const html = renderToStaticMarkup(createElement(PricePage));
     assert.match(html, /Прайс/u);
     assert.match(html, /Загружаем прайс/u);
-    assert.match(html, /Цены заданы/u);
+    // 18.11: карточки «Цены заданы / Без цены / Начнут действовать» над таблицей убраны.
+    assert.doesNotMatch(html, /Цены заданы/u);
     // Права ещё не прочитаны: кнопок правки на экране нет.
     assert.doesNotMatch(html, /Изменить выбранные/u);
   });

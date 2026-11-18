@@ -18,6 +18,7 @@ import { formatIsoCalendarDate } from "./date-format.js";
 import { formatRussianCount, russianCountForm } from "./equipment-changes.js";
 import { companyToday } from "./task-dates.js";
 import {
+  ALL_CATEGORIES_LABEL,
   MAX_PRICE,
   ZERO_PRICE_MESSAGE,
   PRICE_NOT_SET_HINT,
@@ -329,11 +330,6 @@ export function PricePage() {
       description="Цены по видам работ: что действует сейчас, с какой даты и как менялось раньше. Новая цена закрывает прошлую, история остаётся."
       title="Прайс"
     />
-    <div className="metric-grid metric-grid--three">
-      <MetricCard icon="finance" label="Цены заданы" value={counting ? "…" : String(withPrice)} />
-      <MetricCard icon="references" label="Без цены" tone="orange" value={counting ? "…" : String(withoutPrice)} />
-      <MetricCard detail="будущие цены" icon="clock" label="Начнут действовать" tone="purple" value={counting ? "…" : String(planned)} />
-    </div>
     <div className="registry-toolbar">
       <label className="registry-toolbar__search" htmlFor="price-search">
         <span className="sr-only">Поиск по прайсу</span>
@@ -388,7 +384,7 @@ export function PricePage() {
                         onChange={(event) => toggleSelected(line.key, event.target.checked)}
                         type="checkbox"
                       /></td> : null}
-                      <td><strong>{line.workTypeName}</strong><small>{line.guaranteeCategoryName}</small><code className="price-code" title="Код вида работ: по нему сверяют позицию со складом и бухгалтерией">{line.workTypeCode}</code></td>
+                      <td><strong>{line.workTypeName}</strong>{line.guaranteeCategoryName === ALL_CATEGORIES_LABEL ? null : <small>{line.guaranteeCategoryName}</small>}<code className="price-code" title="Код вида работ: по нему сверяют позицию со складом и бухгалтерией">{line.workTypeCode}</code></td>
                       <td className="numeric">{line.current
                         ? <strong>{priceLineAmountText(line)}</strong>
                         : <span className="is-empty">{priceLineAmountText(line)}</span>}</td>

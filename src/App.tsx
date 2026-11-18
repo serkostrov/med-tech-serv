@@ -3370,10 +3370,9 @@ function NotificationsPage() {
               const open = openId === notification.id;
               // Подпись под темой: ярлык события, если тема его не называет, и число попыток.
               // Когда нечего писать, подписи нет вовсе, а не пустая строка под заголовком.
-              const subtitle = [
-                eventLabelOutsideSubject(notification.subject, eventLabel[notification.eventCode] ?? "Событие склада"),
-                notification.attempts > 1 ? `попыток: ${notification.attempts}` : ""
-              ].filter(Boolean).join(" · ");
+              // 18.11: название события под темой повторяло её («Заявка … принята» / «Заявка принята»).
+              // Остаётся только число попыток, когда их было несколько.
+              const subtitle = notification.attempts > 1 ? `попыток: ${notification.attempts}` : "";
               return <React.Fragment key={notification.id}>
                 <tr className={`data-table__selectable${notification.status === "failed" ? " notification-table__failed" : ""}`} onClick={() => setOpenId(open ? null : notification.id)}>
                   <td className="notification-table__when">{formatDisplayDate(notification.createdAt, true)}</td>
@@ -3572,14 +3571,10 @@ function AdminReferencesPage() {
     <div className="reference-admin-layout">
       <aside className="card reference-admin-nav" aria-label="Доступные справочники">
         <CardHeader meta={formatRussianCount(catalogs.length, ["справочник", "справочника", "справочников"])} title="Разделы" />
-        <div>{catalogs.map((catalog) => <button aria-current={catalog.key === selected?.key ? "page" : undefined} className={catalog.key === selected?.key ? "reference-admin-nav__item reference-admin-nav__item--active" : "reference-admin-nav__item"} key={catalog.key} onClick={() => selectCatalog(catalog.key)} type="button"><span><strong>{catalog.label}</strong><small>{catalog.description}</small></span></button>)}</div>
+        <div>{catalogs.map((catalog) => <button aria-current={catalog.key === selected?.key ? "page" : undefined} className={catalog.key === selected?.key ? "reference-admin-nav__item reference-admin-nav__item--active" : "reference-admin-nav__item"} key={catalog.key} onClick={() => selectCatalog(catalog.key)} type="button"><span><strong>{catalog.label}</strong></span></button>)}</div>
       </aside>
       {selected ? <section className="card reference-admin-editor" aria-labelledby="reference-admin-title">
-        <CardHeader action={<Button icon="plus" onClick={beginCreate}>Добавить запись</Button>} headingId="reference-admin-title" meta={`${formatRussianCount(records.filter((record) => record.isActive).length, ["активная запись", "активные записи", "активных записей"])} · ${formatRussianCount(records.filter((record) => !record.isActive).length, ["неактивная", "неактивные", "неактивных"])}`} title={selected.label} />
-        <div className="reference-admin-hint">
-          {REFERENCE_CATALOG_USAGE[selected.key] ? <p><strong>Где используется.</strong> {REFERENCE_CATALOG_USAGE[selected.key]}</p> : null}
-          
-        </div>
+        <CardHeader action={<Button icon="plus" onClick={beginCreate}>Добавить запись</Button>} headingId="reference-admin-title" meta={[formatRussianCount(records.filter((record) => record.isActive).length, ["активная запись", "активные записи", "активных записей"]), records.some((record) => !record.isActive) ? formatRussianCount(records.filter((record) => !record.isActive).length, ["неактивная", "неактивные", "неактивных"]) : ""].filter(Boolean).join(" · ")} title={selected.label} />
         <div className="table-scroll"><table className="data-table reference-admin-table"><thead><tr><th scope="col">Наименование</th>{showParams ? <th scope="col">Параметры</th> : null}<th scope="col">Состояние</th><th scope="col"><span className="sr-only">Действия</span></th></tr></thead><tbody>{records.map((record, index) => {
           return <tr className={!record.isActive ? "reference-admin-table__inactive" : ""} key={record.id}>
             <td><strong>{record.name}</strong>{record.isBuiltin ? <small>встроенное значение</small> : null}</td>

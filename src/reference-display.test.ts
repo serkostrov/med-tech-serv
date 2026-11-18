@@ -90,7 +90,8 @@ describe("справочники: на экране названия, а не к
       readFile(new URL("./styles.css", import.meta.url), "utf8")
     ]);
     // Код остаётся для сверки со складом и бухгалтерией, но отдельной плашкой.
-    assert.match(price, /<small>\{line\.guaranteeCategoryName\}<\/small><code className="price-code"/u);
+    // 18.11: «Для всех категорий» не повторяется в каждой строке — категория видна, только если она своя.
+    assert.match(price, /ALL_CATEGORIES_LABEL \? null : <small>\{line\.guaranteeCategoryName\}<\/small>\}<code className="price-code"/u);
     assert.doesNotMatch(price, /\{line\.guaranteeCategoryName\} · \{line\.workTypeCode\}/u);
     assert.match(css, /\.price-code\s*\{[^}]*font-family:\s*ui-monospace/su);
   });
