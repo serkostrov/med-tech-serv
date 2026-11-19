@@ -3,7 +3,7 @@ import * as React from "react";
 import { cn } from "../../lib/utils.js";
 
 const alertVariants = cva(
-  "relative flex w-full items-start gap-3 rounded-md border px-3.5 py-3 text-sm",
+  "relative flex w-full items-start gap-3 rounded-md border px-3.5 py-3 text-[13px]",
   {
     variants: {
       variant: {
@@ -33,7 +33,7 @@ function AlertTitle({ className, ...props }: React.HTMLAttributes<HTMLParagraphE
 }
 
 function AlertDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn("text-sm leading-6 text-current/90", className)} {...props} />;
+  return <p className={cn("text-[13px] leading-[1.45] text-current/90", className)} {...props} />;
 }
 
 export { Alert, AlertDescription, AlertTitle };

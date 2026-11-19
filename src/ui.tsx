@@ -159,7 +159,7 @@ export function Field({
   readonly children: ReactNode;
 }) {
   return (
-    <label className={cn("field grid gap-1.5 text-sm font-medium leading-5 text-foreground", className)}>
+    <label className={cn("field grid gap-1.5 text-[13px] font-medium leading-[1.45] text-foreground", className)}>
       <span className="flex flex-wrap items-baseline gap-2">
         <span>
           {label}
@@ -168,7 +168,7 @@ export function Field({
         {optional ? <span className="text-xs font-normal text-muted-foreground">необязательно</span> : null}
       </span>
       {children}
-      {hint ? <span className="field-note text-xs font-normal leading-5 text-muted-foreground">{hint}</span> : null}
+      {hint ? <span className="field-note text-xs font-normal leading-[1.45] text-muted-foreground">{hint}</span> : null}
       {error ? <span className="form-error" role="alert">{error}</span> : null}
     </label>
   );
@@ -284,7 +284,7 @@ export interface PageCrumb {
 export function PageBreadcrumbs({ items }: { readonly items: readonly PageCrumb[] }) {
   if (items.length === 0) return null;
   return (
-    <nav aria-label="Путь по разделам" className="page-breadcrumb text-sm text-muted-foreground">
+    <nav aria-label="Путь по разделам" className="page-breadcrumb text-[13px] text-muted-foreground">
       <ol className="m-0 flex list-none flex-wrap items-center gap-0.5 p-0">
         {items.map((item, index) => {
           const last = index === items.length - 1;
@@ -333,7 +333,7 @@ export function EntityDetailHeader({ title, description, meta, aside }: { readon
       <div className="min-w-0">
         {meta ? <div className="entity-detail-heading__meta mb-2 flex flex-wrap gap-1.5 text-xs font-medium text-muted-foreground">{meta}</div> : null}
         <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
-        {description ? <p className="mt-1 text-[15px] leading-6 text-muted-foreground">{description}</p> : null}
+        {description ? <p className="mt-1 text-[13px] leading-[1.45] text-muted-foreground">{description}</p> : null}
       </div>
       {aside ? <div className="entity-detail-heading__aside">{aside}</div> : null}
     </header>

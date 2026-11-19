@@ -76,7 +76,7 @@ export function RegistryPagination({
   if (pages <= 1 && !canChangeSize && !alwaysShow) return null;
   const first = total === 0 ? 0 : registryPageOffset(pageIndex, pageSize) + 1;
   const last = Math.min(total, registryPageOffset(pageIndex + 1, pageSize));
-  return <div className="registry-pagination flex flex-wrap items-center justify-end gap-3 px-4 py-3 text-sm text-muted-foreground" aria-label={ariaLabel} role="navigation">
+  return <div className="registry-pagination flex flex-wrap items-center justify-end gap-3 px-4 py-3 text-[13px] text-muted-foreground" aria-label={ariaLabel} role="navigation">
     {canChangeSize && onPageSizeChange ? <label className="registry-pagination__size">
       <span>Показывать по</span>
       <Select aria-label="Сколько строк показывать на странице" onChange={(event) => onPageSizeChange(Number(event.target.value))} value={String(pageSize)}>
