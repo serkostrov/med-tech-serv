@@ -25,7 +25,7 @@ describe("web process navigation", () => {
     ]);
     assert.equal(hasNavigationItem("admin", "tasks"), true);
     // Менеджер-инициатор: только свои заявки и уведомления о них.
-    assert.deepEqual(getRoleNavigation("initiator").map((item) => item.label), ["Мои заявки", "Уведомления"]);
+    assert.deepEqual(getRoleNavigation("initiator").map((item) => item.label), ["Мои задачи", "Уведомления"]);
     assert.equal(hasNavigationItem("initiator", "finance"), false);
     assert.equal(getDefaultView("initiator"), "tasks");
   });

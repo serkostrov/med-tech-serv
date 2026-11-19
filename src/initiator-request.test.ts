@@ -24,8 +24,8 @@ describe("заявка инициатора", () => {
     assert.equal(requestProblem({ ...base, until: "2026-11-01" }), "Дата «выполнить до» уже прошла: укажите 17.11.2026 или позже");
   });
 
-  it("этап заявки словами для инициатора", () => {
-    assert.equal(requestStageHint("new"), "Заявка принята, координатор назначит инженера");
+  it("этап задачи словами для инициатора", () => {
+    assert.equal(requestStageHint("new"), "Координатор назначит инженера");
     assert.equal(requestStageHint("assigned", "Иванов П. А."), "Назначен инженер: Иванов П. А.");
     assert.equal(requestStageHint("under_review"), "Работы выполнены, координатор проверяет акт");
   });

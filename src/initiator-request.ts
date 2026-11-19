@@ -34,16 +34,16 @@ export function requestProblem(input: { readonly equipmentId?: string; readonly 
   return undefined;
 }
 
-/** Какой этап видит инициатор: те же слова, что у координатора, но о его заявке. */
+/** Какой этап видит инициатор: те же слова, что у координатора, но о его задаче. */
 export function requestStageHint(status: string, engineerName?: string): string {
   switch (status) {
-    case "new": return "Заявка принята, координатор назначит инженера";
+    case "new": return "Координатор назначит инженера";
     case "planned": return "Запланирована по плану ТО";
     case "assigned": return engineerName ? `Назначен инженер: ${engineerName}` : "Инженер назначен";
     case "in_progress": return engineerName ? `${engineerName} в работе` : "Инженер в работе";
     case "under_review": return "Работы выполнены, координатор проверяет акт";
     case "closed": return "Работы завершены";
-    case "cancelled": return "Заявка отменена";
+    case "cancelled": return "Задача отменена";
     default: return "";
   }
 }

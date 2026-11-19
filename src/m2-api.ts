@@ -195,6 +195,11 @@ export interface TaskApiRecord {
     readonly contactId?: string;
     readonly fullName?: string;
   };
+  /**
+   * Менеджер-инициатор, подавший задачу со своего экрана (tasks.initiator_id, ТЗ раздел 2).
+   * Не путать с initiator — это контакт клиента, который обратился («Обратился»).
+   */
+  readonly initiatorUser?: { readonly id: string; readonly fullName: string };
   readonly createdAt: string;
   readonly updatedAt: string;
 }
@@ -1348,7 +1353,7 @@ const TASK_SELECT = `
   id, number, title, status_code, work_type_code, extra_work_type_codes, work_modifier, hours, priority,
   is_maintenance_plan, maintenance_plan_id, site_id, site_contact_id, initiator_contact_id,
   initiator_name, payer_id, equipment_id,
-  engineer_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
+  engineer_id, initiator_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
   work_started_at, work_finished_at, contract_id, primary_task_id, reason_code,
   call_reason, work_description, recommendations, user_remarks, meter_reading,
   work_completed, apparatus_approved, customer_has_no_claims, continued_in_primary,
@@ -1360,13 +1365,14 @@ const TASK_SELECT = `
   contract:contracts(number),
   status:task_statuses(code, name),
   device:equipment!equipment_id(serial_number, model:equipment_models(name), maker:manufacturers(name)),
-  engineer:users!engineer_id(full_name)
+  engineer:users!engineer_id(full_name),
+  initiator_user:users!initiator_id(full_name)
 `;
 
 const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
   id, number, title, status_code, work_type_code, extra_work_type_codes, work_modifier, hours, priority,
   is_maintenance_plan, maintenance_plan_id, site_id, site_contact_id, payer_id, equipment_id,
-  engineer_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
+  engineer_id, initiator_id, deadline_from, deadline_to, call_date, visit_date, completed_at,
   work_started_at, work_finished_at, contract_id, primary_task_id, reason_code,
   call_reason, work_description, recommendations, user_remarks, meter_reading,
   work_completed, apparatus_approved, customer_has_no_claims, continued_in_primary,
@@ -1377,7 +1383,8 @@ const TASK_SELECT_WITHOUT_INITIATOR_CONTACT = `
   contract:contracts(number),
   status:task_statuses(code, name),
   device:equipment!equipment_id(serial_number, model:equipment_models(name), maker:manufacturers(name)),
-  engineer:users!engineer_id(full_name)
+  engineer:users!engineer_id(full_name),
+  initiator_user:users!initiator_id(full_name)
 `;
 
 /** После 0007 в tasks появляются initiator_contact_id / initiator_name. Пока миграции нет — select без них. */
@@ -1574,6 +1581,8 @@ export function mapTask(row: Row): TaskApiRecord {
   const device = related(row, "device");
   const deviceSerial = optionalText(device, "serial_number");
   const engineerRow = related(row, "engineer");
+  const initiatorUserId = optionalText(row, "initiator_id");
+  const initiatorUserName = optionalText(related(row, "initiator_user"), "full_name");
   const boardPosition = numberValue(row.board_position);
   return {
     id: text(row, "id"),
@@ -1637,6 +1646,7 @@ export function mapTask(row: Row): TaskApiRecord {
     ...(initiatorContactId || initiatorName
       ? { initiator: { ...(initiatorContactId ? { contactId: initiatorContactId } : {}), ...(initiatorName ? { fullName: initiatorName } : {}) } }
       : {}),
+    ...(initiatorUserId ? { initiatorUser: { id: initiatorUserId, fullName: initiatorUserName ?? "Инициатор" } } : {}),
     createdAt: iso(row.created_at),
     updatedAt: iso(row.updated_at)
   };
@@ -3224,6 +3234,8 @@ export class M2ApiClient {
     readonly overdue?: boolean;
     /** Из плана ТО (true) или разовая заявка (false): переход из разреза отчёта «Откуда задача». */
     readonly maintenancePlan?: boolean;
+    /** Только задачи, поданные менеджерами-инициаторами (initiator_id задан, встреча 19.11). */
+    readonly fromInitiator?: boolean;
     readonly sort?: "deadline_asc" | "deadline_desc" | "updated_asc" | "updated_desc";
     /** Колонка доски: сначала карточки, расставленные вручную, затем остальные по сортировке. */
     readonly boardOrder?: boolean;
@@ -3278,6 +3290,7 @@ export class M2ApiClient {
       if (workTypeCodes.length) next = next.or(`work_type_code.in.(${workTypeCodes.join(",")}),extra_work_type_codes.ov.{${workTypeCodes.join(",")}}`);
       if (query.priority) next = next.eq("priority", query.priority);
       if (query.maintenancePlan !== undefined) next = next.eq("is_maintenance_plan", query.maintenancePlan ? "true" : "false");
+      if (query.fromInitiator) next = next.not("initiator_id", "is", "null");
       if (query.guarantee === "none") next = next.is("work_modifier", null);
       else if (query.guarantee) next = next.eq("work_modifier", query.guarantee);
       if (query.reasonCode === "none") next = next.is("reason_code", null);

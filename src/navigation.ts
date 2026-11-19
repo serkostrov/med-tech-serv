@@ -107,7 +107,7 @@ const roleNavigation: Readonly<Record<AppRole, readonly NavigationItem[]>> = {
   // Менеджер-инициатор (ТЗ, раздел 2): свои заявки, их статусы и результат. Остальное ему не нужно,
   // а права в базе всё равно показывают только его задачи.
   initiator: [
-    { id: "tasks", label: "Мои заявки", description: "Ваши заявки и их статусы", group: "Работа", icon: "tasks" },
+    { id: "tasks", label: "Мои задачи", description: "Ваши задачи и их этапы", group: "Работа", icon: "tasks" },
     { id: "notifications", label: "Уведомления", description: "Что происходит с вашими заявками", group: "Работа", icon: "notifications" }
   ]
 };
