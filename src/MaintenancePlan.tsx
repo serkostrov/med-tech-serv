@@ -349,6 +349,11 @@ function periodDevice(item: MaintenancePlanPeriodResponse): EquipmentApiRecord {
  * Вкладка «План ТО» в карточке прибора (встреча 18.11): периоды ТО этого прибора на год,
  * инженер и задача по каждому, кнопка «Изменить план». Карточка на доске плана ведёт сюда.
  */
+/** Период ТО со своей задачей — ссылка на неё; без задачи — просто текст. */
+function MaintenanceTaskLink({ item, children }: { readonly item: Pick<MaintenancePlanPeriodResponse, "generatedTaskId">; readonly children: React.ReactNode }) {
+  return item.generatedTaskId ? <EntityLink target={{ kind: "task", id: item.generatedTaskId }}>{children}</EntityLink> : <>{children}</>;
+}
+
 export function EquipmentPlanTab({ device, readOnly = false }: { readonly device: EquipmentApiRecord; readonly readOnly?: boolean }) {
   const [year, setYear] = useState(() => new Date().getFullYear());
   const [items, setItems] = useState<readonly MaintenancePlanPeriodResponse[] | null>(null);
@@ -378,12 +383,12 @@ export function EquipmentPlanTab({ device, readOnly = false }: { readonly device
         {readOnly ? null : <Button icon="edit" onClick={() => setEditing(true)} variant="secondary">{items && items.length ? "Изменить план" : "Задать план"}</Button>}
       </div>
     </header>
-    {items === null ? <div className="task-section__empty"><p>Загружаем план…</p></div> : items.length === 0 ? <div className="task-section__empty"><p>На {year} год плана ТО у прибора нет.{readOnly ? "" : " Нажмите «Задать план», чтобы указать периоды обслуживания."}</p></div> : <div className="table-scroll"><table className="data-table equipment-plan-table"><thead><tr><th scope="col">ТО</th><th scope="col">Период</th><th scope="col">Инженер</th><th scope="col">Задача</th><th scope="col">Состояние</th></tr></thead><tbody>
+    {items === null ? <div className="task-section__empty"><p>Загружаем план…</p></div> : items.length === 0 ? <div className="task-section__empty"><p>На {year} год плана ТО у прибора нет.{readOnly ? "" : " Нажмите «Задать план», чтобы указать периоды обслуживания."}</p></div> : <div className="table-scroll"><table className="data-table equipment-plan-table"><thead><tr><th scope="col">ТО</th><th scope="col">Период</th><th scope="col">Инженер</th><th scope="col">Состояние</th></tr></thead><tbody>
       {items.map((item, index) => <tr key={item.id}>
-        <td><strong>ТО № {index + 1}</strong>{item.comment ? <small className="muted"> · {item.comment}</small> : null}</td>
+        {/* «ТО № N» открывает задачу этого ТО: выполненную или текущую (вторая встреча 18.11). */}
+        <td><strong><MaintenanceTaskLink item={item}>ТО № {index + 1}</MaintenanceTaskLink></strong>{item.comment ? <small className="muted"> · {item.comment}</small> : null}</td>
         <td>{formatMaintenancePeriod(item.periodFrom, item.periodTo)}</td>
         <td>{item.assignedEngineerId ? <EntityLink target={{ kind: "engineer", id: item.assignedEngineerId }}>{item.assignedEngineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>
-        <td>{item.generatedTaskId ? <EntityLink target={{ kind: "task", id: item.generatedTaskId }}>Открыть задачу</EntityLink> : <span className="muted">ещё не создана</span>}</td>
         <td><span className={`maintenance-status maintenance-status--${item.status}`}>{maintenancePlanStatusLabel[item.status]}</span></td>
       </tr>)}
     </tbody></table></div>}
@@ -544,9 +549,9 @@ export function MaintenancePlanPage() {
         <header><h3>{title}{sub ? <small>{sub}</small> : null}</h3><span>{formatRussianCount(group.items.length, ["период", "периода", "периодов"])}</span></header>
         {group.items.map((item, index) => <div className="maintenance-row" key={item.id}>
           <label className="maintenance-row__select"><input checked={selected.includes(item.id)} disabled={!canGenerateTask(item)} onChange={() => toggle(item.id)} type="checkbox" /><span className="sr-only">Выбрать период {formatMaintenancePeriod(item.periodFrom, item.periodTo)}</span></label>
-          <div className="maintenance-row__identity"><strong>{view === "equipment" ? `ТО № ${index + 1}` : <EntityLink target={{ kind: "equipment", id: item.equipmentId, tab: "plan" }}>{`${item.equipment.model} · S/N ${item.equipment.serialNumber}`}</EntityLink>}</strong><span>{maintenanceRowDetails(item, view)}</span></div>
+          <div className="maintenance-row__identity"><strong>{view === "equipment" ? <MaintenanceTaskLink item={item}>{`ТО № ${index + 1}`}</MaintenanceTaskLink> : <EntityLink target={{ kind: "equipment", id: item.equipmentId, tab: "plan" }}>{`${item.equipment.model} · S/N ${item.equipment.serialNumber}`}</EntityLink>}</strong><span>{maintenanceRowDetails(item, view)}</span></div>
           <div className="maintenance-track">{today !== undefined ? <i aria-hidden="true" className="maintenance-today" style={{ left: `${today}%` }} /> : null}<span className={`maintenance-bar maintenance-bar--${item.status}`} style={{ left: `${item.timeline.leftPercent}%`, width: `${Math.max(item.timeline.widthPercent, 0.8)}%` }} title={formatMaintenancePeriod(item.periodFrom, item.periodTo)}>{item.timeline.crossesYearBoundary ? "↔" : ""}</span></div>
-          <span className={`maintenance-status maintenance-status--${item.status}`}>{maintenancePlanStatusLabel[item.status]}</span>
+          <MaintenanceTaskLink item={item}><span className={`maintenance-status maintenance-status--${item.status}`}>{maintenancePlanStatusLabel[item.status]}</span></MaintenanceTaskLink>
         </div>)}
       </article>;
       }) : null}
