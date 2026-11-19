@@ -9735,3 +9735,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 }
 /* Карточкой уведомление без минимальной ширины таблицы. */
 @container (max-width: 620px) { .table-cards > table.notification-table { min-width: 0; } }
+
+/* Над доской или таблицей задач на странице инженера, клиента, прибора и инициатора: переключатель
+   «Закрытые и отменённые» справа, как на доске задач (встреча 19.11). */
+.task-list-toolbar { display: flex; justify-content: flex-end; gap: 8px; margin: 0 0 12px; }
+/* Списки задач на страницах прибора и вида работ: номер — отдельным узким столбцом. */
+.data-table.task-list-table td.task-list-table__number, .data-table.task-list-table td.cell-date { width: 1%; white-space: nowrap; overflow-wrap: normal; }
+.data-table.task-list-table td.task-list-table__number .entity-link, .data-table.task-list-table td.task-list-table__number .text-button { color: var(--color-muted); white-space: nowrap; overflow-wrap: normal; }

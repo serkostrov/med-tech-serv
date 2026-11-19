@@ -6,7 +6,7 @@ import { competencyKey, competencyLabel } from "./engineer-competencies.js";
 import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { Button, EntityDetailToolbar, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
-import { TaskStageBoard } from "./TaskStageBoard.js";
+import { CompletedTasksToggle, TaskStageBoard, isOpenTask } from "./TaskStageBoard.js";
 import { EngineerCalendar } from "./EngineerCalendar.js";
 
 /**
@@ -89,6 +89,7 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
   const [engineer, setEngineer] = useState<EngineerOverview | null | undefined>(undefined);
   const [tasks, setTasks] = useState<readonly TaskApiRecord[] | null>(null);
   const [tasksTotal, setTasksTotal] = useState(0);
+  const [showCompleted, setShowCompleted] = useState(false);
   const [stock, setStock] = useState<readonly StockReservationRecord[] | null>(null);
   const [tab, setTabState] = useState<EngineerPageTab>(initialTab);
   // Вкладка помнится в шаге истории: «Назад» из прибора или задачи вернёт на неё же.
@@ -137,7 +138,7 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
   </>;
 
   const tabs = [
-    { value: "tasks" as const, label: "Задачи", badge: tasks?.filter((task) => task.status !== "cancelled").length ?? 0 },
+    { value: "tasks" as const, label: "Задачи", badge: tasks?.filter(isOpenTask).length ?? 0 },
     // Календарь этого инженера (18.11: «почему в карточке инженера я не вижу его календарь?»).
     { value: "calendar" as const, label: "Календарь" },
     { value: "equipment" as const, label: "Приборы", badge: equipment.length },
@@ -161,7 +162,10 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
 
     {shownTab === "tasks" ? (tasks === null
       ? <ResourceState description="Подождите, задачи инженера сейчас появятся." status="loading" title="Загружаем задачи" />
-      : <TaskStageBoard label={`Задачи инженера ${engineer.fullName}`} show={{}} tasks={tasks.filter((task) => task.status !== "cancelled")} />) : null}
+      : <>
+        <div className="task-list-toolbar"><CompletedTasksToggle onChange={setShowCompleted} value={showCompleted} /></div>
+        <TaskStageBoard label={`Задачи инженера ${engineer.fullName}`} show={{}} showCompleted={showCompleted} tasks={tasks} />
+      </>) : null}
 
     {shownTab === "calendar" ? <EngineerCalendar engineerId={engineer.id} key={engineer.id} /> : null}
 

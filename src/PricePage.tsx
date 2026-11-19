@@ -17,6 +17,7 @@ import {
 import { formatDisplayDate, formatIsoCalendarDate } from "./date-format.js";
 import { EntityLink } from "./entity-links.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
+import { CompletedTasksToggle } from "./TaskStageBoard.js";
 import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { formatRussianCount, russianCountForm } from "./equipment-changes.js";
 import { companyToday } from "./task-dates.js";
@@ -88,14 +89,16 @@ function WorkTypePricePage({ line, today, canWrite, onBack, onDelete, onEdit }: 
   const { pageSize, setPageSize } = usePageSize("work-type-tasks");
   const [pageIndex, setPageIndex] = useState(0);
   const [tasks, setTasks] = useState<{ readonly items: readonly TaskApiRecord[]; readonly total: number } | null>(null);
+  // Закрытые и отменённые — по переключателю, как на доске задач (встреча 19.11).
+  const [showClosed, setShowClosed] = useState(false);
   useEffect(() => {
     let alive = true;
     setTasks((current) => current ? { ...current, items: [] } : null);
-    void m2Api.tasksPage({ workTypeCode: line.workTypeCode, limit: pageSize, offset: pageIndex * pageSize, sort: "updated_desc" })
+    void m2Api.tasksPage({ workTypeCode: line.workTypeCode, ...(showClosed ? {} : { openOnly: true }), limit: pageSize, offset: pageIndex * pageSize, sort: "updated_desc" })
       .then((page) => { if (alive) setTasks({ items: page.items, total: page.total }); })
       .catch((error: unknown) => { if (alive) setTasks({ items: [], total: 0 }); toast.error(message(error, "Не получилось загрузить задачи")); });
     return () => { alive = false; };
-  }, [line.workTypeCode, pageIndex, pageSize]);
+  }, [line.workTypeCode, pageIndex, pageSize, showClosed]);
   const nextText = priceLineNextText(line);
   return <div className="engineer-page work-type-page">
     {/* «Изменить цену» — справа сверху, как «Изменить» в задаче и КП. */}
@@ -143,14 +146,17 @@ function WorkTypePricePage({ line, today, canWrite, onBack, onDelete, onEdit }: 
         </table></div>}
     </section> : null}
     {tab === "tasks" ? <section className="task-section" aria-label="Задачи с этим видом работ">
+      <div className="task-list-toolbar"><CompletedTasksToggle onChange={(next) => { setShowClosed(next); setPageIndex(0); }} value={showClosed} /></div>
       {tasks === null
         ? <ResourceState description="Подождите." status="loading" title="Загружаем задачи" />
         : tasks.total === 0
-          ? <div className="task-section__empty"><p>Задач с этим видом работ пока нет.</p></div>
-          : <><div className="table-scroll"><table className="data-table engineer-page__table">
-            <thead><tr><th scope="col">Задача</th><th scope="col">Прибор</th><th scope="col">Клиент</th><th scope="col">Инженер</th><th scope="col">Срок</th><th scope="col">Этап</th></tr></thead>
+          ? <div className="task-section__empty"><p>{showClosed ? "Задач с этим видом работ пока нет." : "Активных задач с этим видом работ нет."}</p></div>
+          : <><div className="table-scroll"><table className="data-table task-list-table">
+            {/* Номер и название — отдельными столбцами: строки не «едут» от длины названия (встреча 19.11). */}
+            <thead><tr><th scope="col">Номер</th><th scope="col">Задача</th><th scope="col">Прибор</th><th scope="col">Клиент</th><th scope="col">Инженер</th><th scope="col">Срок</th><th scope="col">Этап</th></tr></thead>
             <tbody>{tasks.items.map((task) => <tr key={task.id}>
-              <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
+              <td className="task-list-table__number"><EntityLink target={{ kind: "task", id: task.id }}>{task.number}</EntityLink></td>
+              <td><EntityLink target={{ kind: "task", id: task.id }}><strong>{task.title}</strong></EntityLink></td>
               <td>{task.equipmentId && task.equipmentLabel ? <EntityLink target={{ kind: "equipment", id: task.equipmentId }}>{[task.equipmentLabel.model, task.equipmentLabel.serialNumber ? `S/N ${task.equipmentLabel.serialNumber}` : undefined].filter(Boolean).join(" · ")}</EntityLink> : "—"}</td>
               <td>{task.siteId ? <EntityLink target={{ kind: "site", id: task.siteId }}>{task.customer?.siteName ?? "Клиент"}</EntityLink> : "—"}</td>
               <td>{task.engineerId ? <EntityLink target={{ kind: "engineer", id: task.engineerId }}>{task.engineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>

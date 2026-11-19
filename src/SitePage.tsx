@@ -7,7 +7,7 @@ import { formatDisplayDate } from "./date-format.js";
 import { formatRussianCount } from "./equipment-changes.js";
 import { formatSitePersonDetails, sitePeople } from "./site-people.js";
 import { EntityDetailToolbar, PageTabs, ResourceState, StatusBadge, toast } from "./ui.js";
-import { TaskStageBoard } from "./TaskStageBoard.js";
+import { CompletedTasksToggle, TaskStageBoard, isOpenTask } from "./TaskStageBoard.js";
 
 /**
  * Страница клиента — площадки (встреча 18.11: «зашли и видим всё: её заказы, все её контакты,
@@ -58,6 +58,7 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
   const [equipment, setEquipment] = useState<readonly EquipmentApiRecord[] | null>(null);
   const [equipmentTotal, setEquipmentTotal] = useState(0);
   const [tab, setTabState] = useState<SitePageTab>(initialTab);
+  const [showCompleted, setShowCompleted] = useState(false);
   // Вкладка помнится в шаге истории: «Назад» из задачи или прибора вернёт на неё же.
   const setTab = (next: SitePageTab) => {
     setTabState(next);
@@ -79,7 +80,6 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
     return () => { current = false; };
   }, [siteId]);
 
-  const groups = useMemo(() => siteTaskGroups(tasks ?? []), [tasks]);
   const people = useMemo(() => site ? sitePeople(site) : [], [site]);
 
   if (site === undefined) return <ResourceState description="Подождите, страница клиента сейчас откроется." status="loading" title="Загружаем клиента" />;
@@ -89,7 +89,8 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
   </>;
 
   const tabs = [
-    { value: "tasks" as const, label: "Заявки", badge: groups.open.length + groups.closed.length },
+    // «Задачи», а не «Заявки»: это одна сущность, называем её одинаково везде (встреча 19.11).
+    { value: "tasks" as const, label: "Задачи", badge: (tasks ?? []).filter(isOpenTask).length },
     { value: "equipment" as const, label: "Приборы", badge: equipmentTotal },
     { value: "people" as const, label: "Люди и реквизиты", badge: people.filter((person) => person.isActive).length }
   ];
@@ -107,8 +108,11 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
     <PageTabs items={tabs} label="Разделы страницы клиента" onValueChange={setTab} value={tab} />
 
     {tab === "tasks" ? (tasks === null
-      ? <ResourceState description="Подождите." status="loading" title="Загружаем заявки" />
-      : <TaskStageBoard label={`Заявки клиента ${site.name}`} show={{ engineer: true }} tasks={tasks.filter((task) => task.status !== "cancelled")} />) : null}
+      ? <ResourceState description="Подождите." status="loading" title="Загружаем задачи" />
+      : <>
+        <div className="task-list-toolbar"><CompletedTasksToggle onChange={setShowCompleted} value={showCompleted} /></div>
+        <TaskStageBoard label={`Задачи клиента ${site.name}`} show={{ engineer: true }} showCompleted={showCompleted} tasks={tasks} />
+      </>) : null}
 
     {tab === "equipment" ? <section className="task-section" aria-labelledby="site-equipment">
       <header className="task-section__head"><h3 id="site-equipment">Приборы на площадке</h3><span className="muted">{formatRussianCount(equipmentTotal, ["прибор", "прибора", "приборов"])}</span></header>

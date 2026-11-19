@@ -19,14 +19,33 @@ const STAGES: readonly StatusBoardColumn[] = [
   { key: "cancelled", title: "Отменена", color: "var(--stage-cancelled)" }
 ];
 
-/** Колонки доски: основные этапы всегда, «Запланирована», «Новая» и «Отменена» — если в них есть задачи. */
-export function taskStageColumns(tasks: readonly TaskApiRecord[]): readonly StatusBoardColumn[] {
-  const always = new Set(["assigned", "in_progress", "under_review", "closed"]);
-  return STAGES.filter((stage) => always.has(stage.key) || tasks.some((task) => task.status === stage.key));
+/** Закрытые и отменённые — завершённые задачи: по умолчанию их не показываем ни в одном списке задач. */
+export function isOpenTask(task: Pick<TaskApiRecord, "status">): boolean {
+  return task.status !== "closed" && task.status !== "cancelled";
 }
 
-export function TaskStageBoard({ tasks, label, show, onOpen }: {
+/**
+ * Переключатель «Закрытые и отменённые», как на доске задач (встреча 19.11: «в карточке прибора все задачи —
+ * только активные, а закрытые и отменённые — когда включили тумблер»). Один вид во всех списках задач.
+ */
+export function CompletedTasksToggle({ value, onChange }: { readonly value: boolean; readonly onChange: (next: boolean) => void }) {
+  return <button aria-pressed={value} className={`toggle-chip${value ? " toggle-chip--on" : ""}`} onClick={() => onChange(!value)} type="button">Закрытые и отменённые</button>;
+}
+
+/**
+ * Колонки доски: основные этапы всегда, «Запланирована» и «Новая» — если в них есть задачи.
+ * «Выполнена» и «Отменена» — только с переключателем «Закрытые и отменённые».
+ */
+export function taskStageColumns(tasks: readonly TaskApiRecord[], showCompleted = false): readonly StatusBoardColumn[] {
+  const always = new Set(["assigned", "in_progress", "under_review", ...(showCompleted ? ["closed"] : [])]);
+  return STAGES.filter((stage) => (showCompleted || (stage.key !== "closed" && stage.key !== "cancelled"))
+    && (always.has(stage.key) || tasks.some((task) => task.status === stage.key)));
+}
+
+export function TaskStageBoard({ tasks, label, show, onOpen, showCompleted = false }: {
   readonly tasks: readonly TaskApiRecord[];
+  /** Колонки «Выполнена» и «Отменена» (переключатель «Закрытые и отменённые» над доской). */
+  readonly showCompleted?: boolean;
   readonly label: string;
   /** Своё открытие карточки (у инициатора — его карточка заявки); по умолчанию — задача по ссылке. */
   readonly onOpen?: (task: TaskApiRecord) => void;
@@ -34,17 +53,18 @@ export function TaskStageBoard({ tasks, label, show, onOpen }: {
   readonly show: { readonly engineer?: boolean };
 }) {
   const nav = useEntityNav();
-  const sorted = [...tasks].sort((left, right) => left.status === "closed" && right.status === "closed"
+  const shown = showCompleted ? tasks : tasks.filter(isOpenTask);
+  const sorted = [...shown].sort((left, right) => left.status === "closed" && right.status === "closed"
     ? (right.completedAt ?? "").localeCompare(left.completedAt ?? "")
     : (left.periodTo ?? "9999").localeCompare(right.periodTo ?? "9999"));
   return <StatusBoard<TaskApiRecord>
-    columns={taskStageColumns(tasks)}
+    columns={taskStageColumns(shown, showCompleted)}
     emptyText="Пусто"
     itemKey={(task) => task.id}
     label={label}
     load={async (status, offset, limit) => localStatusPage(sorted, (task) => task.status === status, offset, limit)}
     onOpen={(task) => onOpen ? onOpen(task) : nav?.open({ kind: "task", id: task.id })}
-    queryKey={tasks.map((task) => `${task.id}:${task.status}`).join(",")}
+    queryKey={shown.map((task) => `${task.id}:${task.status}`).join(",")}
     renderCard={(task) => <>
       <span className="task-board-card__top">{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>
       <strong>{task.title}</strong>

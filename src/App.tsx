@@ -77,6 +77,7 @@ import {
 } from "./OperationsPages.js";
 import { ReservationsPage } from "./ReservationsPage.js";
 import { EngineerPickupNote, ResultReservationChecks, TaskReservationsSection } from "./TaskReservations.js";
+import { CompletedTasksToggle, isOpenTask } from "./TaskStageBoard.js";
 import { TaskStockDocuments } from "./StockDocuments.js";
 import { notificationTemplateProblem } from "./notification-journal.js";
 import { installedReservationNumbers } from "./reservations.js";
@@ -2658,6 +2659,8 @@ function EquipmentCard({
   // Все задачи прибора (встреча 18.11: «в карточке прибора — все его заявки, задачи, с которыми он связан»).
   const [allTasks, setAllTasks] = useState<readonly TaskApiRecord[] | null>(null);
   const [allTasksTotal, setAllTasksTotal] = useState(0);
+  // Закрытые и отменённые — по переключателю, как на доске задач (встреча 19.11).
+  const [showClosedTasks, setShowClosedTasks] = useState(false);
   // Числа на вкладках видны сразу, а не после нажатия (18.11: «написано „Запчасти“, а там пусто»).
   useEffect(() => {
     if (allTasks !== null) return;
@@ -2780,10 +2783,12 @@ function EquipmentCard({
             <FileGallery emptyText="Файлов пока нет." files={record.fileRecords} />
           </section> : null}
           {detailTab === "tasks" ? <section className="task-section" aria-labelledby={`equipment-all-tasks-${record.id}`}>
-            <header className="task-section__head"><h3 id={`equipment-all-tasks-${record.id}`}>Все задачи прибора</h3></header>
-            {allTasks === null ? <div className="task-section__empty"><p>Загружаем задачи…</p></div> : allTasks.length === 0 ? <div className="task-section__empty"><p>Задач по этому прибору ещё не было.</p></div> : <div className="table-scroll"><table className="data-table engineer-page__table"><thead><tr><th scope="col">Задача</th><th scope="col">Инженер</th><th scope="col">Срок</th><th scope="col">Этап</th></tr></thead><tbody>
-              {allTasks.map((task) => <tr key={task.id}>
-                <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
+            <header className="task-section__head"><h3 id={`equipment-all-tasks-${record.id}`}>Все задачи прибора</h3>{allTasks && allTasks.length > 0 ? <CompletedTasksToggle onChange={setShowClosedTasks} value={showClosedTasks} /> : null}</header>
+            {allTasks === null ? <div className="task-section__empty"><p>Загружаем задачи…</p></div> : allTasks.length === 0 ? <div className="task-section__empty"><p>Задач по этому прибору ещё не было.</p></div> : !showClosedTasks && !allTasks.some(isOpenTask) ? <div className="task-section__empty"><p>Активных задач нет.</p></div> : <div className="table-scroll"><table className="data-table task-list-table"><thead><tr><th scope="col">Номер</th><th scope="col">Задача</th><th scope="col">Инженер</th><th scope="col">Срок</th><th scope="col">Этап</th></tr></thead><tbody>
+              {/* Номер и название — отдельными столбцами: строки не «едут» от длины названия (встреча 19.11). */}
+              {allTasks.filter((task) => showClosedTasks || isOpenTask(task)).map((task) => <tr key={task.id}>
+                <td className="task-list-table__number"><EntityLink target={{ kind: "task", id: task.id }}>{task.number}</EntityLink></td>
+                <td><EntityLink target={{ kind: "task", id: task.id }}><strong>{task.title}</strong></EntityLink></td>
                 <td>{task.engineerId ? <EntityLink target={{ kind: "engineer", id: task.engineerId }}>{task.engineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>
                 <td className="cell-date">{task.status === "closed" ? formatTaskDate(task.completedAt ?? task.visitDate) : task.periodTo ? `до ${formatTaskDate(task.periodTo)}` : "—"}</td>
                 <td><StatusBadge tone={TASK_STATUS_TONES[task.status] ?? "warning"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
