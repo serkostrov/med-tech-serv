@@ -85,13 +85,12 @@ describe("окончания в числах", () => {
       readFile(new URL("./CustomerReferencesPage.tsx", import.meta.url), "utf8"),
       readFile(new URL("./PricePage.tsx", import.meta.url), "utf8")
     ]);
-    // 15: «Инженеры» — «4 человека» и подсказка «Загрузка: 4 задачи».
-    assert.match(operations, /formatRussianCount\(engineers\.length, \["человек", "человека", "человек"\]\)/u);
+    // 15: «Инженеры» — подсказка «Загрузка: 4 задачи» (число инженеров — внизу, у страниц).
     assert.match(operations, /formatRussianCount\(engineer\.assignedTaskCount, \["задача", "задачи", "задач"\]\)/u);
     // 42: «Отчёты» — «241 заявка».
     assert.match(operations, /formatRussianCount\(report\.metrics\.taskCount, \["заявка", "заявки", "заявок"\]\)/u);
-    // 58: «Склад» — «1 позиция», в обоих видах раздела.
-    assert.equal(operations.match(/formatRussianCount\(total, \["позиция", "позиции", "позиций"\]\)/gu)?.length, 2);
+    // 58: «Склад» — над доской и списком строки «15 позиций» больше нет: число внизу, у страниц (UI/UX-разбор 19.11).
+    assert.doesNotMatch(operations, /title="Запас по позициям"/u);
     // 22: «Клиенты» — «Без площадки» теперь вкладка с числом (вторая встреча 18.11), люди площадки — «3 человека».
     assert.match(customers, /label: "Без площадки", badge: visibleOrphans\.length/u);
     assert.match(customers, /formatRussianCount\(count, \["человек", "человека", "человек"\]\)/u);

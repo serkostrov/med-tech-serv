@@ -386,10 +386,7 @@ export function PricePage() {
         {selected.size === 0 ? "Изменить выбранные" : `Изменить выбранные · ${selected.size}`}
       </Button> : null}
     </div>
-    <DataTableShell
-      meta={loading && rows.length === 0 ? undefined : formatRussianCount(visible.length, ["строка", "строки", "строк"])}
-      title="Виды работ"
-    >
+    <DataTableShell label="Виды работ">
       {loadError
         ? <ResourceState description={loadError} onRetry={() => void reload()} status="error" title="Прайс не загрузился" />
         : loading && rows.length === 0
@@ -430,7 +427,7 @@ export function PricePage() {
                         onChange={(event) => toggleSelected(line.key, event.target.checked)}
                         type="checkbox"
                       /></td> : null}
-                      <td><button className="entity-link" onClick={() => setOpenKey(line.key)} title="Открыть вид работ: история цен и задачи" type="button"><strong>{line.workTypeName}</strong></button>{line.guaranteeCategoryName === ALL_CATEGORIES_LABEL ? null : <small>{line.guaranteeCategoryName}</small>}<code className="price-code" title="Код вида работ: по нему сверяют позицию со складом и бухгалтерией">{line.workTypeCode}</code></td>
+                      <td><button className="entity-link" onClick={() => setOpenKey(line.key)} title="Открыть вид работ: история цен и задачи" type="button"><strong>{line.workTypeName}</strong></button>{line.guaranteeCategoryName === ALL_CATEGORIES_LABEL ? null : <small>{line.guaranteeCategoryName}</small>}</td>
                       <td className="numeric">{line.current
                         ? <strong>{priceLineAmountText(line)}</strong>
                         : <span className="is-empty">{priceLineAmountText(line)}</span>}</td>

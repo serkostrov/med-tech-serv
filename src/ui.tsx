@@ -668,8 +668,14 @@ export function ResourceState({
   );
 }
 
-export function DataTableShell({ title, meta, children, action }: { readonly title: string; readonly meta?: string; readonly children: ReactNode; readonly action?: ReactNode }) {
+/**
+ * Таблица в карточке. Заголовок — только когда на странице несколько таблиц: одна таблица под
+ * заголовком страницы с повтором «Все задачи 23 из 23» — лишняя строка (UI/UX-разбор 19.11),
+ * число и так внизу, у страниц. Без заголовка таблицу называет `label` для чтения с экрана.
+ */
+export function DataTableShell({ title, label, meta, children, action }: { readonly title?: string; readonly label?: string; readonly meta?: string; readonly children: ReactNode; readonly action?: ReactNode }) {
   const headingId = useId();
+  if (!title) return <section aria-label={label} className="card card--table data-table-shell overflow-hidden">{action ? <div className="data-table-shell__action">{action}</div> : null}{children}</section>;
   return (
     <section aria-labelledby={headingId} className="card card--table data-table-shell overflow-hidden">
       <CardHeader {...(action ? { action } : {})} headingId={headingId} {...(meta ? { meta } : {})} title={title} />

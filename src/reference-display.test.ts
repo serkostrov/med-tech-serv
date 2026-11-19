@@ -84,15 +84,12 @@ describe("справочники: на экране названия, а не к
     assert.doesNotMatch(app, /Object\.entries\(record\.attributes\)/u);
   });
 
-  it("в прайсе код вида работ отделён от названия и читается как код (находка 26)", async () => {
-    const [price, css] = await Promise.all([
-      readFile(new URL("./PricePage.tsx", import.meta.url), "utf8"),
-      readFile(new URL("./styles.css", import.meta.url), "utf8")
-    ]);
-    // Код остаётся для сверки со складом и бухгалтерией, но отдельной плашкой.
+  it("в прайсе код вида работ — на странице вида работ, а не в каждой строке (находка 26, UI/UX-разбор 19.11)", async () => {
+    const price = await readFile(new URL("./PricePage.tsx", import.meta.url), "utf8");
     // 18.11: «Для всех категорий» не повторяется в каждой строке — категория видна, только если она своя.
-    assert.match(price, /ALL_CATEGORIES_LABEL \? null : <small>\{line\.guaranteeCategoryName\}<\/small>\}<code className="price-code"/u);
-    assert.doesNotMatch(price, /\{line\.guaranteeCategoryName\} · \{line\.workTypeCode\}/u);
-    assert.match(css, /\.price-code\s*\{[^}]*font-family:\s*ui-monospace/su);
+    assert.match(price, /ALL_CATEGORIES_LABEL \? null : <small>\{line\.guaranteeCategoryName\}<\/small>\}<\/td>/u);
+    // Код для сверки со складом и бухгалтерией — над названием на странице вида работ.
+    assert.match(price, /<span className="task-head__number">\{line\.workTypeCode\}<\/span>/u);
+    assert.doesNotMatch(price, /className="price-code"/u);
   });
 });

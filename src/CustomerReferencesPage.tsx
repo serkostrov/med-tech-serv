@@ -267,7 +267,7 @@ export function CustomerReferencesPage() {
                   </span>
                 </div>
                 <div className="customer-site-card__meta">
-                  <StatusBadge tone={site.isActive ? "success" : "neutral"}>{site.isActive ? "Активна" : "Неактивна"}</StatusBadge>
+                  {site.isActive ? null : <StatusBadge tone="neutral">Неактивна</StatusBadge>}
                   <span className="customer-site-card__count">{peopleCountLabel(activePeople)}</span>
                   <div className="table-actions">
                     <IconButton icon="edit" label="Изменить площадку" onClick={() => { setFormError(null); setEditor({ kind: "site", id: site.id }); }} />
