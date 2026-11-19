@@ -2763,13 +2763,15 @@ function EquipmentCard({
           </section> : null}
           {detailTab === "meters" ? <section className="task-section" aria-labelledby={`equipment-meters-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-meters-${record.id}`}>Показания счётчика</h3><span className="muted">{record.meterReadings.length} из {record.meterReadingsTotal}</span></header>
+            {/* Откуда число — единственная строка в карточке (встреча 18.11: «откуда счётчик — распиши»). */}
+            <p className="equipment-meters__source">Число с экрана прибора. Инженер переписывает его в результате работ, сюда оно попадает, когда координатор примет закрытие задачи.</p>
             {record.meterReadings.length > 0 ? <div className="table-scroll"><table className="data-table equipment-meters-table"><thead><tr><th scope="col">Дата</th><th className="numeric" scope="col">Показание</th><th className="numeric" scope="col">Прирост</th><th scope="col">Кто записал</th><th scope="col">Откуда</th></tr></thead><tbody>
               {record.meterReadings.map((reading, index) => {
                 const previous = record.meterReadings[index + 1];
                 const delta = previous ? reading.reading - previous.reading : undefined;
-                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td><td>{reading.taskId ? <EntityLink target={{ kind: "task", id: reading.taskId }}>Акт задачи</EntityLink> : <span className="muted">{meterReadingSource(reading)}</span>}</td></tr>;
+                return <tr key={reading.id}><td>{formatEquipmentAssignmentDate(reading.measuredAt)}</td><td className="numeric"><strong>{reading.reading.toLocaleString("ru-RU", { maximumFractionDigits: 2 })}</strong></td><td className="numeric">{delta === undefined ? "—" : `${delta >= 0 ? "+" : "−"}${Math.abs(delta).toLocaleString("ru-RU", { maximumFractionDigits: 2 })}`}</td><td>{reading.author.name}</td><td>{reading.taskId ? <EntityLink target={{ kind: "task", id: reading.taskId }}>Задача</EntityLink> : <span className="muted">{meterReadingSource(reading)}</span>}</td></tr>;
               })}
-            </tbody></table></div> : <div className="task-section__empty"><p>Показаний пока нет. Они появятся после принятого закрытия задачи.</p></div>}
+            </tbody></table></div> : <div className="task-section__empty"><p>Показаний пока нет.</p></div>}
             {record.meterReadings.length < record.meterReadingsTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreMeterReadings()} variant="secondary">Показать ещё показания</Button> : null}
           </section> : null}
           {detailTab === "files" ? <section className="task-section" aria-labelledby={`equipment-files-${record.id}`}>
