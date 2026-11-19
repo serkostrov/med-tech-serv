@@ -459,7 +459,10 @@ SELECT pg_temp.check(NOT EXISTS (
        -- 0058: удачные входы лежат в схеме auth (журнал GoTrue), сотруднику её читать
        -- нельзя — досталась бы вся служебная история входа. Поэтому от владельца схемы
        -- с проверкой audit.read первой же строкой.
-       'login_journal')
+       'login_journal',
+       -- 0074: можно ли мне журнал входов — смотрит базовую роль в users и access_roles;
+       -- отвечает только про того, кто спрашивает.
+       'app_can_read_login_journal')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');
