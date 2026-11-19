@@ -1,20 +1,23 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
-import { m2Api, type PriceRowApiRecord, type ReferenceCatalogValue } from "./m2-api.js";
+import { m2Api, type PriceRowApiRecord, type ReferenceCatalogValue, type TaskApiRecord } from "./m2-api.js";
 import {
   Button,
   ConfirmationDialog,
   DataTableShell,
   DatePicker,
-  Dialog,
   DialogForm,
-  MetricCard,
+  EntityDetailToolbar,
+  PageTabs,
   PageIntro,
   ResourceState,
   Select,
   StatusBadge,
   toast
 } from "./ui.js";
-import { formatIsoCalendarDate } from "./date-format.js";
+import { formatDisplayDate, formatIsoCalendarDate } from "./date-format.js";
+import { EntityLink } from "./entity-links.js";
+import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
+import { TASK_STATUS_LABELS, TASK_STATUS_TONES } from "./domain/task-status.js";
 import { formatRussianCount, russianCountForm } from "./equipment-changes.js";
 import { companyToday } from "./task-dates.js";
 import {
@@ -69,34 +72,54 @@ function workTypeOptions(values: readonly ReferenceCatalogValue[], rows: readonl
 
 
 /**
- * История цен строки — в отдельном окне, а не раскрытием строки таблицы: в раскрытой
- * строке было непонятно, что это и к чему относится. Периоды от новых к старым,
- * будущую цену можно убрать, отсюда же — сразу изменить цену.
+ * Вид работ из прайса — своей страницей, а не всплывающим окном (вторая встреча 18.11: «карточку
+ * такую сделать»): сверху цена сейчас и «Изменить цену», вкладки «История цен» и «Задачи» — все
+ * задачи с этим видом работ, основным или дополнительным, постранично.
  */
-function PriceHistoryDialog({ line, today, canWrite, onClose, onDelete, onEdit }: {
-  readonly line: PriceLine | null;
+function WorkTypePricePage({ line, today, canWrite, onBack, onDelete, onEdit }: {
+  readonly line: PriceLine;
   readonly today: string;
   readonly canWrite: boolean;
-  readonly onClose: () => void;
+  readonly onBack: () => void;
   readonly onDelete: (line: PriceLine, row: PriceListRow) => void;
   readonly onEdit: (line: PriceLine) => void;
 }) {
-  return <Dialog
-    describeHidden
-    description="Какая цена действовала и с какого по какое число. В счёт берётся цена, которая действовала в день работ."
-    footer={<>
-      <Button onClick={onClose} variant="secondary">Закрыть</Button>
-      {canWrite && line ? <Button onClick={() => onEdit(line)}>{line.current ? "Изменить цену" : "Задать цену"}</Button> : null}
-    </>}
-    onOpenChange={(open) => { if (!open) onClose(); }}
-    open={Boolean(line)}
-    size="lg"
-    title={line ? `История цен · ${line.workTypeName}` : "История цен"}
-  >
-    {line ? <div className="price-history">
-      <p className="price-history__scope">{line.guaranteeCategoryName}</p>
+  const [tab, setTab] = useState<"history" | "tasks">("history");
+  const { pageSize, setPageSize } = usePageSize("work-type-tasks");
+  const [pageIndex, setPageIndex] = useState(0);
+  const [tasks, setTasks] = useState<{ readonly items: readonly TaskApiRecord[]; readonly total: number } | null>(null);
+  useEffect(() => {
+    let alive = true;
+    setTasks((current) => current ? { ...current, items: [] } : null);
+    void m2Api.tasksPage({ workTypeCode: line.workTypeCode, limit: pageSize, offset: pageIndex * pageSize, sort: "updated_desc" })
+      .then((page) => { if (alive) setTasks({ items: page.items, total: page.total }); })
+      .catch((error: unknown) => { if (alive) setTasks({ items: [], total: 0 }); toast.error(message(error, "Не получилось загрузить задачи")); });
+    return () => { alive = false; };
+  }, [line.workTypeCode, pageIndex, pageSize]);
+  // Названия площадок: в записи задачи только её id.
+  const [siteNames, setSiteNames] = useState<ReadonlyMap<string, string>>(() => new Map());
+  useEffect(() => { void m2Api.listSites(true).then((sites) => setSiteNames(new Map(sites.map((site) => [site.id, site.name])))).catch(() => undefined); }, []);
+  const nextText = priceLineNextText(line);
+  return <div className="engineer-page work-type-page">
+    {/* «Изменить цену» — справа сверху, как «Изменить» в задаче и КП. */}
+    <EntityDetailToolbar actions={canWrite ? <Button icon="edit" onClick={() => onEdit(line)} variant="secondary">{line.current ? "Изменить цену" : "Задать цену"}</Button> : undefined} backLabel="К прайсу" onBack={onBack} />
+    <header className="task-head">
+      <div className="task-head__meta"><span className="task-head__number">{line.workTypeCode}</span></div>
+      <h1>{line.workTypeName}</h1>
+      <p>{line.current ? `${priceLineAmountText(line)} · ${priceLineStartText(line)}` : PRICE_NOT_SET_LABEL}{nextText ? ` · ${nextText}` : ""}</p>
+    </header>
+    <PageTabs
+      items={[
+        { value: "history" as const, label: "История цен", badge: line.history.length },
+        { value: "tasks" as const, label: "Задачи", ...(tasks ? { badge: tasks.total } : {}) }
+      ]}
+      label="Разделы вида работ"
+      onValueChange={setTab}
+      value={tab}
+    />
+    {tab === "history" ? <section className="task-section" aria-label="История цен">
       {line.history.length === 0
-        ? <p className="price-history__empty">{PRICE_NOT_SET_HINT}</p>
+        ? <div className="task-section__empty"><p>{PRICE_NOT_SET_HINT}</p></div>
         : <div className="table-scroll"><table className="data-table">
           <thead><tr>
             <th className="numeric" scope="col">Цена</th>
@@ -121,8 +144,26 @@ function PriceHistoryDialog({ line, today, canWrite, onClose, onDelete, onEdit }
             </tr>;
           })}</tbody>
         </table></div>}
-    </div> : null}
-  </Dialog>;
+    </section> : null}
+    {tab === "tasks" ? <section className="task-section" aria-label="Задачи с этим видом работ">
+      {tasks === null
+        ? <ResourceState description="Подождите." status="loading" title="Загружаем задачи" />
+        : tasks.total === 0
+          ? <div className="task-section__empty"><p>Задач с этим видом работ пока нет.</p></div>
+          : <><div className="table-scroll"><table className="data-table engineer-page__table">
+            <thead><tr><th scope="col">Задача</th><th scope="col">Прибор</th><th scope="col">Клиент</th><th scope="col">Инженер</th><th scope="col">Срок</th><th scope="col">Этап</th></tr></thead>
+            <tbody>{tasks.items.map((task) => <tr key={task.id}>
+              <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
+              <td>{task.equipmentId && task.equipmentLabel ? <EntityLink target={{ kind: "equipment", id: task.equipmentId }}>{[task.equipmentLabel.model, task.equipmentLabel.serialNumber ? `S/N ${task.equipmentLabel.serialNumber}` : undefined].filter(Boolean).join(" · ")}</EntityLink> : "—"}</td>
+              <td>{task.siteId ? <EntityLink target={{ kind: "site", id: task.siteId }}>{siteNames.get(task.siteId) ?? "Клиент"}</EntityLink> : "—"}</td>
+              <td>{task.engineerId ? <EntityLink target={{ kind: "engineer", id: task.engineerId }}>{task.engineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>
+              <td className="cell-date">{task.status === "closed" ? formatDisplayDate(task.completedAt ?? task.visitDate) || "—" : task.periodTo ? `до ${formatDisplayDate(task.periodTo)}` : "—"}</td>
+              <td><StatusBadge tone={TASK_STATUS_TONES[task.status] ?? "neutral"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
+            </tr>)}</tbody>
+          </table></div>
+          <RegistryPagination alwaysShow ariaLabel="Страницы задач вида работ" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={tasks.total} /></>}
+    </section> : null}
+  </div>;
 }
 
 /**
@@ -137,8 +178,8 @@ export function PricePage() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [canWrite, setCanWrite] = useState(false);
   const [search, setSearch] = useState("");
-  // Открытая история — по ключу строки: после правки цены окно показывает свежую историю.
-  const [historyKey, setHistoryKey] = useState<string | null>(null);
+  // Открытый вид работ — по ключу строки: после правки цены страница показывает свежую историю.
+  const [openKey, setOpenKey] = useState<string | null>(null);
   const [selected, setSelected] = useState<ReadonlySet<string>>(() => new Set());
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
@@ -204,7 +245,7 @@ export function PricePage() {
   const planned = lines.filter((line) => line.next).length;
   const counting = loading && rows.length === 0;
 
-  const historyLine = historyKey ? lines.find((line) => line.key === historyKey) ?? null : null;
+  const openLine = openKey ? lines.find((line) => line.key === openKey) ?? null : null;
 
   const toggleSelected = (key: string, on: boolean) => {
     setSelected((current) => {
@@ -326,6 +367,14 @@ export function PricePage() {
   const editorTitle = editing ? `Цена · ${editing.workTypeName}` : "Цена вида работ";
 
   return <>
+    {openLine ? <WorkTypePricePage
+      canWrite={canWrite}
+      line={openLine}
+      onBack={() => setOpenKey(null)}
+      onDelete={(line, row) => setDeleting({ line, row })}
+      onEdit={openEditor}
+      today={today}
+    /> : <>
     <PageIntro
       description="Цены по видам работ: что действует сейчас, с какой даты и как менялось раньше. Новая цена закрывает прошлую, история остаётся."
       title="Прайс"
@@ -384,7 +433,7 @@ export function PricePage() {
                         onChange={(event) => toggleSelected(line.key, event.target.checked)}
                         type="checkbox"
                       /></td> : null}
-                      <td><strong>{line.workTypeName}</strong>{line.guaranteeCategoryName === ALL_CATEGORIES_LABEL ? null : <small>{line.guaranteeCategoryName}</small>}<code className="price-code" title="Код вида работ: по нему сверяют позицию со складом и бухгалтерией">{line.workTypeCode}</code></td>
+                      <td><button className="entity-link" onClick={() => setOpenKey(line.key)} title="Открыть вид работ: история цен и задачи" type="button"><strong>{line.workTypeName}</strong></button>{line.guaranteeCategoryName === ALL_CATEGORIES_LABEL ? null : <small>{line.guaranteeCategoryName}</small>}<code className="price-code" title="Код вида работ: по нему сверяют позицию со складом и бухгалтерией">{line.workTypeCode}</code></td>
                       <td className="numeric">{line.current
                         ? <strong>{priceLineAmountText(line)}</strong>
                         : <span className="is-empty">{priceLineAmountText(line)}</span>}</td>
@@ -394,7 +443,7 @@ export function PricePage() {
                         : "—"}</td>
                       <td>{line.history.length === 0 ? <span className="muted">—</span> : <button
                         className="text-button"
-                        onClick={() => setHistoryKey(line.key)}
+                        onClick={() => setOpenKey(line.key)}
                         type="button"
                       >{formatRussianCount(line.history.length, ["цена", "цены", "цен"])}</button>}</td>
                       {canWrite ? <td><div className="table-actions"><Button
@@ -407,15 +456,7 @@ export function PricePage() {
                 })}</tbody>
               </table></div>}
     </DataTableShell>
-
-    <PriceHistoryDialog
-      canWrite={canWrite}
-      line={historyLine}
-      onClose={() => setHistoryKey(null)}
-      onDelete={(line, row) => { setHistoryKey(null); setDeleting({ line, row }); }}
-      onEdit={(line) => { setHistoryKey(null); openEditor(line); }}
-      today={today}
-    />
+    </>}
 
     <DialogForm
       busy={saving}
