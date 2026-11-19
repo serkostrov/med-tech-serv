@@ -92,8 +92,9 @@ describe("окончания в числах", () => {
     assert.match(operations, /formatRussianCount\(report\.metrics\.taskCount, \["заявка", "заявки", "заявок"\]\)/u);
     // 58: «Склад» — «1 позиция», в обоих видах раздела.
     assert.equal(operations.match(/formatRussianCount\(total, \["позиция", "позиции", "позиций"\]\)/gu)?.length, 2);
-    // 22: «Клиенты», блок «Без площадки» — «1 активная запись».
-    assert.match(customers, /formatRussianCount\(orphanPayers\.filter[^\n]*\["активная запись", "активные записи", "активных записей"\]\)/u);
+    // 22: «Клиенты» — «Без площадки» теперь вкладка с числом (вторая встреча 18.11), люди площадки — «3 человека».
+    assert.match(customers, /label: "Без площадки", badge: visibleOrphans\.length/u);
+    assert.match(customers, /formatRussianCount\(count, \["человек", "человека", "человек"\]\)/u);
     // 33: справочники — «1 активная запись · 1 неактивная», шаблоны, разделы и счета.
     assert.match(app, /\["активная запись", "активные записи", "активных записей"\]/u);
     assert.match(app, /\["неактивная", "неактивные", "неактивных"\]/u);

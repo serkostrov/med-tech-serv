@@ -15,6 +15,7 @@ import {
   AutoTextarea,
   Button,
   IconButton,
+  PageTabs,
   ConfirmationDialog,
   DialogForm,
   ResourceState,
@@ -62,6 +63,9 @@ export function CustomerReferencesPage() {
   const [closedInSearch, setClosedInSearch] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => { setClosedInSearch(new Set()); }, [search]);
   const [showInactive, setShowInactive] = useState(false);
+  // «Без площадки» — своей вкладкой, а не под списком: при сотнях клиентов до него не доскроллить
+  // (вторая встреча 18.11).
+  const [tab, setTab] = useState<"sites" | "orphans">("sites");
   const [editor, setEditor] = useState<Editor | null>(null);
   const [pendingStateChange, setPendingStateChange] = useState<PendingStateChange | null>(null);
   const [loading, setLoading] = useState(true);
@@ -204,19 +208,32 @@ export function CustomerReferencesPage() {
   const sitePageShown = Math.min(sitePageIndex, Math.max(0, Math.ceil(visibleSites.length / sitePageSize) - 1));
   const sitePage = visibleSites.slice(sitePageShown * sitePageSize, (sitePageShown + 1) * sitePageSize);
 
+  const visibleOrphans = orphanPayers.filter((payer) => !query
+    || [payer.name, payer.inn, payer.kpp].filter(Boolean).join(" ").toLocaleLowerCase("ru-RU").includes(query));
+  const shownTab = orphanPayers.length > 0 ? tab : "sites";
+
   return <>
     <div className="customer-references">
+      {orphanPayers.length > 0 ? <PageTabs
+        items={[
+          { value: "sites" as const, label: "Площадки", badge: visibleSites.length },
+          { value: "orphans" as const, label: "Без площадки", badge: visibleOrphans.length }
+        ]}
+        label="Клиенты"
+        onValueChange={setTab}
+        value={shownTab}
+      /> : null}
       <div className="registry-toolbar">
         <label className="registry-toolbar__search" htmlFor="customer-search">
           <span className="sr-only">Поиск клиентов</span>
           <input id="customer-search" onChange={(event) => { setSearch(event.target.value); setSitePageIndex(0); }} placeholder="Площадка, адрес, человек или ИНН" type="search" value={search} />
         </label>
-        {inactiveCount > 0 ? <button aria-pressed={showInactive} className={`toggle-chip${showInactive ? " toggle-chip--on" : ""}`} onClick={() => setShowInactive((value) => !value)} type="button">Отключённые · {inactiveCount}</button> : null}
+        {shownTab === "sites" && inactiveCount > 0 ? <button aria-pressed={showInactive} className={`toggle-chip${showInactive ? " toggle-chip--on" : ""}`} onClick={() => setShowInactive((value) => !value)} type="button">Отключённые · {inactiveCount}</button> : null}
         <span className="registry-toolbar__spacer" />
         <Button icon="plus" onClick={() => { setFormError(null); setEditor({ kind: "site" }); }}>Добавить площадку</Button>
       </div>
 
-      {sites.length === 0
+      {shownTab === "orphans" ? null : sites.length === 0
         ? <ResourceState description="Нужна, чтобы указывать место работ в заявках. Добавьте первую площадку кнопкой сверху." status="empty" title="Площадок пока нет" />
         : visibleSites.length === 0
           ? <ResourceState description="Измените поиск или покажите отключённые площадки." status="filtered-empty" title="Ничего не найдено" />
@@ -227,25 +244,28 @@ export function CustomerReferencesPage() {
             const activePeople = people.filter((person) => person.isActive).length;
             return <article className={`customer-site-card${site.isActive ? "" : " customer-site-card--inactive"}`} key={site.id}>
               <header className="customer-site-card__header">
-                <button
-                  aria-controls={`site-people-${site.id}`}
-                  aria-expanded={peopleOpen}
-                  className="customer-site-card__toggle"
-                  onClick={() => {
-                    if (!query) { togglePeople(site.id); return; }
-                    setClosedInSearch((current) => { const next = new Set(current); if (next.has(site.id)) next.delete(site.id); else next.add(site.id); return next; });
-                  }}
-                  type="button"
-                >
-                  <span aria-hidden="true" className={`customer-site-card__chevron${peopleOpen ? " is-open" : ""}`} />
+                <div className="customer-site-card__lead">
+                  {/* Стрелка раскрывает людей площадки, название открывает страницу клиента
+                      (вторая встреча 18.11: по названию страница клиента не открывалась). */}
+                  <button
+                    aria-controls={`site-people-${site.id}`}
+                    aria-expanded={peopleOpen}
+                    aria-label={peopleOpen ? `Свернуть людей: ${site.name}` : `Показать людей: ${site.name}`}
+                    className="customer-site-card__toggle"
+                    onClick={() => {
+                      if (!query) { togglePeople(site.id); return; }
+                      setClosedInSearch((current) => { const next = new Set(current); if (next.has(site.id)) next.delete(site.id); else next.add(site.id); return next; });
+                    }}
+                    type="button"
+                  >
+                    <span aria-hidden="true" className={`customer-site-card__chevron${peopleOpen ? " is-open" : ""}`} />
+                  </button>
                   <span className="customer-site-card__title">
-                    <strong>{site.name}</strong>
+                    <EntityLink target={{ kind: "site", id: site.id }}><strong>{site.name}</strong></EntityLink>
                     <small>{siteTypeLabel(site.type)} · {site.address || "Адрес не указан"}</small>
                   </span>
-                </button>
+                </div>
                 <div className="customer-site-card__meta">
-                  {/* Встреча 18.11: страница клиента — заявки, приборы, люди. */}
-                  <EntityLink className="customer-site-card__open" target={{ kind: "site", id: site.id }}>Заявки и приборы →</EntityLink>
                   <StatusBadge tone={site.isActive ? "success" : "neutral"}>{site.isActive ? "Активна" : "Неактивна"}</StatusBadge>
                   <span className="customer-site-card__count">{peopleCountLabel(activePeople)}</span>
                   <div className="table-actions">
@@ -261,7 +281,7 @@ export function CustomerReferencesPage() {
 
               {peopleOpen ? <div className="customer-site-card__people" id={`site-people-${site.id}`}>
                 {people.length === 0
-                  ? <p className="customer-site-card__empty">Пока никого нет. Добавьте человека: телефон для выезда и реквизиты для счетов в одной записи.</p>
+                  ? <p className="customer-site-card__empty">Людей пока нет.</p>
                   : <ul className="customer-people-list">
                     {people.map((person) => <li className={`customer-person${person.isActive ? "" : " is-inactive"}`} key={person.key}>
                       <div className="customer-person__body">
@@ -312,15 +332,11 @@ export function CustomerReferencesPage() {
           <RegistryPagination alwaysShow ariaLabel="Страницы клиентов" onPageChange={setSitePageIndex} onPageSizeChange={(size) => { setSitePageSize(size); setSitePageIndex(0); }} pageIndex={sitePageShown} pageSize={sitePageSize} total={visibleSites.length} />
         </div>}
 
-      {orphanPayers.length > 0 ? <section className="customer-orphans card">
-        <div className="customer-orphans__header">
-          <div>
-            <h2>Без площадки</h2>
-          </div>
-          <span className="muted">{formatRussianCount(orphanPayers.filter((item) => item.isActive).length, ["активная запись", "активные записи", "активных записей"])}</span>
-        </div>
+      {shownTab === "orphans" ? (visibleOrphans.length === 0
+        ? <ResourceState description="Измените поиск." status="filtered-empty" title="Ничего не найдено" />
+        : <section className="customer-orphans card">
         <ul className="customer-people-list customer-people-list--orphan">
-          {orphanPayers.map((payer) => <li className={`customer-person${payer.isActive ? "" : " is-inactive"}`} key={payer.id}>
+          {visibleOrphans.map((payer) => <li className={`customer-person${payer.isActive ? "" : " is-inactive"}`} key={payer.id}>
             <div className="customer-person__body">
               <div className="customer-person__line">
                 <strong>{payer.name}</strong>
@@ -347,7 +363,7 @@ export function CustomerReferencesPage() {
             </div>
           </li>)}
         </ul>
-      </section> : null}
+      </section>) : null}
     </div>
 
     <DialogForm

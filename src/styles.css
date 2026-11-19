@@ -6917,29 +6917,38 @@ td .resource-state {
   border-bottom: 1px solid var(--color-border-soft);
 }
 
-.customer-site-card__toggle {
+.customer-site-card__lead {
   display: flex;
   align-items: flex-start;
   gap: 10px;
   min-width: 0;
   flex: 1;
+}
+
+/* Стрелка раскрывает людей; название — ссылка на страницу клиента (вторая встреча 18.11). */
+.customer-site-card__toggle {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 24px;
+  height: 24px;
+  margin: -1px 0 0 -6px;
   padding: 0;
   border: 0;
+  border-radius: 6px;
   background: transparent;
   color: inherit;
-  text-align: left;
   cursor: pointer;
 }
 
-.customer-site-card__toggle:hover .customer-site-card__title strong {
-  color: var(--color-accent);
-}
+.customer-site-card__toggle:hover { background: var(--color-border-soft); }
+.customer-site-card__title .entity-link { justify-self: start; text-align: left; }
 
 .customer-site-card__chevron {
   flex: 0 0 auto;
   width: 8px;
   height: 8px;
-  margin-top: 7px;
+  margin-top: -3px;
   border-right: 2px solid var(--color-ink-soft);
   border-bottom: 2px solid var(--color-ink-soft);
   transform: rotate(-45deg);
@@ -6947,7 +6956,7 @@ td .resource-state {
 }
 
 .customer-site-card__chevron.is-open {
-  margin-top: 5px;
+  margin-top: -5px;
   transform: rotate(45deg);
 }
 
@@ -9601,7 +9610,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .engineer-select-field__label { color: var(--color-ink); font-size: 12px; font-weight: 600; }
 .task-bulk-actions__grid .engineer-select-field { grid-column: auto; }
 .registry-toolbar__filters .multi-select { width: 190px; }
-.customer-site-card__open { font-size: 13px; font-weight: 600; white-space: nowrap; }
 .site-page__people { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .site-page__people li { display: grid; gap: 2px; padding: 10px 12px; border: 1px solid var(--color-border-soft); border-radius: 9px; }
 .site-page__people li span { color: var(--color-muted); font-size: 13px; }
