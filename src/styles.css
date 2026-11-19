@@ -8422,7 +8422,9 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* Свойства во вкладке карточки (17.11): на всю ширину, группы рядом */
 .task-layout--single { grid-template-columns: minmax(0, 1fr); }
-.task-props--tab { grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); column-gap: 32px; align-items: start; }
+/* Две колонки: о задаче и о месте; третьей полупустой колонки нет (UI/UX-разбор 19.11). */
+.task-props--tab { grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 32px; align-items: start; }
+@media (max-width: 760px) { .task-props--tab { grid-template-columns: 1fr; } }
 .task-props--tab .task-props__head { grid-column: 1 / -1; justify-content: flex-end; padding-bottom: 0; }
 .task-props--tab .task-props__head h2 { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 .task-props--tab dl:first-of-type, .task-props--tab dl { border-top: 0; }

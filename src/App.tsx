@@ -1545,12 +1545,11 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
             {task.initiator?.fullName || task.initiatorName ? <div><dt>Обратился</dt><dd>{task.initiator?.fullName ?? task.initiatorName}</dd></div> : null}
             {showFinance && task.customer?.payerName ? <div><dt>Плательщик</dt><dd>{task.customer.payerName}</dd></div> : null}
             {showFinance && (task.contractNumber || task.contractId) ? <div><dt>Договор</dt><dd>{task.contractNumber ?? task.contractId}</dd></div> : null}
-          </dl>
-          {task.primaryTaskId || task.continuationTaskId || task.isMaintenancePlan ? <dl>
+            {/* Связанные задачи и план ТО — во второй колонке, без третьей полупустой (UI/UX-разбор 19.11). */}
             {task.primaryTaskId ? <div><dt>Первичная</dt><dd><button className="text-button" onClick={() => void onOpenRelated(task.primaryTaskId!)} type="button">{task.primaryTaskNumber ?? task.primaryTaskId}</button></dd></div> : null}
             {task.continuationTaskId ? <div><dt>Продолжение</dt><dd><button className="text-button" onClick={() => void onOpenRelated(task.continuationTaskId!)} type="button">{task.continuationTaskNumber ?? task.continuationTaskId}</button></dd></div> : null}
             {task.isMaintenancePlan ? <div><dt>План ТО</dt><dd>Создана по плану</dd></div> : null}
-          </dl> : null}
+          </dl>
           {/* 18.11: «Изменить» — справа сверху, «Отменить» — справа снизу, обе заметными кнопками. */}
           {canCancel ? <div className="task-props__foot"><Button disabled={busy} onClick={() => setActionDialog("cancel")} variant="danger">Отменить задачу</Button></div> : null}
         </section> : null}
