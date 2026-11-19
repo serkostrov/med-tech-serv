@@ -53,6 +53,11 @@ export function ReservationSteps({ reservation, showLast = true }: {
   </div>;
 }
 
+/** Снять резерв можно, пока склад его не собрал. */
+function isCancellable(reservation: StockReservationRecord): boolean {
+  return reservation.status === "created" || reservation.status === "warehouse_notified";
+}
+
 /**
  * Резервы со склада в карточке задачи: что заказано, на каком шаге и кто его сделал.
  * Кладовщик, координатор и руководитель (право warehouse.write) резервируют отсюда же.
@@ -96,24 +101,34 @@ export function TaskReservationsSection({ taskId, taskInWork, reservations, load
       : reservations.length === 0 ? <div className="task-section__empty">
         <p>{canWrite && taskInWork ? "Запчасти со склада под задачу не резервировали. Нажмите «Зарезервировать запчасть», если они нужны на выезде." : "Запчасти со склада под задачу не резервировали."}</p>
       </div>
-      : <ul className="task-reservations">{reservations.map((reservation) => {
-        const canCancel = canWrite && (reservation.status === "created" || reservation.status === "warehouse_notified");
-        return <li className="task-reservations__item" key={reservation.id}>
-          <div className="task-reservations__main">
-            <span className="task-reservations__number">{reservation.number}</span>
-            <strong><EntityLink target={{ kind: "part", id: reservation.partId }}>{reservation.articleNumber}</EntityLink></strong>
-            <span className="task-reservations__name">{reservation.partName}</span>
-            <small>{partQuantityText(reservation.quantity)} · {RESERVATION_CONDITION_LABELS[reservation.condition]}</small>
-          </div>
-          <div className="task-reservations__state">
-            <StatusBadge tone={RESERVATION_STATUS_TONES[reservation.status]}>{RESERVATION_STATUS_LABELS[reservation.status]}</StatusBadge>
-            <ReservationSteps reservation={reservation} />
-          </div>
-          {canCancel ? <div className="task-reservations__actions">
-            <Button busy={busyId === reservation.id} busyLabel="Снимаем…" className="button--compact" disabled={busyId !== null} onClick={() => setCancelling(reservation)} variant="ghost">Снять резерв</Button>
-          </div> : null}
-        </li>;
-      })}</ul>}
+      // Таблицей того же вида, что «Запчасти» ниже (встреча 19.11): этап — всегда в своём столбце,
+      // кнопка «Снять резерв» его не сдвигает, на экране один стиль таблиц вместо двух.
+      : <div className="table-scroll table-cards"><table className="data-table task-reservations-table">
+        <thead><tr>
+          <th scope="col">Резерв</th>
+          <th scope="col">Артикул</th>
+          <th scope="col">Наименование</th>
+          <th className="numeric" scope="col">Количество</th>
+          <th scope="col">Состояние</th>
+          <th scope="col">Этап</th>
+          <th scope="col">Кто и когда</th>
+          {reservations.some((item) => canWrite && isCancellable(item)) ? <th scope="col"><span className="sr-only">Действия</span></th> : null}
+        </tr></thead>
+        <tbody>{reservations.map((reservation) => {
+          const canCancel = canWrite && isCancellable(reservation);
+          const anyCancel = reservations.some((item) => canWrite && isCancellable(item));
+          return <tr key={reservation.id}>
+            <td className="task-reservations-table__number" data-label="Резерв">{reservation.number}</td>
+            <td data-label="Артикул"><strong><EntityLink target={{ kind: "part", id: reservation.partId }}>{reservation.articleNumber}</EntityLink></strong></td>
+            <td className="cell-wide" data-label="Наименование">{reservation.partName}</td>
+            <td className="numeric" data-label="Количество">{reservation.quantity}</td>
+            <td data-label="Состояние">{RESERVATION_CONDITION_LABELS[reservation.condition]}</td>
+            <td data-label="Этап"><StatusBadge tone={RESERVATION_STATUS_TONES[reservation.status]}>{RESERVATION_STATUS_LABELS[reservation.status]}</StatusBadge></td>
+            <td className="cell-wide" data-label="Кто и когда"><ReservationSteps reservation={reservation} /></td>
+            {anyCancel ? <td className="task-reservations-table__action">{canCancel ? <Button busy={busyId === reservation.id} busyLabel="Снимаем…" className="button--compact" disabled={busyId !== null} onClick={() => setCancelling(reservation)} variant="ghost">Снять резерв</Button> : null}</td> : null}
+          </tr>;
+        })}</tbody>
+      </table></div>}
     <ReserveTaskPartDialog
       onCreated={onChanged}
       onOpenChange={setAdding}

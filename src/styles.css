@@ -8890,28 +8890,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .maintenance-plan-form__keep { justify-self: stretch; }
 }
 
-/* ===== Резерв со склада в карточке задачи ===== */
-.task-reservations { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.task-reservations__item {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 260px) auto;
-  align-items: start;
-  gap: 10px 16px;
-  padding: 12px 14px;
-  border: 1px solid var(--color-border-soft);
-  border-radius: var(--radius-md);
-  background: var(--color-surface);
-}
-.task-reservations__main { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; min-width: 0; }
-.task-reservations__number { color: var(--color-muted); font-size: 13px; font-weight: 600; white-space: nowrap; }
-.task-reservations__name { min-width: 0; overflow-wrap: anywhere; }
-.task-reservations__main small { flex-basis: 100%; color: var(--color-muted); font-size: 13px; }
-.task-reservations__state { display: grid; justify-items: start; gap: 4px; }
-.task-reservations__actions { display: flex; justify-content: flex-end; }
-@media (max-width: 760px) {
-  .task-reservations__item { grid-template-columns: minmax(0, 1fr); }
-  .task-reservations__actions { justify-content: flex-start; }
-}
+/* ===== Резерв со склада в карточке задачи: таблица того же вида, что «Запчасти» ===== */
+.task-reservations-table td { vertical-align: top; }
+.task-reservations-table__number { color: var(--color-muted); white-space: nowrap; }
+/* Номер, артикул, количество, состояние и этап — в одну строку; переносятся только название и «кто и когда». */
+.task-reservations-table td:nth-child(-n+2), .task-reservations-table td:nth-child(4), .task-reservations-table td:nth-child(5), .task-reservations-table td:nth-child(6) { white-space: nowrap; }
+.task-reservations-table__action { text-align: right; white-space: nowrap; }
 
 /* Шаги резерва: последний виден всегда, остальные по кнопке */
 .reservation-steps { display: grid; justify-items: start; gap: 2px; }
@@ -9464,6 +9448,8 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .table-cards > table > tbody > tr > td { display: block; padding: 0; border: 0; min-width: 0; overflow-wrap: anywhere; white-space: normal; text-align: left; }
   .table-cards > table > tbody > tr > td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
   .table-cards > table > tbody > tr > td.cell-wide { grid-column: 1 / -1; }
+  /* Числа в карточке — у подписи слева, а не прижатыми вправо, как в широкой таблице. */
+  .table-cards > table > tbody > tr > td.numeric { text-align: left; }
   .table-cards > table > tbody > tr.journal-table__detail { display: block; }
   .table-cards > table > tbody > tr.journal-table__detail > td { display: block; }
 }
