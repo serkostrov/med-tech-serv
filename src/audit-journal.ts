@@ -143,6 +143,12 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   permission_code: "Право",
   role_key: "Роль",
   base_role: "Тип роли",
+  // Поля сотрудника и роли, которые журнал доступа показывал кодами (стенд, 19.11).
+  has_own_stock: "Свой склад",
+  deactivated_at: "Отключён с",
+  last_login_at: "Последний вход",
+  manager_id: "Руководитель",
+  key: "Код роли",
   valid_from: "Действует с",
   valid_to: "Действует по",
   include_guarantee_work: "Гарантия в счёт",
