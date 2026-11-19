@@ -122,6 +122,7 @@ import {
   ViewSwitch,
   PageIntro,
   ResourceState,
+  RowMenu,
   StatusBadge,
   type StatusTone,
   Select,
@@ -3602,12 +3603,17 @@ function AdminReferencesPage() {
             {showParams ? <td className="muted">{referenceAttributesSummary(selected.fields, record.attributes, relatedValues)}</td> : null}
             <td>{record.isActive ? null : <StatusBadge tone="neutral">Скрыто</StatusBadge>}</td>
             <td><div className="reference-admin-actions">
-              <IconButton disabled={index === 0} icon="moveUp" label="Выше" onClick={() => void moveRecord(record, "up")} />
-              <IconButton disabled={index === records.length - 1} icon="moveDown" label="Ниже" onClick={() => void moveRecord(record, "down")} />
               <IconButton icon="edit" label="Изменить" onClick={() => beginEdit(record)} />
-              {/* У встроенного значения кнопки «Скрыть» нет: без него база не работает (миграция 0033). */}
-              {!canHideReferenceValue(record) ? null : record.isActive ? <IconButton icon="hide" label="Скрыть" onClick={() => setDeactivating(record)} /> : <IconButton icon="show" label="Показать" onClick={() => void reactivateRecord(record)} />}
-              {selected.key === "work-types" && canDelete && canHideReferenceValue(record) ? <IconButton icon="trash" label="Удалить" onClick={() => setDeleting(record)} /> : null}
+              {/* Редкие действия — в меню «…» (UI/UX-разбор 19.11). У встроенного значения нет «Скрыть»
+                  и «Удалить»: без него база не работает (миграция 0033). */}
+              <RowMenu items={[
+                ...(index > 0 ? [{ label: "Выше", icon: "moveUp" as const, onSelect: () => void moveRecord(record, "up") }] : []),
+                ...(index < records.length - 1 ? [{ label: "Ниже", icon: "moveDown" as const, onSelect: () => void moveRecord(record, "down") }] : []),
+                ...(!canHideReferenceValue(record) ? [] : record.isActive
+                  ? [{ label: "Скрыть", icon: "hide" as const, onSelect: () => setDeactivating(record) }]
+                  : [{ label: "Показать", icon: "show" as const, onSelect: () => void reactivateRecord(record) }]),
+                ...(selected.key === "work-types" && canDelete && canHideReferenceValue(record) ? [{ label: "Удалить", icon: "trash" as const, danger: true, onSelect: () => setDeleting(record) }] : [])
+              ]} label={`Ещё: ${record.name}`} />
             </div></td>
           </tr>;
         })}{records.length === 0 ? <tr><td colSpan={showParams ? 4 : 3}><ResourceState description="Нажмите «Добавить запись», чтобы значение появилось в заявках." status="empty" title={`В списке «${selected.label}» пока нет записей`} /></td></tr> : null}</tbody></table></div>

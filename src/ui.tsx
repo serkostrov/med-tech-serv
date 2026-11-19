@@ -27,6 +27,7 @@ import {
   CalendarClock,
   Check,
   ChevronRight,
+  Ellipsis,
   CircleOff,
   ClipboardList,
   Clock,
@@ -86,7 +87,7 @@ export type IconName =
   | "plus" | "bell" | "check" | "search" | "filter" | "arrow" | "back" | "clock"
   | "info" | "close" | "users" | "shield" | "mail" | "logout"
   | "edit" | "hide" | "show" | "disable" | "enable" | "open" | "relocate" | "ignore" | "restore"
-  | "moveUp" | "moveDown" | "trash" | "menu";
+  | "moveUp" | "moveDown" | "trash" | "menu" | "more";
 
 const icons: Readonly<Record<IconName, LucideIcon>> = {
   tasks: ClipboardList,
@@ -130,7 +131,8 @@ const icons: Readonly<Record<IconName, LucideIcon>> = {
   moveUp: ArrowUp,
   moveDown: ArrowDown,
   trash: Trash2,
-  menu: Menu
+  menu: Menu,
+  more: Ellipsis
 };
 
 export function Icon({ name, size = 16 }: { readonly name: IconName; readonly size?: number }) {
@@ -629,6 +631,57 @@ function filterSignature(form: HTMLFormElement): string {
   const marks = [...form.querySelectorAll("[data-filter-active], [role=combobox]")]
     .map((element) => `${element.getAttribute("data-filter-active") ?? ""}|${element.textContent ?? ""}`);
   return JSON.stringify([controls, marks]);
+}
+
+export interface RowMenuItem {
+  readonly label: string;
+  readonly onSelect: () => void;
+  readonly icon?: IconName;
+  readonly disabled?: boolean;
+  readonly danger?: boolean;
+}
+
+/**
+ * Меню «…» в строке таблицы: редкие действия (порядок, скрыть, удалить) не занимают строку
+ * пятью значками, на виду остаётся одно частое — «Изменить» (UI/UX-разбор 19.11, как в Linear и Attio).
+ */
+export function RowMenu({ label, items }: { readonly label: string; readonly items: readonly RowMenuItem[] }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const menuId = useId();
+  useEffect(() => {
+    if (!open) return;
+    const close = (event: MouseEvent) => { if (!rootRef.current?.contains(event.target as Node)) setOpen(false); };
+    const escape = (event: globalThis.KeyboardEvent) => { if (event.key === "Escape") setOpen(false); };
+    document.addEventListener("mousedown", close);
+    document.addEventListener("keydown", escape);
+    // Фокус на первый пункт: меню работает с клавиатуры.
+    rootRef.current?.querySelector<HTMLButtonElement>("[role=menuitem]:not(:disabled)")?.focus();
+    return () => { document.removeEventListener("mousedown", close); document.removeEventListener("keydown", escape); };
+  }, [open]);
+  const visible = items.filter(Boolean);
+  if (visible.length === 0) return null;
+  const moveFocus = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return;
+    event.preventDefault();
+    const buttons = [...(rootRef.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]:not(:disabled)") ?? [])];
+    const index = buttons.indexOf(document.activeElement as HTMLButtonElement);
+    const next = buttons[(index + (event.key === "ArrowDown" ? 1 : buttons.length - 1)) % buttons.length];
+    next?.focus();
+  };
+  return <div className="row-menu" ref={rootRef}>
+    <IconButton aria-controls={open ? menuId : undefined} aria-expanded={open} aria-haspopup="menu" icon="more" label={label} onClick={() => setOpen((value) => !value)} />
+    {open ? <div className="row-menu__list" id={menuId} onKeyDown={moveFocus} role="menu">
+      {visible.map((item) => <button
+        className={cn("row-menu__item", item.danger ? "row-menu__item--danger" : "")}
+        disabled={item.disabled}
+        key={item.label}
+        onClick={() => { setOpen(false); item.onSelect(); }}
+        role="menuitem"
+        type="button"
+      >{item.icon ? <Icon name={item.icon} /> : null}<span>{item.label}</span></button>)}
+    </div> : null}
+  </div>;
 }
 
 export type ResourceStatus = "loading" | "empty" | "filtered-empty" | "error";

@@ -9707,3 +9707,14 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 }
 /* Кнопка над таблицей без заголовка (например, «Скачать в Excel» у документов склада). */
 .data-table-shell__action { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--color-border-soft); }
+
+/* Меню «…» в строке таблицы: редкие действия не занимают строку значками (UI/UX-разбор 19.11). */
+.row-menu { position: relative; display: inline-flex; }
+.row-menu__list { position: absolute; top: calc(100% + 4px); right: 0; z-index: 30; display: grid; min-width: 168px; padding: 4px; border: 1px solid var(--color-border); border-radius: 10px; background: var(--color-surface); box-shadow: 0 10px 28px rgb(15 32 45 / 14%); }
+.row-menu__item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 7px; background: transparent; color: var(--color-ink); font: inherit; font-size: 13px; text-align: left; white-space: nowrap; cursor: pointer; }
+.row-menu__item:hover, .row-menu__item:focus-visible { background: var(--color-border-soft); outline: none; }
+.row-menu__item:disabled { color: var(--color-muted); cursor: default; }
+.row-menu__item--danger { color: var(--color-danger); }
+.row-menu__item svg { flex: none; color: currentColor; }
+/* Открытое меню не обрезается краем таблицы с прокруткой. */
+.table-scroll:has(.row-menu__list), .card:has(.row-menu__list), .data-table-shell:has(.row-menu__list) { overflow: visible; }
