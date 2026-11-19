@@ -147,7 +147,8 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
   const shownTab = tabs.some((item) => item.value === tab) ? tab : "tasks";
 
   return <div className="engineer-page">
-    <EntityDetailToolbar backLabel="Назад" onBack={onBack} />
+    {/* «Изменить» — справа сверху, как в задаче, КП и прайсе (UI/UX-разбор 19.11). */}
+    <EntityDetailToolbar actions={onEdit ? <Button icon="edit" onClick={() => onEdit(engineer)} variant="secondary">Изменить карточку</Button> : undefined} backLabel="Назад" onBack={onBack} />
     <header className="task-head">
       <div className="task-head__meta">
         <span className="task-head__number">Инженер</span>
@@ -155,7 +156,6 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
         {engineer.hasOwnStock ? <StatusBadge tone="info">Свой склад</StatusBadge> : null}
       </div>
       <h1>{engineer.fullName}</h1>
-      {onEdit ? <div className="engineer-page__actions"><Button icon="edit" onClick={() => onEdit(engineer)} variant="secondary">Изменить карточку</Button></div> : null}
     </header>
     <PageTabs items={tabs} label="Разделы страницы инженера" onValueChange={setTab} value={shownTab} />
 

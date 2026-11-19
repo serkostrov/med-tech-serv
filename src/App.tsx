@@ -3645,10 +3645,7 @@ function ReferencesWorkspace({ notificationTemplates = false }: { readonly notif
 function CustomersPage({ initialSiteId, initialSiteTab }: { readonly initialSiteId?: string | undefined; readonly initialSiteTab?: SitePageTab | undefined }) {
   // Страница клиента по ссылке (площадка в задаче, приборе, «Клиентах»), «Назад» — шагом истории.
   if (initialSiteId) return <SitePage {...(initialSiteTab ? { initialTab: initialSiteTab } : {})} onBack={() => window.history.back()} siteId={initialSiteId} />;
-  return <>
-    <PageIntro title="Клиенты" />
-    <CustomerReferencesPage />
-  </>;
+  return <CustomerReferencesPage />;
 }
 
 /** Колонки доски счетов: жизнь счёта слева направо (просьба 17.11 — счета по статусам). */

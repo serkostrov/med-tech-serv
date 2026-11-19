@@ -446,7 +446,7 @@ export function PricePage() {
                       {canWrite ? <td><div className="table-actions"><Button
                         className="button--compact"
                         onClick={() => openEditor(line)}
-                        variant={line.current ? "secondary" : "primary"}
+                        variant="secondary"
                       >{line.current ? "Изменить цену" : "Задать цену"}</Button></div></td> : null}
                     </tr>
                   </React.Fragment>;

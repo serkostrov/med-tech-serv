@@ -15,6 +15,7 @@ import {
   AutoTextarea,
   Button,
   IconButton,
+  PageIntro,
   PageTabs,
   ConfirmationDialog,
   DialogForm,
@@ -193,7 +194,7 @@ export function CustomerReferencesPage() {
   };
 
   if (loading && sites.length === 0) {
-    return <ResourceState description="Подождите, площадки и люди сейчас появятся." status="loading" title="Загружаем клиентов" />;
+    return <><PageIntro title="Клиенты" /><ResourceState description="Подождите, площадки и люди сейчас появятся." status="loading" title="Загружаем клиентов" /></>;
   }
 
   // Поиск по площадке, адресу и людям; найденные площадки раскрываются сами.
@@ -213,6 +214,8 @@ export function CustomerReferencesPage() {
   const shownTab = orphanPayers.length > 0 ? tab : "sites";
 
   return <>
+    {/* Главная кнопка — в шапке страницы, как «Добавить прибор» и «Создать задачу» (UI/UX-разбор 19.11). */}
+    <PageIntro actions={<Button icon="plus" onClick={() => { setFormError(null); setEditor({ kind: "site" }); }}>Добавить площадку</Button>} title="Клиенты" />
     <div className="customer-references">
       {orphanPayers.length > 0 ? <PageTabs
         items={[
@@ -229,8 +232,6 @@ export function CustomerReferencesPage() {
           <input id="customer-search" onChange={(event) => { setSearch(event.target.value); setSitePageIndex(0); }} placeholder="Площадка, адрес, человек или ИНН" type="search" value={search} />
         </label>
         {shownTab === "sites" && inactiveCount > 0 ? <button aria-pressed={showInactive} className={`toggle-chip${showInactive ? " toggle-chip--on" : ""}`} onClick={() => setShowInactive((value) => !value)} type="button">Отключённые · {inactiveCount}</button> : null}
-        <span className="registry-toolbar__spacer" />
-        <Button icon="plus" onClick={() => { setFormError(null); setEditor({ kind: "site" }); }}>Добавить площадку</Button>
       </div>
 
       {shownTab === "orphans" ? null : sites.length === 0
