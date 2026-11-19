@@ -1,3 +1,4 @@
+import { BASE_ROLE_LABELS, BUILTIN_ROLE_LABELS, PERMISSION_LABELS } from "./domain/access.js";
 import { TASK_STATUS_LABELS } from "./domain/task-status.js";
 
 /**
@@ -35,7 +36,7 @@ const ENTITY_LABELS: Readonly<Record<string, string>> = {
   warehouse: "Склад",
   integration: "Уведомления и обмен",
   reference: "Справочник",
-  user: "Сотрудник",
+  user: "Сотрудники и права",
   audit: "Журнал"
 };
 
@@ -76,6 +77,8 @@ const TABLE_LABELS: Readonly<Record<string, string>> = {
   integration_messages: "Обмен с внешними системами",
   integration_outbox: "Очередь обмена",
   users: "Сотрудники",
+  access_roles: "Роли",
+  access_role_permissions: "Права роли",
   permissions: "Права",
   role_permissions: "Права ролей",
   organizations: "Организации",
@@ -136,8 +139,10 @@ const FIELD_LABELS: Readonly<Record<string, string>> = {
   phone: "Телефон",
   role: "Роль",
   access_role_key: "Роль доступа",
-  is_active: "Работает",
+  is_active: "Включён",
   permission_code: "Право",
+  role_key: "Роль",
+  base_role: "Тип роли",
   valid_from: "Действует с",
   valid_to: "Действует по",
   include_guarantee_work: "Гарантия в счёт",
@@ -307,6 +312,12 @@ const VALUE_LABELS: Readonly<Record<string, Readonly<Record<string, string>>>> =
   work_modifier: { G: "Гарантийный случай", N: "Вина клиента" },
   modifier: { G: "Гарантийный случай", N: "Вина клиента" },
   channel: { email: "Почта", telegram: "Telegram" },
+  // Журнал доступа (0076): права и роли словами, как на странице роли.
+  permission_code: PERMISSION_LABELS,
+  role_key: BUILTIN_ROLE_LABELS,
+  access_role_key: BUILTIN_ROLE_LABELS,
+  base_role: BASE_ROLE_LABELS,
+  role: BASE_ROLE_LABELS,
   item_type: { work: "Работа", part: "Запчасть" },
   event_code: {
     task_application_accepted: "Заявка принята", task_engineer_assigned: "Инженер назначен",
@@ -367,6 +378,9 @@ export function auditEntityTitle(event: Pick<AuditJournalEvent, "beforeData" | "
     const value = snapshot[key];
     if (typeof value === "string" && value.trim()) return value.trim();
   }
+  // Права роли (0076): в строке только ключ роли — показываем её название.
+  const roleKey = snapshot.role_key;
+  if (typeof roleKey === "string" && roleKey.trim()) return `Роль «${BUILTIN_ROLE_LABELS[roleKey] ?? roleKey}»`;
   return "";
 }
 

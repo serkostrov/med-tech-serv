@@ -2107,11 +2107,20 @@ export class M2ApiClient {
       if (key === (session.accessRoleKey ?? session.role)) {
         throw new M2ApiError(400, "Права своей роли менять нельзя: так можно остаться без доступа к системе. Попросите другого администратора");
       }
-      const { error: delError } = await this.db().from("access_role_permissions").delete().eq("role_key", key);
-      throwIfError(delError);
-      const permissions = input.permissions as readonly string[];
-      if (permissions.length) {
-        const { error: insError } = await this.db().from("access_role_permissions").insert(permissions.map((code) => ({ role_key: key, permission_code: code })));
+      // Меняем только то, что поменяли галочками: журнал доступа (0076) пишет каждую строку прав,
+      // и «удалить всё и вставить заново» давало бы десятки событий на одну галочку.
+      const { data: currentRows, error: readError } = await this.db().from("access_role_permissions").select("permission_code").eq("role_key", key);
+      throwIfError(readError);
+      const current = new Set(((currentRows ?? []) as Row[]).map((row) => text(row, "permission_code")));
+      const wanted = new Set(input.permissions as readonly string[]);
+      const removed = [...current].filter((code) => !wanted.has(code));
+      const added = [...wanted].filter((code) => !current.has(code));
+      if (removed.length) {
+        const { error: delError } = await this.db().from("access_role_permissions").delete().eq("role_key", key).in("permission_code", removed);
+        throwIfError(delError);
+      }
+      if (added.length) {
+        const { error: insError } = await this.db().from("access_role_permissions").insert(added.map((code) => ({ role_key: key, permission_code: code })));
         throwIfError(insError);
       }
     }

@@ -39,7 +39,7 @@ const ENTITY_FILTER_OPTIONS: readonly { readonly value: string; readonly label: 
   { value: "invoice", label: "Счета" },
   { value: "warehouse", label: "Склад" },
   { value: "reference", label: "Справочники" },
-  { value: "user", label: "Сотрудники" },
+  { value: "user", label: "Сотрудники и права" },
   { value: "integration", label: "Уведомления и обмен" }
 ];
 
@@ -56,12 +56,17 @@ function whenText(value: string): string {
   return formatDisplayDate(value, true) || value;
 }
 
-function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] }) {
+/**
+ * Журнал изменений. С entityType — только этот объект и без фильтра «Объект»: так устроена вкладка
+ * «Доступ и права» (встреча 19.11): новые сотрудники, их роли и отключение, роли и галочки прав (0076).
+ */
+function ChangesJournal({ people, entityType }: { readonly people: readonly JournalPerson[]; readonly entityType?: string }) {
+  const initialFilters = entityType ? { ...EMPTY_CHANGE_FILTERS, entityType } : EMPTY_CHANGE_FILTERS;
   const { pageSize, pageSizeRef, setPageSize } = usePageSize("audit-journal");
   const [items, setItems] = useState<readonly AuditJournalEvent[]>([]);
   const [total, setTotal] = useState(0);
   const [pageIndex, setPageIndex] = useState(0);
-  const [filters, setFilters] = useState(EMPTY_CHANGE_FILTERS);
+  const [filters, setFilters] = useState(initialFilters);
   const [openId, setOpenId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -93,18 +98,18 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
     setPageIndex(nextPageIndex);
     void reload(filters, nextPageIndex);
   };
-  const filtered = Boolean(filters.actorId || filters.entityType || filters.search.trim() || filters.from || filters.to);
+  const filtered = Boolean(filters.actorId || (filters.entityType && !entityType) || filters.search.trim() || filters.from || filters.to);
   const change = (key: keyof typeof filters, value: string) => setFilters((current) => ({ ...current, [key]: value }));
   const moneyHidden = items.some((event) => event.moneyHidden);
   return <>
     <FilterBar
       loading={loading}
-      onReset={() => { setFilters(EMPTY_CHANGE_FILTERS); setPageIndex(0); void reload(EMPTY_CHANGE_FILTERS, 0); }}
+      onReset={() => { setFilters(initialFilters); setPageIndex(0); void reload(initialFilters, 0); }}
       onSubmit={() => { setPageIndex(0); return reload(filters, 0); }}
     >
       <label className="filter-field--search">Поиск<input onChange={(event) => change("search", event.target.value)} placeholder="Номер объекта, действие или автор" type="search" value={filters.search} /></label>
       <MultiSelect emptyLabel="Все сотрудники" label="Кто изменил" onChange={(next) => change("actorId", joinFilterValues(next))} options={people.map((person) => ({ value: person.id, label: person.fullName }))} searchPlaceholder="Фамилия" value={filterValues(filters.actorId)} />
-      <MultiSelect emptyLabel="Все объекты" label="Объект" onChange={(next) => change("entityType", joinFilterValues(next))} options={ENTITY_FILTER_OPTIONS} value={filterValues(filters.entityType)} />
+      {entityType ? null : <MultiSelect emptyLabel="Все объекты" label="Объект" onChange={(next) => change("entityType", joinFilterValues(next))} options={ENTITY_FILTER_OPTIONS} value={filterValues(filters.entityType)} />}
       <label>С<DatePicker aria-label="Изменения с даты" onChange={(value) => change("from", value)} value={filters.from} /></label>
       <label>По<DatePicker aria-label="Изменения по дату" onChange={(value) => change("to", value)} value={filters.to} /></label>
     </FilterBar>
@@ -270,7 +275,7 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
  * открыть его в обход меню, база всё равно ничего не отдаст.
  */
 export function JournalsPage() {
-  const [section, setSection] = useState<"changes" | "logins">("changes");
+  const [section, setSection] = useState<"changes" | "access" | "logins">("changes");
   // Вкладка «Входы» — только руководителю и администратору (0074); базовую роль берём из сессии.
   const [loginsAllowed, setLoginsAllowed] = useState(false);
   useEffect(() => {
@@ -285,13 +290,16 @@ export function JournalsPage() {
   }, []);
   return <>
     <PageIntro title="Журналы" />
-    <PageTabs<"changes" | "logins">
-      items={loginsAllowed ? [{ value: "changes", label: "Изменения" }, { value: "logins", label: "Входы" }] : [{ value: "changes", label: "Изменения" }]}
+    {/* «Доступ и права» — рядом со входами (встреча 19.11): кто завёл сотрудника, выдал или поменял права. */}
+    <PageTabs<"changes" | "access" | "logins">
+      items={[{ value: "changes", label: "Изменения" }, ...(loginsAllowed ? [{ value: "logins" as const, label: "Входы" }] : []), { value: "access", label: "Доступ и права" }]}
       label="Какой журнал смотреть"
       onValueChange={setSection}
-      value={loginsAllowed ? section : "changes"}
+      value={section === "logins" && !loginsAllowed ? "changes" : section}
     />
-    {section === "logins" && loginsAllowed ? <LoginsJournal people={people} /> : <ChangesJournal people={people} />}
+    {section === "logins" && loginsAllowed ? <LoginsJournal people={people} />
+      : section === "access" ? <ChangesJournal entityType="user" key="access" people={people} />
+      : <ChangesJournal key="changes" people={people} />}
   </>;
 }
 

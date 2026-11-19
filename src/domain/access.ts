@@ -47,6 +47,31 @@ export const PERMISSIONS = [
 
 export type Permission = (typeof PERMISSIONS)[number];
 
+/** Права по-русски: галочки роли и записи журнала доступа (0076) называют их одинаково. */
+export const PERMISSION_LABELS: Readonly<Record<Permission, string>> = {
+  "tasks.read": "Просмотр задач", "tasks.read_own": "Свои задачи", "tasks.read_all": "Все задачи", "tasks.read_organization": "Задачи организаций",
+  "tasks.write": "Изменение задач", "tasks.write_own": "Изменение своих задач", "tasks.create": "Создание задач", "tasks.assign": "Назначение инженеров",
+  "tasks.accept": "Принятие задач", "tasks.close": "Закрытие задач", "tasks.review": "Проверка закрытия",
+  "files.read": "Просмотр файлов", "files.write": "Загрузка файлов", "equipment.read": "Просмотр приборов", "equipment.write": "Изменение приборов",
+  "warehouse.read": "Просмотр склада", "warehouse.write": "Складские операции", "notifications.read": "Просмотр уведомлений",
+  "finance.read": "Просмотр счетов", "finance.write": "Изменение счетов", "payer.override": "Смена плательщика в счёте", "contracts.write": "Изменение договоров",
+  "references.read": "Просмотр справочников", "references.write": "Изменение справочников", "reports.read": "Просмотр отчётов",
+  "users.read": "Просмотр сотрудников", "users.write": "Изменение сотрудников", "roles.write": "Управление ролями",
+  "notification_settings.write": "Настройка писем", "price.read": "Просмотр прайса", "price.write": "Изменение прайса", "audit.read": "Просмотр журнала"
+};
+
+/** Названия встроенных ролей доступа (access_roles из 0001 и системный администратор демо). */
+export const BUILTIN_ROLE_LABELS: Readonly<Record<string, string>> = {
+  admin: "Главный администратор", sysadmin: "Системный администратор", coordinator: "Координатор", engineer: "Инженер",
+  warehouse: "Кладовщик", initiator: "Инициатор", customer: "Заказчик", supervisor: "Руководитель"
+};
+
+/** Тип роли (base_role) по-русски. */
+export const BASE_ROLE_LABELS: Readonly<Record<string, string>> = {
+  admin: "Администратор", coordinator: "Координатор", engineer: "Инженер", warehouse: "Кладовщик",
+  initiator: "Инициатор", customer: "Заказчик", supervisor: "Руководитель", manager: "Инициатор"
+};
+
 /** `manager` оставлен для старых записей и нормализуется в инициатора. */
 export const STORED_ROLES = [...WORKING_ROLES, "manager"] as const;
 export type StoredRole = (typeof STORED_ROLES)[number];

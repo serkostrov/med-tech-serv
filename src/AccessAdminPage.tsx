@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState, type FormEvent } from "react";
 import type { AccessRoleResponse } from "./types.js";
-import type { Permission, WorkingRole } from "./domain/access.js";
+import { PERMISSION_LABELS, type Permission, type WorkingRole } from "./domain/access.js";
 import { activeAdminCount, canChangeEmployeeRole, canChangeRolePermissions, employeeDisableBlock, initialEmployeeRoleKey, permissionsForBaseRole, roleDisableText } from "./access-admin.js";
 import { m2Api, type AccessUserRecord } from "./m2-api.js";
 import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
@@ -32,17 +32,7 @@ const permissionGroupLabels: Readonly<Record<string, string>> = {
   audit: "Журнал"
 };
 
-const permissionLabels: Readonly<Record<Permission, string>> = {
-  "tasks.read": "Просмотр задач", "tasks.read_own": "Свои задачи", "tasks.read_all": "Все задачи", "tasks.read_organization": "Задачи организаций",
-  "tasks.write": "Изменение задач", "tasks.write_own": "Изменение своих задач", "tasks.create": "Создание задач", "tasks.assign": "Назначение инженеров",
-  "tasks.accept": "Принятие задач", "tasks.close": "Закрытие задач", "tasks.review": "Проверка закрытия",
-  "files.read": "Просмотр файлов", "files.write": "Загрузка файлов", "equipment.read": "Просмотр приборов", "equipment.write": "Изменение приборов",
-  "warehouse.read": "Просмотр склада", "warehouse.write": "Складские операции", "notifications.read": "Просмотр уведомлений",
-  "finance.read": "Просмотр счетов", "finance.write": "Изменение счетов", "payer.override": "Смена плательщика в счёте", "contracts.write": "Изменение договоров",
-  "references.read": "Просмотр справочников", "references.write": "Изменение справочников", "reports.read": "Просмотр отчётов",
-  "users.read": "Просмотр сотрудников", "users.write": "Изменение сотрудников", "roles.write": "Управление ролями",
-  "notification_settings.write": "Настройка писем", "price.read": "Просмотр прайса", "price.write": "Изменение прайса", "audit.read": "Просмотр журнала"
-};
+const permissionLabels = PERMISSION_LABELS;
 
 type RoleEditor = { readonly mode: "create" } | { readonly mode: "edit"; readonly key: string };
 type UserEditor = { readonly mode: "create" } | { readonly mode: "edit"; readonly id: string };
