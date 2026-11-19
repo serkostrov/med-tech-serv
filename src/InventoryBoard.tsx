@@ -68,7 +68,7 @@ export function InventoryBoard({ parts, loading, onOpen }: {
             <div><dt>На складе</dt><dd>{partQuantityText(part.onHandQuantity)}</dd></div>
             {/* Резервируют и выдают в состоянии, поэтому оно видно сразу на карточке — словами,
                 а не буквами «Г · Н · Б», которые на второй встрече 18.11 не прочитались. */}
-            <div><dt>Состояние</dt><dd>{conditionTotalsTitle(part.onHandByCondition)}</dd></div>
+            {part.onHandQuantity > 0 ? <div><dt>Состояние</dt><dd>{conditionTotalsTitle(part.onHandByCondition)}</dd></div> : null}
             {part.reservedQuantity > 0 ? <div><dt>В резерве</dt><dd>{partQuantityText(part.reservedQuantity)}</dd></div> : null}
             {part.reservedQuantity > 0 ? <div><dt>Доступно</dt><dd>{partQuantityText(part.availableQuantity)}</dd></div> : null}
             <div><dt>Минимум</dt><dd>{part.minimumStock > 0 ? partQuantityText(part.minimumStock) : "не задан"}</dd></div>
