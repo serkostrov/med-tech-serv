@@ -34,7 +34,7 @@ export interface PriceGuaranteeCategory {
 export const ALL_CATEGORIES_LABEL = "Для всех категорий";
 export const PRICE_NOT_SET_LABEL = "Цена не задана";
 /** Что написать в строке, у которой цены ещё нет: что сделать и чем это мешает. */
-export const PRICE_NOT_SET_HINT = "Заведите цену: пока её нет, работу не из чего поставить в счёт.";
+export const PRICE_NOT_SET_HINT = "Цены пока нет.";
 const UNKNOWN_CATEGORY_LABEL = "Категория не из справочника";
 
 /** Ключ области действия цены, как `scope_key` в базе: категория гарантии или «*». */

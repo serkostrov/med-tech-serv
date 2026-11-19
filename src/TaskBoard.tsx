@@ -671,7 +671,7 @@ export function TaskBoard({ tasks = [], statuses, equipment, engineers, onOpen, 
       <div className="task-board__cards" onScroll={(event) => handleScroll(code, event)}>
         {page?.loading ? <p className="task-board__empty">Загружаем задачи…</p> : null}
         {nodes}
-        {!page?.loading && items.length === 0 && slotIndex < 0 ? <p className="task-board__empty">{outside ? "Не входит в отбор" : "В этом статусе пока нет задач."}</p> : null}
+        {!page?.loading && items.length === 0 && slotIndex < 0 ? <p className="task-board__empty">{outside ? "Не входит в отбор" : "Пусто"}</p> : null}
         {page?.loadingMore ? <p className="task-board__loading-more">Загружаем ещё…</p> : null}
         {page?.error ? <button className="task-board__retry" onClick={() => void retryColumn(code)} type="button">{page.error} · Повторить</button> : null}
         {!page?.loading && items.length < total ? <button className="task-board__more" onClick={() => void loadMore(code)} type="button">Показать ещё {Math.min(COLUMN_PAGE_SIZE, total - items.length)}</button> : null}

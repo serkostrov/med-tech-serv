@@ -167,14 +167,14 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
 
     {shownTab === "equipment" ? <section className="task-section" aria-labelledby="engineer-equipment-title">
       <header className="task-section__head"><h3 id="engineer-equipment-title">Приборы инженера</h3></header>
-      {tasks === null ? <ResourceState description="Подождите." status="loading" title="Загружаем приборы" /> : equipment.length === 0 ? <div className="task-section__empty"><p>Задач с приборами у инженера пока не было.</p></div> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Прибор</th><th className="numeric" scope="col">Задач всего</th><th className="numeric" scope="col">Открытых</th><th scope="col">Последний раз</th></tr></thead><tbody>
+      {tasks === null ? <ResourceState description="Подождите." status="loading" title="Загружаем приборы" /> : equipment.length === 0 ? <div className="task-section__empty"><p>Приборов пока нет.</p></div> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Прибор</th><th className="numeric" scope="col">Задач всего</th><th className="numeric" scope="col">Открытых</th><th scope="col">Последний раз</th></tr></thead><tbody>
         {equipment.map((row) => <tr key={row.equipmentId}><td><EntityLink target={{ kind: "equipment", id: row.equipmentId }}>{row.label}</EntityLink></td><td className="numeric">{row.total}</td><td className="numeric">{row.open || "—"}</td><td>{formatDisplayDate(row.lastDate) || "—"}</td></tr>)}
       </tbody></table></div>}
     </section> : null}
 
     {shownTab === "competencies" ? <section className="task-section" aria-labelledby="engineer-competencies-title">
       <header className="task-section__head"><h3 id="engineer-competencies-title">Компетенции</h3>{onEdit ? <Button onClick={() => onEdit(engineer)} variant="ghost">Изменить</Button> : null}</header>
-      {engineer.competencies.length === 0 ? <div className="task-section__empty"><p>Компетенции не указаны. По ним система подсказывает, кого назначить на прибор.</p></div> : <>
+      {engineer.competencies.length === 0 ? <div className="task-section__empty"><p>Компетенции не указаны.</p></div> : <>
         <ul aria-label={`Компетенции: ${engineer.fullName}`} className="competency-tags">{engineer.competencies.map((item, index) => <li className="tag" key={`${competencyKey(item)}-${index}`}>{competencyLabel(item)}</li>)}</ul>
         
       </>}
@@ -182,7 +182,7 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
 
     {shownTab === "stock" && engineer.hasOwnStock ? <section className="task-section" aria-labelledby="engineer-stock-title">
       <header className="task-section__head"><h3 id="engineer-stock-title">Склад инженера</h3></header>
-      {stock === null ? <ResourceState description="Подождите." status="loading" title="Загружаем склад" /> : stockRows.length === 0 ? <div className="task-section__empty"><p>Сейчас у инженера запчастей нет. Они появятся здесь, когда склад выдаст их по резерву.</p></div> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Запчасть</th><th scope="col">Состояние</th><th className="numeric" scope="col">Количество</th><th scope="col">Для задач</th><th scope="col">У инженера с</th></tr></thead><tbody>
+      {stock === null ? <ResourceState description="Подождите." status="loading" title="Загружаем склад" /> : stockRows.length === 0 ? <div className="task-section__empty"><p>Запчастей нет.</p></div> : <div className="table-scroll"><table className="data-table"><thead><tr><th scope="col">Запчасть</th><th scope="col">Состояние</th><th className="numeric" scope="col">Количество</th><th scope="col">Для задач</th><th scope="col">У инженера с</th></tr></thead><tbody>
         {stockRows.map((row) => <tr key={`${row.partId}-${row.condition}`}>
           <td><EntityLink target={{ kind: "part", id: row.partId }}><span className="engineer-page__number">{row.articleNumber}</span> {row.partName}</EntityLink></td>
           <td>{CONDITION_LABEL[row.condition]}</td>

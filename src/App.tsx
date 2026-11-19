@@ -194,7 +194,7 @@ function journalTitle(event: TaskCardResponse["journal"][number]): string {
 
 /** История задачи лентой по дням: что произошло, кто и когда, комментарий отдельно. */
 function TaskHistory({ journal }: { readonly journal: TaskCardResponse["journal"] }) {
-  if (journal.length === 0) return <div className="task-section__empty"><p>Записей пока нет. Здесь появятся все действия по задаче.</p></div>;
+  if (journal.length === 0) return <div className="task-section__empty"><p>Записей пока нет.</p></div>;
   const days = new Map<string, TaskCardResponse["journal"][number][]>();
   for (const event of journal) {
     const day = formatTaskDate(event.occurredAt);
@@ -1486,7 +1486,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
               </div>
               <div className="task-files__group">
                 <h4>Фото и видео с выезда <small>{photoCount} из 10 фото, {videoCount} из 2 видео</small></h4>
-                <FileGallery emptyText="Пока нет. Можно выбрать сразу несколько файлов." files={card.files.filter((file) => file.kind === "photo" || file.kind === "video")} />
+                <FileGallery emptyText="Пока нет." files={card.files.filter((file) => file.kind === "photo" || file.kind === "video")} />
               </div>
               {card.files.some((file) => file.kind !== "photo" && file.kind !== "video" && file.id !== latestActFile?.id) ? <div className="task-files__group">
                 <h4>Документы, письма и прежние фото акта</h4>
@@ -1521,7 +1521,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
                 return <tr key={part.id}><td><strong>{part.articleNumber}</strong></td><td>{part.name}{part.forSale ? <small>для продажи</small> : null}{installed.length ? <small className="task-parts-table__installed">установлена · {installed.join(", ")}</small> : null}</td><td className="numeric">{part.quantity}</td><td>{part.condition === "G" ? "Г, гарантийная" : part.condition === "N" ? "Н, новая" : "Б, б/у"}</td></tr>;
               })}
             </tbody></table></div>
-            : <div className="task-section__empty"><p>{canEditPartsNow ? "Запчасти не добавлены. Добавьте, если использовали детали на выезде." : "Запчасти на этой задаче не использовались."}</p></div>}
+            : <div className="task-section__empty"><p>{canEditPartsNow ? "Запчасти не добавлены." : "Запчасти на этой задаче не использовались."}</p></div>}
           </section>
           <TaskStockDocuments refreshKey={`${task.status}:${reservations.map((item) => item.status).join(",")}`} taskId={task.id} />
         </> : null}
@@ -2758,7 +2758,7 @@ function EquipmentCard({
                 {event.description ? <p className="task-history__comment">{equipmentHistoryDescription(event)}</p> : null}
                 {event.attachment ? <span className="task-history__actor">Файл: {event.attachment.name}</span> : null}
               </div>
-            </li>)}</ol> : <div className="task-section__empty"><p>Истории пока нет. Закрытые задачи, перемещения и прошлые события появятся здесь.</p></div>}
+            </li>)}</ol> : <div className="task-section__empty"><p>Истории пока нет.</p></div>}
             {record.history.length < record.historyTotal ? <Button className="equipment-load-more" onClick={() => void onLoadMoreHistory()} variant="secondary">Показать ещё события</Button> : null}
           </section> : null}
           {detailTab === "meters" ? <section className="task-section" aria-labelledby={`equipment-meters-${record.id}`}>
@@ -2776,7 +2776,7 @@ function EquipmentCard({
           </section> : null}
           {detailTab === "files" ? <section className="task-section" aria-labelledby={`equipment-files-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-files-${record.id}`}>Файлы прибора</h3></header>
-            <FileGallery emptyText={readOnly ? "К прибору пока не прикреплены файлы." : "К прибору пока не прикреплены файлы. Их можно добавить в паспорте: «Изменить»."} files={record.fileRecords} />
+            <FileGallery emptyText="Файлов пока нет." files={record.fileRecords} />
           </section> : null}
           {detailTab === "tasks" ? <section className="task-section" aria-labelledby={`equipment-all-tasks-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-all-tasks-${record.id}`}>Все задачи прибора</h3></header>
@@ -2793,7 +2793,7 @@ function EquipmentCard({
           {detailTab === "plan" ? <EquipmentPlanTab device={{ id: record.id, serialNumber: record.serial, manufacturer: record.manufacturer, model: record.model, status: record.status, ...(record.organization ? { organization: record.organization } : {}), ...(record.place ? { site: record.place } : {}) }} readOnly={readOnly} /> : null}
           {detailTab === "parts" ? <section className="task-section" aria-labelledby={`equipment-model-parts-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-model-parts-${record.id}`}>Подходят к {record.manufacturer} {record.model}</h3></header>
-            {modelParts === null ? <div className="task-section__empty"><p>Загружаем…</p></div> : modelParts.length === 0 ? <div className="task-section__empty"><p>Склад ещё не отметил запчасти для этой модели. Это делается на странице запчасти: «Приборы и модели» → «Отметить».</p></div> : <ul className="equipment-model-parts">
+            {modelParts === null ? <div className="task-section__empty"><p>Загружаем…</p></div> : modelParts.length === 0 ? <div className="task-section__empty"><p>Склад ещё не отметил запчасти для этой модели.</p></div> : <ul className="equipment-model-parts">
               {modelParts.map((link) => <li key={link.partId}><EntityLink target={{ kind: "part", id: link.partId }}><span className="engineer-page__number">{link.articleNumber}</span> {link.partName}</EntityLink></li>)}
             </ul>}
           </section> : null}
@@ -2810,7 +2810,7 @@ function EquipmentCard({
             </tbody></table></div>}
           </section> : null}
           {detailTab === "movements" ? <div className="task-work">
-            <AssignmentHistorySection empty="Перемещений пока нет. Они появятся после смены места установки." events={siteChanges} title="Смены места установки" />
+            <AssignmentHistorySection empty="Перемещений пока нет." events={siteChanges} title="Смены места установки" />
             {readOnly ? null : <AssignmentHistorySection empty="Смен плательщика пока нет." events={payerChanges} title="Смены плательщика" />}
           </div> : null}
         </div>
@@ -3214,7 +3214,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
       </section>
       {registryView === "board" ? <StatusBoard<EquipmentUiRecord>
         columns={references.statuses.map((status) => ({ key: status.code, title: status.name, color: EQUIPMENT_STATUS_COLORS[status.code] ?? "#5f7f99", outside: filterValues(filters.status).length > 0 && !filterValues(filters.status).includes(status.code) }))}
-        emptyText="Приборов с этим статусом нет."
+        emptyText="Пусто"
         itemKey={(record) => record.id}
         label="Доска приборов"
         load={async (status, offset, limit) => {
@@ -3789,7 +3789,7 @@ function FinancePage() {
     </DialogForm>
     {invoiceView === "board" ? <StatusBoard<InvoiceApiRecord>
       columns={INVOICE_BOARD_COLUMNS}
-      emptyText="Счетов в этом статусе нет."
+      emptyText="Пусто"
       itemKey={(invoice) => invoice.id}
       label="Доска счетов"
       load={async (status, offset, limit) => localStatusPage(invoices, (invoice) => invoice.status === status, offset, limit)}

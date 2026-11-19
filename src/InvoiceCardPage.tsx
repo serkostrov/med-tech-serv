@@ -333,7 +333,7 @@ export function InvoiceCardPage({ invoiceId, invoiceNumber, onBack, onChanged }:
         <section aria-labelledby="invoice-history-title" className="task-section">
           <header className="task-section__head"><h3 id="invoice-history-title">История статусов</h3></header>
           {steps.length === 0
-            ? <div className="task-section__empty"><p>Записей пока нет. Здесь появятся все смены статуса счёта.</p></div>
+            ? <div className="task-section__empty"><p>Записей пока нет.</p></div>
             : <ol className="equipment-history-list">{steps.map((step, index) => <li className="task-history__item" key={`${step.status}-${step.at}-${index}`}>
               <span aria-hidden="true" className={`task-history__dot task-history__dot--${invoiceStatusTone(step.status)}`} />
               <div className="task-history__body">

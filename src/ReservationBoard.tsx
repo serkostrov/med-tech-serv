@@ -99,7 +99,7 @@ export function ReservationBoard({ items, canWrite, busyId, loading, onAction }:
             </div>
           </article>;
         })}
-        {!loading && cards.length === 0 ? <p className="task-board__empty">В этом состоянии резервов нет.</p> : null}
+        {!loading && cards.length === 0 ? <p className="task-board__empty">Пусто</p> : null}
       </div>
     </section>;
   })}</div></BoardScroller>;

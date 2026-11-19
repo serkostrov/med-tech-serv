@@ -383,7 +383,7 @@ export function EquipmentPlanTab({ device, readOnly = false }: { readonly device
         {readOnly ? null : <Button icon="edit" onClick={() => setEditing(true)} variant="secondary">{items && items.length ? "Изменить план" : "Задать план"}</Button>}
       </div>
     </header>
-    {items === null ? <div className="task-section__empty"><p>Загружаем план…</p></div> : items.length === 0 ? <div className="task-section__empty"><p>На {year} год плана ТО у прибора нет.{readOnly ? "" : " Нажмите «Задать план», чтобы указать периоды обслуживания."}</p></div> : <div className="table-scroll"><table className="data-table equipment-plan-table"><thead><tr><th scope="col">ТО</th><th scope="col">Период</th><th scope="col">Инженер</th><th scope="col">Состояние</th></tr></thead><tbody>
+    {items === null ? <div className="task-section__empty"><p>Загружаем план…</p></div> : items.length === 0 ? <div className="task-section__empty"><p>На {year} год плана ТО нет.</p></div> : <div className="table-scroll"><table className="data-table equipment-plan-table"><thead><tr><th scope="col">ТО</th><th scope="col">Период</th><th scope="col">Инженер</th><th scope="col">Состояние</th></tr></thead><tbody>
       {items.map((item, index) => <tr key={item.id}>
         {/* «ТО № N» открывает задачу этого ТО: выполненную или текущую (вторая встреча 18.11). */}
         <td><strong><MaintenanceTaskLink item={item}>ТО № {index + 1}</MaintenanceTaskLink></strong>{item.comment ? <small className="muted"> · {item.comment}</small> : null}</td>
@@ -512,7 +512,7 @@ export function MaintenancePlanPage() {
     {view === "month" ? <StatusBoard<MaintenancePlanPeriodResponse>
       columns={maintenanceMonthColumns(year)}
       {...(year === new Date().getFullYear() ? { focusKey: String(new Date().getMonth()) } : {})}
-      emptyText="ТО в этом месяце нет."
+      emptyText="Пусто"
       itemKey={(item) => item.id}
       label={`План ТО на ${year} год по месяцам`}
       load={async (month, offset, limit) => localStatusPage([...items].sort((left, right) => left.periodFrom.localeCompare(right.periodFrom)), (item) => String(maintenanceMonthIndex(item.periodFrom)) === month, offset, limit)}
