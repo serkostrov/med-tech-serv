@@ -619,7 +619,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
         )}
       </div>
       <h3 className="task-form-step field-wide"><span>2</span>Клиент</h3>
-      <label className="field-wide">Клиент (контакт на площадке)
+      <label className="field-wide field-pair">Клиент (контакт на площадке)
         <Select
           disabled={!selectedEquipment || contactChoices.length === 0}
           onChange={(event) => void selectClient(event.target.value)}
@@ -633,7 +633,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
           ))}
         </Select>
       </label>
-      <label className="field-wide">Кто обратился (инициатор)
+      <label className="field-wide field-pair">Кто обратился
         <Select
           disabled={!selectedEquipment || contactChoices.length === 0}
           onChange={(event) => void selectInitiator(event.target.value)}
@@ -648,7 +648,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
         </Select>
       </label>
       <h3 className="task-form-step field-wide"><span>3</span>Что сделать</h3>
-      <label className="field-wide">Название задачи *<input defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, не включается анализатор" required /></label>
+      <label className="field-wide field-pair">Название задачи *<input defaultValue={initialTitle} maxLength={200} name="title" placeholder="Например, не включается анализатор" required /></label>
       <WorkTypesPicker onChange={changeWorkTypes} options={activeWorkTypes.map((item) => ({ value: item.code ?? item.id, label: item.name }))} value={selectedWorkTypes} />
       {/* Гарантию решает координатор при создании: инженер этого может и не знать (встреча 16.11). */}
       <label>Гарантия<Select defaultValue="" name="workModifier"><option value="">Не гарантия</option><option value="G">Гарантийный случай</option><option value="N">Вина клиента (неправильная эксплуатация)</option></Select></label>
@@ -2467,7 +2467,7 @@ function EquipmentPassportForm({
       submitLabel={record ? "Сохранить изменения" : "Создать паспорт"}
       title={record ? "Изменить паспорт" : "Новый прибор"}
     >
-      <label className="field-wide">S/N *<input autoFocus defaultValue={record?.serial} maxLength={200} name="serialNumber" placeholder="Например, BS620-001" required /><small>Серийный номер должен быть уникальным. Пробелы не учитываются.</small></label>
+      <label className="field-wide field-pair">S/N *<input autoFocus defaultValue={record?.serial} maxLength={200} name="serialNumber" placeholder="Например, BS620-001" required /><small>Серийный номер должен быть уникальным. Пробелы не учитываются.</small></label>
       <label>Производитель *<Select name="manufacturerId" onChange={changeManufacturer} required value={manufacturerId}>{references.manufacturers.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
       <label>Модель *<Select name="modelId" onChange={(event) => setModelId(event.target.value)} required value={modelId}>{availableModels.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</Select></label>
       {/* Категорию гарантии на экране не показываем: гарантия «плавающая», её решают по каждой

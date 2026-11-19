@@ -235,7 +235,7 @@ function InitiatorRequestForm({ onClose, onCreated, workTypes }: {
   };
   return (
     <DialogForm asPage backLabel="К моим задачам" busy={busy} description="Найдите прибор по заводскому номеру и опишите, что случилось. Срок и инженера назначит координатор." error={error} onOpenChange={(open) => { if (!open) onClose(); }} onSubmit={submit} open size="lg" submitDisabled={!device} submitLabel="Создать задачу" title="Новая задача">
-      <div className="initiator-serial field-wide">
+      <div className="initiator-serial field-wide field-pair">
         <label>Заводской номер (S/N) *<Input autoFocus onChange={(event) => { setSerial(event.target.value); setDevice(null); setFound(null); }} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); void search(); } }} placeholder="Номер с таблички прибора" value={serial} /></label>
         <Button busy={searching} onClick={() => void search()} variant="secondary">Найти прибор</Button>
       </div>
@@ -247,8 +247,9 @@ function InitiatorRequestForm({ onClose, onCreated, workTypes }: {
       <div className="dialog-form-grid">
         <label>Что нужно сделать *<Select onChange={(event) => setWorkTypeCode(event.target.value)} value={workTypeCode}>{workTypes.map((item) => <option key={item.id} value={item.code ?? item.id}>{item.name}</option>)}</Select></label>
         <label>Срочность<Select onChange={(event) => setPriority(event.target.value as RequestPriority)} value={priority}><option value="planned">Плановая</option><option value="urgent">Срочная — реакция 24 часа</option></Select></label>
-        <label className="dialog-form-grid__wide">Что случилось *<Textarea name="description" placeholder="Например: не проходит калибровка, ошибка температуры кюветы" required rows={3} /></label>
+        {/* Срок — в одном ряду с видом работ и срочностью, описание — под ними во всю ширину. */}
         <label>Выполнить до<DatePicker onChange={setUntil} value={until} /></label>
+        <label className="dialog-form-grid__wide">Что случилось *<Textarea name="description" placeholder="Например: не проходит калибровка, ошибка температуры кюветы" required rows={3} /></label>
       </div>
     </DialogForm>
   );

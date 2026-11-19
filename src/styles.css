@@ -9716,9 +9716,21 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 
 /* Большая форма страницей (новая задача, паспорт прибора): всё место справа от меню, своя прокрутка. */
 .form-page { position: fixed; inset: 0 0 0 var(--sidebar-width); z-index: 30; overflow-y: auto; background: var(--color-canvas); }
-.form-page__inner { display: grid; gap: 16px; max-width: 980px; padding-block: 24px 48px; padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); }
+/* Форма-страница — на всю рабочую область, с теми же отступами, что у остальных страниц (встреча 19.11:
+   форма в 980 px, прижатая влево, на широком экране занимала половину окна). */
+.form-page__inner { display: grid; gap: 16px; padding-block: 16px 48px; padding-left: max(var(--page-padding), env(safe-area-inset-left, 0px)); padding-right: max(var(--page-padding), env(safe-area-inset-right, 0px)); }
 .form-page .task-head { margin-bottom: 0; }
-.form-page__card { padding: 20px 22px; }
+.form-page__card { padding: 20px 22px; container-type: inline-size; }
+/* Поля по ширине карточки: на широкой — четыре дорожки, обычное поле занимает две, пары («Клиент» и «Кто обратился»,
+   «S/N» и «Производитель») встают в ряд, длинные поля и заголовки шагов — во всю ширину. На узкой — как в окне. */
+@container (min-width: 1000px) {
+  .form-page .dialog-form { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+  .form-page .dialog-form > * { grid-column: span 2; }
+  .form-page .dialog-form > .field-wide, .form-page .dialog-form > .form-error, .form-page .dialog-form > .dialog-form-row-3,
+  .form-page .dialog-form > .dialog-form-grid { grid-column: 1 / -1; }
+  .form-page .dialog-form > .field-pair, .form-page .dialog-form > .work-types-picker { grid-column: span 2; }
+  .form-page .dialog-form-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
 @media (max-width: 900px) { .form-page { inset: 0; } .form-page__inner { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); } }
 
 /* Телефон (UI/UX-разбор 19.11, экраны инженера). «Назад» и действия карточки — одной строкой,
