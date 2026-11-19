@@ -9730,3 +9730,10 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .row-menu__item svg { flex: none; color: currentColor; }
 /* Открытое меню не обрезается краем таблицы с прокруткой. */
 .table-scroll:has(.row-menu__list), .card:has(.row-menu__list), .data-table-shell:has(.row-menu__list) { overflow: visible; }
+
+/* Большая форма страницей (новая задача, паспорт прибора): всё место справа от меню, своя прокрутка. */
+.form-page { position: fixed; inset: 0 0 0 var(--sidebar-width); z-index: 30; overflow-y: auto; background: var(--color-canvas); }
+.form-page__inner { display: grid; gap: 16px; max-width: 980px; padding-block: 24px 48px; padding-left: max(32px, env(safe-area-inset-left, 0px)); padding-right: max(32px, env(safe-area-inset-right, 0px)); }
+.form-page .task-head { margin-bottom: 0; }
+.form-page__card { padding: 20px 22px; }
+@media (max-width: 900px) { .form-page { inset: 0; } .form-page__inner { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); } }

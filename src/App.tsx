@@ -600,7 +600,7 @@ function TaskCreationForm({ open, equipment, sites, workTypes, engineers = [], c
     if (!periodTouched) { setPeriodFrom(todayIsoDate()); setPeriodTo(plusDays(urgent ? 1 : 7)); }
   };
 
-  return <DialogForm busy={busy} description={mail ? "Поля заполнены по письму. Проверьте их: после создания клиенту уйдёт автоответ с номером заявки." : "Выберите прибор, и клиент с плательщиком подставятся сами. Поля со звёздочкой обязательны."} onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title={mail ? "Задача из письма" : "Новая задача"}>
+  return <DialogForm busy={busy} description={mail ? "Поля заполнены по письму. Проверьте их: после создания клиенту уйдёт автоответ с номером заявки." : "Выберите прибор, и клиент с плательщиком подставятся сами. Поля со звёздочкой обязательны."} asPage backLabel={mail ? "К письмам" : "К задачам"} onOpenChange={onOpenChange} onSubmit={submit} open={open} size="lg" submitLabel="Создать задачу" title={mail ? "Задача из письма" : "Новая задача"}>
       {mail ? <MailSourcePanel mail={mail} /> : null}
       <h3 className="task-form-step field-wide"><span>1</span>Прибор</h3>
       <div className="equipment-picker field-wide">
@@ -2449,6 +2449,8 @@ function EquipmentPassportForm({
 
   return (
     <DialogForm
+      asPage
+      backLabel={record ? "К прибору" : "К приборам"}
       busy={busy}
       description="Поля со звёздочкой обязательны."
       error={error}

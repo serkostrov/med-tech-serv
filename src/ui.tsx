@@ -59,6 +59,7 @@ import {
   FileText,
   type LucideIcon
 } from "lucide-react";
+import { createPortal } from "react-dom";
 import { Alert } from "./components/ui/alert.js";
 import { Badge } from "./components/ui/badge.js";
 import { Button as UiButton } from "./components/ui/button.js";
@@ -835,7 +836,9 @@ export function DialogForm({
   size = "md",
   danger = false,
   submitDisabled = false,
-  onChange
+  onChange,
+  asPage = false,
+  backLabel = "Назад"
 }: Omit<DialogProps, "children" | "footer"> & {
   readonly children: ReactNode;
   readonly onSubmit: (event: FormEvent<HTMLFormElement>) => void | Promise<void>;
@@ -845,8 +848,37 @@ export function DialogForm({
   readonly submitDisabled?: boolean;
   /** Поля изменились: длинные формы складывают черновик в браузер, чтобы не терять набранное. */
   readonly onChange?: (event: FormEvent<HTMLFormElement>) => void;
+  /**
+   * Большая форма — страницей, а не окном (UI/UX-разбор 19.11, как роль: «в попапе неудобно»):
+   * на всё место справа от меню, «Назад» слева сверху, «Отмена» и главная кнопка справа сверху.
+   */
+  readonly asPage?: boolean;
+  readonly backLabel?: string;
 }) {
   const formId = useId();
+  const submitForm = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    void onSubmit(event);
+  };
+  if (asPage) {
+    if (!open || typeof document === "undefined") return null;
+    return createPortal(<div aria-label={title} aria-modal="false" className="form-page" role="dialog">
+      <div className="form-page__inner">
+        <EntityDetailToolbar actions={<>
+          <Button disabled={busy} onClick={() => onOpenChange(false)} variant="secondary">Отмена</Button>
+          <Button busy={busy} disabled={submitDisabled} form={formId} type="submit" variant={danger ? "danger" : "primary"}>{submitLabel}</Button>
+        </>} backLabel={backLabel} onBack={() => onOpenChange(false)} />
+        <header className="task-head"><h1>{title}</h1></header>
+        <section className="card form-page__card">
+          <form className="dialog-form" id={formId} {...(onChange ? { onChange } : {})} onSubmit={submitForm}>
+            {error ? <div className="form-error" role="alert">{error}</div> : null}
+            {children}
+          </form>
+        </section>
+      </div>
+    </div>, document.body);
+  }
   return (
     <Dialog
       busy={busy}
