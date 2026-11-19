@@ -96,9 +96,6 @@ function WorkTypePricePage({ line, today, canWrite, onBack, onDelete, onEdit }: 
       .catch((error: unknown) => { if (alive) setTasks({ items: [], total: 0 }); toast.error(message(error, "Не получилось загрузить задачи")); });
     return () => { alive = false; };
   }, [line.workTypeCode, pageIndex, pageSize]);
-  // Названия площадок: в записи задачи только её id.
-  const [siteNames, setSiteNames] = useState<ReadonlyMap<string, string>>(() => new Map());
-  useEffect(() => { void m2Api.listSites(true).then((sites) => setSiteNames(new Map(sites.map((site) => [site.id, site.name])))).catch(() => undefined); }, []);
   const nextText = priceLineNextText(line);
   return <div className="engineer-page work-type-page">
     {/* «Изменить цену» — справа сверху, как «Изменить» в задаче и КП. */}
@@ -155,7 +152,7 @@ function WorkTypePricePage({ line, today, canWrite, onBack, onDelete, onEdit }: 
             <tbody>{tasks.items.map((task) => <tr key={task.id}>
               <td><EntityLink className="engineer-page__task" target={{ kind: "task", id: task.id }}><span className="engineer-page__number">{task.number}</span><strong>{task.title}</strong></EntityLink></td>
               <td>{task.equipmentId && task.equipmentLabel ? <EntityLink target={{ kind: "equipment", id: task.equipmentId }}>{[task.equipmentLabel.model, task.equipmentLabel.serialNumber ? `S/N ${task.equipmentLabel.serialNumber}` : undefined].filter(Boolean).join(" · ")}</EntityLink> : "—"}</td>
-              <td>{task.siteId ? <EntityLink target={{ kind: "site", id: task.siteId }}>{siteNames.get(task.siteId) ?? "Клиент"}</EntityLink> : "—"}</td>
+              <td>{task.siteId ? <EntityLink target={{ kind: "site", id: task.siteId }}>{task.customer?.siteName ?? "Клиент"}</EntityLink> : "—"}</td>
               <td>{task.engineerId ? <EntityLink target={{ kind: "engineer", id: task.engineerId }}>{task.engineerName ?? "Инженер"}</EntityLink> : <span className="muted">не назначен</span>}</td>
               <td className="cell-date">{task.status === "closed" ? formatDisplayDate(task.completedAt ?? task.visitDate) || "—" : task.periodTo ? `до ${formatDisplayDate(task.periodTo)}` : "—"}</td>
               <td><StatusBadge tone={TASK_STATUS_TONES[task.status] ?? "neutral"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
