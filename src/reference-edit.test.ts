@@ -72,3 +72,22 @@ describe("дубль модели прибора", () => {
     assert.equal(duplicateModelRefusal({ name: "   ", manufacturerId: "m-bc" }, models), null);
   });
 });
+
+describe("удаление вида работ (вторая встреча 18.11, 0075)", () => {
+  it("удалять может только руководитель и администратор, как и в базе", async () => {
+    const { canDeleteWorkTypes } = await import("./reference-edit.js");
+    assert.equal(canDeleteWorkTypes("supervisor"), true);
+    assert.equal(canDeleteWorkTypes("admin"), true);
+    assert.equal(canDeleteWorkTypes("coordinator"), false);
+    assert.equal(canDeleteWorkTypes(undefined), false);
+  });
+
+  it("база удаляет только неиспользованный вид работ и сама чистит его цены", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const sql = await readFile(new URL("../supabase/migrations/0075_delete_work_type.sql", import.meta.url), "utf8");
+    for (const table of ["tasks", "maintenance_plans", "invoice_items", "quote_items"]) assert.match(sql, new RegExp(`FROM public\\.${table}`, "u"));
+    assert.match(sql, /extra_work_type_codes/u);
+    assert.match(sql, /DROP POLICY IF EXISTS role_delete ON public\.work_types/u);
+    assert.match(sql, /можно только скрыть/u);
+  });
+});

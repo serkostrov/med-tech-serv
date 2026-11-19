@@ -80,3 +80,13 @@ export function referenceEditPayload(
   if (!normalizedName) throw new Error("Наименование обязательно");
   return { name: normalizedName, attributes: { ...attributes } };
 }
+
+/**
+ * Удалять виды работ могут руководитель и администратор (вторая встреча 18.11, миграция 0075):
+ * справочники ведёт и координатор, но удаление ему не нужно. База проверяет то же самое.
+ */
+export const WORK_TYPE_DELETE_ROLES: readonly string[] = ["admin", "supervisor"];
+
+export function canDeleteWorkTypes(baseRole: string | undefined | null): boolean {
+  return Boolean(baseRole && WORK_TYPE_DELETE_ROLES.includes(baseRole));
+}

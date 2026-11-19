@@ -12,7 +12,7 @@ import {
 } from "./navigation.js";
 import { hasEquipmentSerialConflict } from "./equipment-passport.js";
 import { formatMeterReading, meterReadingRefusal } from "./meter-reading.js";
-import { canHideReferenceValue, duplicateModelRefusal, referenceEditPayload } from "./reference-edit.js";
+import { canDeleteWorkTypes, canHideReferenceValue, duplicateModelRefusal, referenceEditPayload } from "./reference-edit.js";
 import {
   formatEquipmentAssignmentChange,
   formatEquipmentAssignmentDate,
@@ -3467,6 +3467,10 @@ function AdminReferencesPage() {
   const [formError, setFormError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deactivating, setDeactivating] = useState<ReferenceCatalogValue | null>(null);
+  // Удалить вид работ насовсем — руководителю и администратору (вторая встреча 18.11, 0075).
+  const [canDelete, setCanDelete] = useState(false);
+  const [deleting, setDeleting] = useState<ReferenceCatalogValue | null>(null);
+  useEffect(() => { void m2Api.session().then((session) => setCanDelete(canDeleteWorkTypes(session.role))).catch(() => setCanDelete(false)); }, []);
   const selected = catalogs.find((catalog) => catalog.key === selectedKey) ?? catalogs[0];
 
   const loadCatalog = async (key: string, descriptors = catalogs) => {
@@ -3561,6 +3565,17 @@ function AdminReferencesPage() {
     }
   };
 
+  const deleteRecord = async (record: ReferenceCatalogValue) => {
+    if (!selected) return;
+    try {
+      await m2Api.deleteWorkType(record.code ?? record.id);
+      await loadCatalog(selected.key);
+      toast.success(`«${record.name}» удалён`);
+    } catch (writeError) {
+      toast.error(writeError instanceof Error ? writeError.message : "Не получилось удалить вид работ");
+    }
+  };
+
   const reactivateRecord = async (record: ReferenceCatalogValue) => {
     if (!selected) return;
     try {
@@ -3592,12 +3607,14 @@ function AdminReferencesPage() {
               <IconButton icon="edit" label="Изменить" onClick={() => beginEdit(record)} />
               {/* У встроенного значения кнопки «Скрыть» нет: без него база не работает (миграция 0033). */}
               {!canHideReferenceValue(record) ? null : record.isActive ? <IconButton icon="hide" label="Скрыть" onClick={() => setDeactivating(record)} /> : <IconButton icon="show" label="Показать" onClick={() => void reactivateRecord(record)} />}
+              {selected.key === "work-types" && canDelete && canHideReferenceValue(record) ? <IconButton icon="trash" label="Удалить" onClick={() => setDeleting(record)} /> : null}
             </div></td>
           </tr>;
         })}{records.length === 0 ? <tr><td colSpan={showParams ? 4 : 3}><ResourceState description="Нажмите «Добавить запись», чтобы значение появилось в заявках." status="empty" title={`В списке «${selected.label}» пока нет записей`} /></td></tr> : null}</tbody></table></div>
       </section> : null}
     </div>
     <DialogForm busy={saving} description="Запись появится в списке и будет доступна в заявках." error={formError} key={`${selected?.key ?? "catalog"}-${editingId ?? "closed"}`} onOpenChange={(open) => { if (!open) setEditingId(null); }} onSubmit={saveRecord} open={editingId !== null} submitLabel={editingId === "new" ? "Добавить запись" : "Сохранить изменения"} title={editingId === "new" ? `Добавить: ${selected?.label ?? "запись"}` : `Изменить: ${selected?.label ?? "запись"}`}><label className="field-wide">Наименование<input autoFocus onChange={(event) => setEditingName(event.target.value)} required value={editingName} /></label>{selected?.fields.filter((field) => !field.readOnly).map((field) => <label key={field.key}>{field.label}{field.type === "reference" && field.referenceCatalog ? <Select onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.value || null }))} required={field.required} value={String(editingAttributes[field.key] ?? "")}><option value="">Не выбрано</option>{(relatedValues[field.referenceCatalog] ?? []).filter((value) => value.isActive || isSelectedReference(value, editingAttributes[field.key])).map((value) => <option key={value.id} value={value.id}>{value.name}</option>)}</Select> : field.type === "boolean" ? <span className="field-check"><input checked={editingAttributes[field.key] === true} onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: event.target.checked }))} type="checkbox" /> Включено</span> : <input onChange={(event) => setEditingAttributes((current) => ({ ...current, [field.key]: field.type === "integer" || field.type === "number" ? (event.target.value === "" ? null : Number(event.target.value)) : event.target.value || null }))} required={field.required} type={field.type === "integer" || field.type === "number" ? "number" : "text"} value={String(editingAttributes[field.key] ?? "")} />}</label>)}</DialogForm>
+    <ConfirmationDialog confirmLabel="Удалить" description={deleting ? <>«{deleting.name}» и его цены удалятся насовсем. Вид работ, который уже есть в задачах, плане ТО, счетах или КП, удалить нельзя — только скрыть.</> : null} onConfirm={async () => { if (deleting) await deleteRecord(deleting); }} onOpenChange={(open) => { if (!open) setDeleting(null); }} open={Boolean(deleting)} title="Удалить вид работ?" />
     <ConfirmationDialog confirmLabel="Скрыть" description={deactivating ? <>«{deactivating.name}» скроется из новых операций. Если запись уже используется, история сохранится.</> : null} onConfirm={async () => { if (deactivating) await removeRecord(deactivating); }} onOpenChange={(open) => { if (!open) setDeactivating(null); }} open={Boolean(deactivating)} title="Скрыть запись?" />
   </>;
 }

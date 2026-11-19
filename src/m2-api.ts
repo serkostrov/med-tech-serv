@@ -6074,6 +6074,16 @@ export class M2ApiClient {
     return this.listCatalogValues(key);
   }
 
+  /**
+   * Удалить вид работ насовсем (0075): база удаляет только неиспользованный и не встроенный,
+   * вместе с его ценами, и только руководителю или администратору. Иначе — отказ словами.
+   */
+  public async deleteWorkType(code: string): Promise<void> {
+    const { error } = await this.db().rpc("delete_work_type", { p_code: code });
+    if (isMissingDatabaseFunction(error)) throw new M2ApiError(501, "Удаление видов работ заработает после обновления базы на сервере");
+    throwIfError(error, "Не получилось удалить вид работ");
+  }
+
   public async removeCatalogValue(key: string, id: string): Promise<{ readonly mode: "deactivated" | "deleted"; readonly after?: ReferenceCatalogValue }> {
     // Встроенное значение не отключаем: база откажет (0033), но лучше сказать это сразу и по-человечески.
     const existing = (await this.listCatalogValues(key)).find((item) => item.id === id);

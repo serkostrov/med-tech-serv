@@ -462,7 +462,10 @@ SELECT pg_temp.check(NOT EXISTS (
        'login_journal',
        -- 0074: можно ли мне журнал входов — смотрит базовую роль в users и access_roles;
        -- отвечает только про того, кто спрашивает.
-       'app_can_read_login_journal')
+       'app_can_read_login_journal',
+       -- 0075: удалить вид работ — проверяет базовую роль и где вид работ использован,
+       -- прайс чистит под флагом стража 0031; прямой DELETE по виду работ закрыт.
+       'app_can_delete_work_types', 'delete_work_type')
 ), 'сотрудник вызывает только разрешённые SECURITY DEFINER функции');
 CREATE FUNCTION public.zz_role_test_probe() RETURNS int LANGUAGE sql SECURITY DEFINER AS 'SELECT 1';
 SELECT pg_temp.check(NOT has_function_privilege('anon', 'public.zz_role_test_probe()', 'EXECUTE'), 'новая функция из будущей миграции закрыта для анонима');
