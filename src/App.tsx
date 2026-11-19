@@ -2765,8 +2765,7 @@ function EquipmentCard({
           </section> : null}
           {detailTab === "meters" ? <section className="task-section" aria-labelledby={`equipment-meters-${record.id}`}>
             <header className="task-section__head"><h3 id={`equipment-meters-${record.id}`}>Показания счётчика</h3><span className="muted">{record.meterReadings.length} из {record.meterReadingsTotal}</span></header>
-            {/* Откуда число — единственная строка в карточке (встреча 18.11: «откуда счётчик — распиши»). */}
-            <p className="equipment-meters__source">Число с экрана прибора. Инженер переписывает его в результате работ, сюда оно попадает, когда координатор примет закрытие задачи.</p>
+            {/* Без строки-пояснения (встреча 19.11): откуда число, видно по ссылке «Задача» в строке показания. */}
             {record.meterReadings.length > 0 ? <div className="table-scroll"><table className="data-table equipment-meters-table"><thead><tr><th scope="col">Дата</th><th className="numeric" scope="col">Показание</th><th className="numeric" scope="col">Прирост</th><th scope="col">Кто записал</th><th scope="col">Откуда</th></tr></thead><tbody>
               {record.meterReadings.map((reading, index) => {
                 const previous = record.meterReadings[index + 1];

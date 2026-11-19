@@ -9697,7 +9697,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .data-table td.numeric { white-space: nowrap; }
 
 /* Карточка прибора, «Счётчик»: откуда показания — одной строкой под заголовком. */
-.equipment-meters__source { margin: 0 0 12px; color: var(--color-ink-soft); font-size: 13px; }
 
 /* Роль — страницей (вторая встреча 18.11): название и тип, под ними все права галочками. */
 .role-page { display: grid; gap: 16px; }
