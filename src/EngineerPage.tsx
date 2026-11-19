@@ -152,7 +152,7 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
     <header className="task-head">
       <div className="task-head__meta">
         <span className="task-head__number">Инженер</span>
-        <StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Неактивен" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge>
+        <StatusBadge tone={!engineer.isActive ? "neutral" : engineer.overdueTaskCount ? "danger" : engineer.inProgressTaskCount ? "info" : "success"}>{!engineer.isActive ? "Отключён" : engineer.overdueTaskCount ? "Есть просрочки" : engineer.inProgressTaskCount ? "На выезде" : "Свободен"}</StatusBadge>
         {engineer.hasOwnStock ? <StatusBadge tone="info">Свой склад</StatusBadge> : null}
       </div>
       <h1>{engineer.fullName}</h1>

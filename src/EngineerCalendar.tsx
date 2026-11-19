@@ -56,7 +56,7 @@ function taskHint(task: CalendarTask): string {
 
 /** Значки у фамилии: только беды — просрочка и перегруз. «Свободен» и цифры убраны (встреча 18.11). */
 function rowStateBadges(row: CalendarRow): readonly { readonly tone: "neutral" | "danger" | "warning"; readonly text: string }[] {
-  if (!row.engineer.isActive) return [{ tone: "neutral", text: "Неактивен" }];
+  if (!row.engineer.isActive) return [{ tone: "neutral", text: "Отключён" }];
   const badges: { readonly tone: "danger" | "warning"; readonly text: string }[] = [];
   if (row.summary.overdueTaskCount > 0) badges.push({ tone: "danger", text: "Просрочка" });
   if (row.summary.overloadedDayCount > 0) badges.push({ tone: "warning", text: "Перегруз" });

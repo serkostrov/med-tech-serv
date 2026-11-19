@@ -60,7 +60,7 @@ export function InventoryBoard({ parts, loading, onOpen }: {
               с историей движений. Таблица остатков стоит рядом, а не внутри кнопки:
               <dl> в <button> вкладывать нельзя, и чтение с экрана ломается. */}
           <button className="task-board-card__open inventory-board-card__open" onClick={() => onOpen?.(part)} type="button">
-            <span className="task-board-card__top">{part.articleNumber}{part.isActive ? null : <i>Неактивна</i>}</span>
+            <span className="task-board-card__top">{part.articleNumber}{part.isActive ? null : <i>Отключена</i>}</span>
             <strong>{part.name}</strong>
           </button>
           {/* Единиц измерения в номенклатуре нет: целые считаем штуками, как в резервах и задачах. */}

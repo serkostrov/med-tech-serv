@@ -267,7 +267,7 @@ export function CustomerReferencesPage() {
                   </span>
                 </div>
                 <div className="customer-site-card__meta">
-                  {site.isActive ? null : <StatusBadge tone="neutral">Неактивна</StatusBadge>}
+                  {site.isActive ? null : <StatusBadge tone="neutral">Отключена</StatusBadge>}
                   <span className="customer-site-card__count">{peopleCountLabel(activePeople)}</span>
                   <div className="table-actions">
                     <IconButton icon="edit" label="Изменить площадку" onClick={() => { setFormError(null); setEditor({ kind: "site", id: site.id }); }} />
@@ -293,7 +293,7 @@ export function CustomerReferencesPage() {
                             : null}
                           {person.inn ? <StatusBadge tone="info">для счетов</StatusBadge> : null}
                           {!person.isActive
-                            ? <StatusBadge tone="neutral">Неактивен</StatusBadge>
+                            ? <StatusBadge tone="neutral">Отключён</StatusBadge>
                             : null}
                         </div>
                         <p>{formatSitePersonDetails(person)}</p>
@@ -341,7 +341,7 @@ export function CustomerReferencesPage() {
             <div className="customer-person__body">
               <div className="customer-person__line">
                 <strong>{payer.name}</strong>
-                {!payer.isActive ? <StatusBadge tone="neutral">Неактивен</StatusBadge> : null}
+                {!payer.isActive ? <StatusBadge tone="neutral">Отключён</StatusBadge> : null}
               </div>
               <p>{formatSitePersonDetails({
                 key: payer.id,

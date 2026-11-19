@@ -385,7 +385,7 @@ export function InventoryPartCard({ part, canWrite, open, onOpenChange, onChange
       <header className="task-head">
         <div className="task-head__meta">
           <span className="task-head__number">{part.articleNumber}</span>
-          <StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Неактивна" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge>
+          <StatusBadge tone={!part.isActive ? "neutral" : part.belowMinimum ? "danger" : "success"}>{!part.isActive ? "Отключена" : part.belowMinimum ? "Ниже минимума" : "В норме"}</StatusBadge>
         </div>
         <h1>{part.name}</h1>
         <p>На складе {movementQuantityText(part.onHandQuantity)} · доступно {movementQuantityText(part.availableQuantity)} · у инженеров {movementQuantityText(part.withEngineersQuantity)}</p>
