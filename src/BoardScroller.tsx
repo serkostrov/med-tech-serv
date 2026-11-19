@@ -24,7 +24,9 @@ export function BoardScroller({ children }: { readonly children: ReactNode }) {
     let fitting = false;
     const refit = () => { if (fitting) return; fitting = true; window.requestAnimationFrame(() => { fit(); fitting = false; }); };
     const layout = typeof MutationObserver === "undefined" ? undefined : new MutationObserver(refit);
-    layout?.observe(page, { childList: true, subtree: true });
+    // Панель «Фильтры» открывается и закрывается атрибутом hidden, без новых элементов: без attributeFilter
+    // доска оставалась низкой после закрытия панели и обрывалась на середине экрана (встреча 19.11).
+    layout?.observe(page, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "open"] });
     const update = () => {
       const left = board.scrollLeft > 4;
       const right = board.scrollLeft + board.clientWidth < board.scrollWidth - 4;
