@@ -7868,6 +7868,10 @@ td .resource-state {
 .quote-items__kind, .quote-items__stock { display: block; color: var(--color-muted); font-size: 12px; }
 .quote-items__stock--short { color: var(--color-danger); }
 .quote-items input { width: 96px; min-height: 34px; text-align: right; font-variant-numeric: tabular-nums; }
+/* Поле стоит у правого края ячейки — ровно под заголовком «Количество» и «Цена, ₽»
+   (вторая встреча 18.11: поля «съехали» влево от своих заголовков). */
+.quote-items td.numeric input { display: block; margin-left: auto; }
+.quote-items th.numeric, .quote-items td.numeric { width: 130px; }
 .quote-items tfoot th { text-align: right; color: var(--color-muted); font-weight: 600; }
 .quote-overdue { display: block; color: var(--color-danger); font-size: 12px; }
 .quote-part-results { display: grid; gap: 6px; max-height: 280px; overflow-y: auto; }
@@ -7878,6 +7882,7 @@ td .resource-state {
 @media (max-width: 640px) {
   .quote-part-results__item { grid-template-columns: 1fr; }
   .quote-items input { width: 100%; }
+  .quote-items th.numeric, .quote-items td.numeric { width: auto; }
 }
 
 /* Затраты в карточке прибора (ТЗ, блок 8) */
