@@ -176,18 +176,17 @@ export function StockDocumentsView() {
     <FilterBar loading={loading} onReset={() => { setFilters(EMPTY_FILTERS); void reload(EMPTY_FILTERS, 0); }} onSubmit={() => reload(filters, 0)}>
       <label className="filter-field--search">Поиск<input onChange={(event) => setFilters((current) => ({ ...current, search: event.target.value }))} placeholder="Номер, задача, S/N, инженер или артикул" type="search" value={filters.search} /></label>
       <label>Документ<Select onChange={(event) => setFilters((current) => ({ ...current, kind: event.target.value as StockDocumentKind | "" }))} value={filters.kind}>
-        <option value="">Все</option>
+        <option value="">Все документы</option>
         <option value="transfer">Перемещение на склад инженера</option>
         <option value="return">Возврат на склад</option>
         <option value="writeoff">Списание</option>
       </Select></label>
-      <label>Период с<DatePicker onChange={(from) => setFilters((current) => ({ ...current, from }))} value={filters.from} /></label>
-      <label>Период по<DatePicker onChange={(to) => setFilters((current) => ({ ...current, to }))} value={filters.to} /></label>
+      <label>Период с<DatePicker onChange={(from) => setFilters((current) => ({ ...current, from }))} placeholder="С какого дня" value={filters.from} /></label>
+      <label>Период по<DatePicker onChange={(to) => setFilters((current) => ({ ...current, to }))} placeholder="По какой день" value={filters.to} /></label>
     </FilterBar>
     <DataTableShell
       action={<Button busy={exporting} busyLabel="Готовим файл…" disabled={loading || total === 0} onClick={() => void exportExcel()} variant="secondary">Скачать в Excel</Button>}
-      meta={formatRussianCount(total, ["документ", "документа", "документов"])}
-      title="Документы склада"
+      label="Документы склада"
     >
       {loading && documents.length === 0 ? <ResourceState description="Подождите, документы сейчас появятся." status="loading" title="Загружаем документы" />
         : documents.length === 0 ? <ResourceState

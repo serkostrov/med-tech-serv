@@ -1,5 +1,6 @@
 import React, {
   Children,
+  cloneElement,
   isValidElement,
   useEffect,
   useId,
@@ -570,7 +571,10 @@ export function FilterBar({
   };
   const reset = () => { skipNext.current = true; window.clearTimeout(timer.current); onReset?.(); setPanelOpen(false); };
   const submitMobile = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void Promise.resolve(onSubmit()).then(() => setMobileOpen(false)); };
-  const fields = rest.map((node, index) => <div className="filter-bar__field" key={index}>{node}</div>);
+  // Подпись поля в строке фильтров прячем (остаётся для чтения с экрана): значение говорит само
+  // за себя — «Все каналы», «Любое наличие», как в задачах и приборах (UI/UX-разбор 19.11).
+  // В панели «Фильтры» и на телефоне подписи видны.
+  const fields = rest.map((node, index) => <div className="filter-bar__field" key={index}>{collapsed ? node : withHiddenFilterLabel(node)}</div>);
   const resetButton = onReset && (activeCount || searchFilled) ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null;
   // На телефоне условия выбирают в отдельной панели: там «Показать» закрывает её.
   const mobileActions = (
@@ -605,6 +609,15 @@ export function FilterBar({
       </Sheet>
     </section>
   );
+}
+
+/** Текст подписи `<label>Наличие<Select/></label>` — в отдельный span, чтобы спрятать его в строке фильтров. */
+function withHiddenFilterLabel(node: ReactNode): ReactNode {
+  if (!isValidElement<{ children?: ReactNode }>(node) || node.type !== "label") return node;
+  const children = Children.toArray(node.props.children).map((child, index) => typeof child === "string"
+    ? <span className="filter-bar__label" key={`label-${index}`}>{child}</span>
+    : child);
+  return cloneElement(node, undefined, ...children);
 }
 
 /** Состояние полей фильтра одной строкой: по ней видно, что человек что-то поменял. */

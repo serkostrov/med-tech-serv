@@ -3368,7 +3368,7 @@ function NotificationsPage() {
     <section className="card card--table" aria-label="Журнал уведомлений">
       {/* Инженеру и кладовщику журнал отдают только по их адресам: иначе «3 из 3» читается
           как «система отправила всего три письма». */}
-      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}${ownOnly ? " · только адресованные вам" : ""}` })} title="Журнал отправки" />
+      {ownOnly ? <CardHeader meta="только адресованные вам" title="Журнал отправки" /> : null}
       {loading && items.length === 0 ? <ResourceState description="Подождите, письма сейчас появятся." status="loading" title="Загружаем уведомления" />
         : items.length === 0 ? <ResourceState description={filtered ? "Измените условия или сбросьте фильтры." : "Письма появятся здесь, когда система отправит сообщения по заявкам."} status={filtered ? "filtered-empty" : "empty"} title={filtered ? "Уведомлений по этим условиям нет" : "Уведомлений пока нет"} />
           : <div className="table-scroll"><table className="data-table notification-table"><thead><tr><th scope="col">Когда</th><th scope="col">Кому</th><th scope="col">О чём</th><th scope="col">Канал</th><th scope="col">Статус</th></tr></thead><tbody>

@@ -4,7 +4,6 @@ import { MultiSelect } from "./MultiSelect.js";
 import { EntityLink, type EntityTarget } from "./entity-links.js";
 import { filterValues, joinFilterValues } from "./filter-values.js";
 import {
-  CardHeader,
   FilterBar,
   Notice,
   PageIntro,
@@ -111,7 +110,6 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
     </FilterBar>
     {moneyHidden ? <Notice tone="warning">В событиях счетов показаны не все поля: денежные значения открывает право «Просмотр финансов».</Notice> : null}
     <section className="card card--table" aria-label="Журнал изменений">
-      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Что меняли в системе" />
       {loading && items.length === 0
         ? <ResourceState description="Подождите, события сейчас появятся." status="loading" title="Загружаем журнал" />
         : error
@@ -230,7 +228,6 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
       ? null
       : <Notice tone="warning">Удачные входы ведёт служба входа, и её журнал сейчас недоступен: ниже только неудачные попытки.</Notice>}
     <section className="card card--table" aria-label="Журнал входов">
-      <CardHeader {...(loading && items.length === 0 ? {} : { meta: `${items.length} из ${total}` })} title="Кто входил в систему" />
       {loading && items.length === 0
         ? <ResourceState description="Подождите, записи сейчас появятся." status="loading" title="Загружаем журнал входов" />
         : error

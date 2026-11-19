@@ -83,6 +83,8 @@ export interface DatePickerProps {
   readonly max?: string;
   /** Что сказать, когда дата позже предела. */
   readonly maxMessage?: string;
+  /** Подсказка в пустом поле; в строке фильтров заменяет подпись над полем. */
+  readonly placeholder?: string;
 }
 
 export function DatePicker({
@@ -96,7 +98,8 @@ export function DatePicker({
   id,
   "aria-label": ariaLabel,
   max,
-  maxMessage = "Эта дата ещё не наступила"
+  maxMessage = "Эта дата ещё не наступила",
+  placeholder = "дд.мм.гггг"
 }: DatePickerProps) {
   const generatedId = useId();
   const inputId = id ?? generatedId;
@@ -290,7 +293,7 @@ export function DatePicker({
           }}
           onFocus={() => { setCursor(monthCursorFromIso(iso || today)); }}
           onKeyDown={onInputKeyDown}
-          placeholder="дд.мм.гггг"
+          placeholder={placeholder}
           ref={inputRef}
           required={required}
           spellCheck={false}
