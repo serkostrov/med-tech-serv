@@ -9737,3 +9737,16 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .form-page .task-head { margin-bottom: 0; }
 .form-page__card { padding: 20px 22px; }
 @media (max-width: 900px) { .form-page { inset: 0; } .form-page__inner { padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); } }
+
+/* Телефон (UI/UX-разбор 19.11, экраны инженера). «Назад» и действия карточки — одной строкой,
+   а не «Акт для печати» во всю ширину над заголовком; вкладки листаются вбок, а не переносятся. */
+@media (max-width: 900px) {
+  .entity-detail-toolbar { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .entity-detail-toolbar__actions { width: auto; margin-left: auto; }
+  .entity-detail-toolbar__actions .button { flex: none; min-height: 36px; padding-inline: 12px; }
+  .page-tabs { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; }
+  .page-tabs::-webkit-scrollbar { display: none; }
+  .page-tabs button { flex: none; white-space: nowrap; }
+}
+/* Карточкой уведомление без минимальной ширины таблицы. */
+@container (max-width: 620px) { .table-cards > table.notification-table { min-width: 0; } }

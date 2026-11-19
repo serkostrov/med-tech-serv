@@ -1466,7 +1466,7 @@ export function TaskCard({ card, workTypes = [], onBack, onChanged, onOpenRelate
                 {([["Работы выполнены полностью", task.workCompleted ?? card.closure?.workCompleted], ["Аппарат исправен и допущен", task.apparatusApproved ?? card.closure?.apparatusApproved], ["Заказчик претензий не имеет", task.customerHasNoClaims ?? card.closure?.customerHasNoClaims], ["Продолжение первичной заявки", task.continuedInPrimary]] as const).map(([label, value]) => <li className={value ? "task-checks__on" : undefined} key={label}><span aria-hidden="true">{value ? "✓" : ""}</span>{label}{value ? null : <small>не отмечено</small>}</li>)}
               </ul>
             </> : <div className="task-section__empty">
-              <p>{task.status === "in_progress" ? (isTaskEngineer ? "Опишите, что сделано, отметьте пункты акта и приложите фото подписанного акта." : "Инженер ещё не заполнил результат.") : task.status === "assigned" || task.status === "new" || task.status === "planned" ? "Результат заполняется, когда инженер примет задачу в работу." : "Результат не заполнен."}</p>
+              <p>{task.status === "in_progress" ? (isTaskEngineer ? "Результат ещё не заполнен." : "Инженер ещё не заполнил результат.") : task.status === "assigned" || task.status === "new" || task.status === "planned" ? (isTaskEngineer ? "Сначала примите задачу." : "Инженер ещё не принял задачу.") : "Результат не заполнен."}</p>
               {canEditResult && task.status === "in_progress" ? <Button onClick={() => { setFormError(null); setResultEditing(true); }} variant={isTaskEngineer ? "primary" : "secondary"}>{isTaskEngineer ? "Заполнить результат" : "Заполнить за инженера"}</Button> : null}
             </div>}
           </section>
@@ -3373,7 +3373,7 @@ function NotificationsPage() {
       {ownOnly ? <CardHeader meta="только адресованные вам" title="Журнал отправки" /> : null}
       {loading && items.length === 0 ? <ResourceState description="Подождите, письма сейчас появятся." status="loading" title="Загружаем уведомления" />
         : items.length === 0 ? <ResourceState description={filtered ? "Измените условия или сбросьте фильтры." : "Письма появятся здесь, когда система отправит сообщения по заявкам."} status={filtered ? "filtered-empty" : "empty"} title={filtered ? "Уведомлений по этим условиям нет" : "Уведомлений пока нет"} />
-          : <div className="table-scroll"><table className="data-table notification-table"><thead><tr><th scope="col">Когда</th><th scope="col">Кому</th><th scope="col">О чём</th><th scope="col">Канал</th><th scope="col">Статус</th></tr></thead><tbody>
+          : <div className="table-scroll table-cards"><table className="data-table notification-table"><thead><tr><th scope="col">Когда</th><th scope="col">Кому</th><th scope="col">О чём</th><th scope="col">Канал</th><th scope="col">Статус</th></tr></thead><tbody>
             {items.map((notification) => {
               const open = openId === notification.id;
               // Подпись под темой: ярлык события, если тема его не называет, и число попыток.
@@ -3383,11 +3383,11 @@ function NotificationsPage() {
               const subtitle = notification.attempts > 1 ? `попыток: ${notification.attempts}` : "";
               return <React.Fragment key={notification.id}>
                 <tr className={`data-table__selectable${notification.status === "failed" ? " notification-table__failed" : ""}`} onClick={() => setOpenId(open ? null : notification.id)}>
-                  <td className="notification-table__when">{formatDisplayDate(notification.createdAt, true)}</td>
-                  <td>{notification.recipientAddress}</td>
-                  <td><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button>{subtitle ? <small>{subtitle}</small> : null}</td>
-                  <td>{channelLabel[notification.channel] ?? notification.channel}</td>
-                  <td><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></td>
+                  <td className="notification-table__when" data-label="Когда">{formatDisplayDate(notification.createdAt, true)}</td>
+                  <td data-label="Кому">{notification.recipientAddress}</td>
+                  <td className="cell-wide" data-label="О чём"><button aria-controls={`notification-body-${notification.id}`} aria-expanded={open} className="notification-table__toggle" onClick={(event) => { event.stopPropagation(); setOpenId(open ? null : notification.id); }} type="button"><strong>{notification.subject || eventLabel[notification.eventCode] || "Письмо"}</strong></button>{subtitle ? <small>{subtitle}</small> : null}</td>
+                  <td data-label="Канал">{channelLabel[notification.channel] ?? notification.channel}</td>
+                  <td data-label="Статус"><StatusBadge tone={tone(notification.status)}>{statusLabel[notification.status] ?? "Статус"}</StatusBadge></td>
                 </tr>
                 {open ? <tr className="notification-table__detail" id={`notification-body-${notification.id}`}><td colSpan={5}>
                   <p className="notification-table__body">{notification.body}</p>
