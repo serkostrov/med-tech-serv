@@ -10,13 +10,13 @@ import { formatDisplayDate } from "./date-format.js";
  * что на доске задач. Карточка открывает задачу.
  */
 const STAGES: readonly StatusBoardColumn[] = [
-  { key: "planned", title: "Запланирована", color: "#8a9aa3" },
-  { key: "new", title: "Новая", color: "#e07a2e" },
-  { key: "assigned", title: "Назначена", color: "#d4a017" },
-  { key: "in_progress", title: "В работе", color: "#1f8a52" },
-  { key: "under_review", title: "На проверке", color: "#2f86c4" },
-  { key: "closed", title: "Выполнена", color: "#b42332" },
-  { key: "cancelled", title: "Отменена", color: "#8a9aa3" }
+  { key: "planned", title: "Запланирована", color: "var(--stage-planned)" },
+  { key: "new", title: "Новая", color: "var(--stage-new)" },
+  { key: "assigned", title: "Назначена", color: "var(--stage-assigned)" },
+  { key: "in_progress", title: "В работе", color: "var(--stage-in_progress)" },
+  { key: "under_review", title: "На проверке", color: "var(--stage-under_review)" },
+  { key: "closed", title: "Выполнена", color: "var(--stage-closed)" },
+  { key: "cancelled", title: "Отменена", color: "var(--stage-cancelled)" }
 ];
 
 /** Колонки доски: основные этапы всегда, «Запланирована», «Новая» и «Отменена» — если в них есть задачи. */

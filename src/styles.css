@@ -10,6 +10,16 @@
 strong, b { font-weight: 700; }
 
 :root {
+  /* Цвета этапов задачи — одни на доске, на страницах инженера и клиента, в календаре и отчётах
+     (UI/UX-разбор 19.11: «Назначена» была трёх разных жёлтых, «Выполнена» то красной, то серой).
+     Назначена жёлтая, в работе зелёная, на проверке синяя, закрыта красная — как в демо заказчика. */
+  --stage-planned: #8a9aa3;
+  --stage-new: #e07a2e;
+  --stage-assigned: #d9a400;
+  --stage-in_progress: #1f8a52;
+  --stage-under_review: #2f86c4;
+  --stage-closed: #c23b47;
+  --stage-cancelled: #8a9aa3;
   /* Design tokens: readable medical-ops UI, shadcn-compatible */
   --background: #f4f6f8;
   --foreground: #17232c;
@@ -322,13 +332,13 @@ strong, b { font-weight: 700; }
 .report-bar i { display: block; min-width: 2px; height: 100%; border-radius: inherit; background: var(--color-accent); }
 .report-bar strong { display: inline-flex; align-items: baseline; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
 .report-bar strong small { color: var(--color-muted); font-size: 12px; font-weight: 500; }
-.report-bar--closed i { background: #4f6470; }
-.report-bar--in_progress i { background: var(--color-success); }
-.report-bar--under_review i { background: var(--color-accent); }
-.report-bar--cancelled i { background: #8a9aa3; }
-.report-bar--assigned i { background: #d9a400; }
-.report-bar--new i { background: #e07a2e; }
-.report-bar--planned i { background: #7b93a3; }
+.report-bar--closed i { background: var(--stage-closed); }
+.report-bar--in_progress i { background: var(--stage-in_progress); }
+.report-bar--under_review i { background: var(--stage-under_review); }
+.report-bar--cancelled i { background: var(--stage-cancelled); }
+.report-bar--assigned i { background: var(--stage-assigned); }
+.report-bar--new i { background: var(--stage-new); }
+.report-bar--planned i { background: var(--stage-planned); }
 /* Причины обращений и гарантийность: износ зелёный, вина пользователя оранжевая,
    гарантия красная — как в демо, которое заказчик уже видел. */
 .report-bar--wear i { background: var(--color-success); }
@@ -8463,13 +8473,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   border-radius: 10px;
   background: #eef1f4;
 }
-.task-board__column--planned { --stage-color: #8a9aa3; }
-.task-board__column--new { --stage-color: #e07a2e; }
-.task-board__column--assigned { --stage-color: #d9a400; }
-.task-board__column--in_progress { --stage-color: #1f8a52; }
-.task-board__column--under_review { --stage-color: #2f86c4; }
-.task-board__column--closed { --stage-color: #c23b47; }
-.task-board__column--cancelled { --stage-color: #8a9aa3; }
+.task-board__column--planned { --stage-color: var(--stage-planned); }
+.task-board__column--new { --stage-color: var(--stage-new); }
+.task-board__column--assigned { --stage-color: var(--stage-assigned); }
+.task-board__column--in_progress { --stage-color: var(--stage-in_progress); }
+.task-board__column--under_review { --stage-color: var(--stage-under_review); }
+.task-board__column--closed { --stage-color: var(--stage-closed); }
+.task-board__column--cancelled { --stage-color: var(--stage-cancelled); }
 .task-board__column > header > div { min-height: 26px; }
 .task-board__title { display: inline-flex; align-items: center; gap: 8px; color: var(--color-ink); font-size: 14px; font-weight: 700; }
 .task-board__dot { width: 9px; height: 9px; border-radius: 50%; background: var(--stage-color, #8a9aa3); }
@@ -9311,12 +9321,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Задача началась раньше или кончится позже показанного: край полосы срезан. */
 .calendar-bar--from-before { margin-left: 0; border-left-width: 1px; border-left-style: dashed; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .calendar-bar--to-after { margin-right: 0; border-right-style: dashed; border-top-right-radius: 0; border-bottom-right-radius: 0; }
-.calendar-bar--planned { --bar: #8a9aa3; border-style: dashed; border-left-style: solid; }
-.calendar-bar--new { --bar: #e07a2e; }
-.calendar-bar--assigned { --bar: #c99a12; }
-.calendar-bar--in_progress { --bar: #1f8a52; }
-.calendar-bar--under_review { --bar: #2f86c4; }
-.calendar-bar--closed { --bar: #8a9aa3; }
+.calendar-bar--planned { --bar: var(--stage-planned); border-style: dashed; border-left-style: solid; }
+.calendar-bar--new { --bar: var(--stage-new); }
+.calendar-bar--assigned { --bar: var(--stage-assigned); }
+.calendar-bar--in_progress { --bar: var(--stage-in_progress); }
+.calendar-bar--under_review { --bar: var(--stage-under_review); }
+.calendar-bar--closed { --bar: var(--stage-closed); }
 .calendar-bar--closed .calendar-bar__title { color: var(--color-muted); }
 .calendar-bar--overdue .calendar-bar__number { color: var(--color-danger); }
 .calendar-bar--urgent .calendar-bar__number::after { content: " !"; color: var(--color-danger); }
