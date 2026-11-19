@@ -215,7 +215,7 @@ export function StockDocumentsView() {
             <td className="stock-documents-table__totals" data-label="Состав">{stockDocumentTotalsText(document)}</td>
           </tr>)}</tbody>
         </table></div>
-        <RegistryPagination ariaLabel="Страницы документов склада" onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}
+        <RegistryPagination ariaLabel="Страницы документов склада" alwaysShow onPageChange={(next) => void reload(filters, next)} onPageSizeChange={(size) => { setPageSize(size); void reload(filters, 0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} /></>}
     </DataTableShell>
   </>;
 }

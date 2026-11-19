@@ -2247,7 +2247,7 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
           {(loading || !listLoaded) && tasks.length === 0
             ? <ResourceState description="Подождите, список сейчас появится." status="loading" title="Загружаем задачи" />
             : <TaskTable engineers={engineers} equipment={equipment} filtered={Boolean(appliedFilters.search || appliedFilters.status || appliedFilters.engineerId || appliedFilters.siteId || appliedFilters.workTypeCode || appliedFilters.priority || appliedFilters.guarantee || appliedFilters.periodFrom || appliedFilters.periodTo || appliedFilters.overdue || appliedFilters.maintenancePlan)} onOpen={(id) => void openTask(id).catch((loadError: unknown) => toast.error(loadError instanceof Error ? loadError.message : "Не получилось открыть задачу"))} onToggle={toggleTask} onToggleAll={(selected) => setSelectedTaskIds((current) => { const next = new Set(current); for (const task of tasks) { if (selected) next.add(task.id); else next.delete(task.id); } return next; })} selectedTaskIds={selectedTaskIds} tasks={tasks} />}
-          <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={(next) => void changePage(next)} onPageSizeChange={(size) => { setPageSize(size); void changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+          <RegistryPagination ariaLabel="Страницы списка задач" alwaysShow onPageChange={(next) => void changePage(next)} onPageSizeChange={(size) => { setPageSize(size); void changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
         </section>
 
       </div> : <MailInboxTab key={mailRefresh} onCreateTask={(mail) => void (async () => {
@@ -3257,7 +3257,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
                 </tbody>
               </table>
             </div>
-            <RegistryPagination ariaLabel="Страницы списка приборов" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+            <RegistryPagination ariaLabel="Страницы списка приборов" alwaysShow onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
           </>}
       </section> : null}
     </>
@@ -3392,7 +3392,7 @@ function NotificationsPage() {
               </React.Fragment>;
             })}
           </tbody></table></div>}
-      <RegistryPagination ariaLabel="Страницы журнала уведомлений" onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+      <RegistryPagination ariaLabel="Страницы журнала уведомлений" alwaysShow onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
     </section></>;
 }
 
@@ -4041,7 +4041,7 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
       {!loading && error ? <div className="mobile-task-error" role="alert"><strong>Список не загрузился</strong><span>{error}</span><Button onClick={() => setReload((value) => value + 1)} variant="secondary">Повторить</Button></div> : null}
       {!loading && !error && page?.items.length === 0 ? <ResourceState description="Когда координатор назначит задачу, она появится здесь." status="empty" title="Назначенных выездов пока нет" /> : null}
       {!loading && !error && page ? <div className="mobile-task-list">{page.items.map((task) => <EngineerTaskCard key={task.id} onOpen={openFromList} task={task} />)}</div> : null}
-      {!error && page ? <RegistryPagination ariaLabel="Страницы списка задач" onPageChange={setListPageIndex} onPageSizeChange={(size) => { setListPageSize(size); setListPageIndex(0); }} pageIndex={listPageIndex} pageSize={listPageSize} total={page.total} /> : null}
+      {!error && page ? <RegistryPagination ariaLabel="Страницы списка задач" alwaysShow onPageChange={setListPageIndex} onPageSizeChange={(size) => { setListPageSize(size); setListPageIndex(0); }} pageIndex={listPageIndex} pageSize={listPageSize} total={page.total} /> : null}
     </section> : null}
     {/* Свои задачи по дням: что запланировано на неделю или месяц (встреча 16.11). */}
     {view === "calendar" ? <EngineerCalendar onOpenTask={openFromList} ownOnly /> : null}

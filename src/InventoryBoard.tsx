@@ -2,7 +2,7 @@ import React from "react";
 import { BoardScroller } from "./BoardScroller.js";
 import type { InventoryPartRecord } from "./m2-api.js";
 import { partQuantityText } from "./TaskReservations.js";
-import { conditionTotalsText, conditionTotalsTitle } from "./stock-movements.js";
+import { conditionTotalsTitle } from "./stock-movements.js";
 
 /** Колонки склада по тревожности запаса, слева направо. */
 export type StockGroup = "out" | "below" | "low" | "normal";
@@ -52,7 +52,6 @@ export function InventoryBoard({ parts, loading, onOpen }: {
     return <section className={`task-board__column task-board__column--stock-${group.id}`} key={group.id}>
       <header>
         <div><span className="task-board__title"><span aria-hidden="true" className="task-board__dot" />{group.label}</span><strong>{cards.length}</strong></div>
-        <span>{group.hint}</span>
       </header>
       <div className="task-board__cards">
         {loading && cards.length === 0 ? <p className="task-board__empty">Загружаем склад…</p> : null}
@@ -67,14 +66,15 @@ export function InventoryBoard({ parts, loading, onOpen }: {
           {/* Единиц измерения в номенклатуре нет: целые считаем штуками, как в резервах и задачах. */}
           <dl className="inventory-board-card__stats">
             <div><dt>На складе</dt><dd>{partQuantityText(part.onHandQuantity)}</dd></div>
-            {/* Резервируют и выдают в состоянии, поэтому Г, Н и Б видно сразу на карточке. */}
-            <div><dt>Г · Н · Б</dt><dd title={conditionTotalsTitle(part.onHandByCondition)}>{conditionTotalsText(part.onHandByCondition)}</dd></div>
+            {/* Резервируют и выдают в состоянии, поэтому оно видно сразу на карточке — словами,
+                а не буквами «Г · Н · Б», которые на второй встрече 18.11 не прочитались. */}
+            <div><dt>Состояние</dt><dd>{conditionTotalsTitle(part.onHandByCondition)}</dd></div>
             {part.reservedQuantity > 0 ? <div><dt>В резерве</dt><dd>{partQuantityText(part.reservedQuantity)}</dd></div> : null}
             {part.reservedQuantity > 0 ? <div><dt>Доступно</dt><dd>{partQuantityText(part.availableQuantity)}</dd></div> : null}
             <div><dt>Минимум</dt><dd>{part.minimumStock > 0 ? partQuantityText(part.minimumStock) : "не задан"}</dd></div>
           </dl>
         </article>)}
-        {!loading && cards.length === 0 ? <p className="task-board__empty">Таких позиций нет.</p> : null}
+        {!loading && cards.length === 0 ? <p className="task-board__empty">Пусто</p> : null}
       </div>
     </section>;
   })}</div></BoardScroller>;

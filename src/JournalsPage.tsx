@@ -160,7 +160,7 @@ function ChangesJournal({ people }: { readonly people: readonly JournalPerson[] 
                 })}
               </tbody>
             </table></div>}
-      <RegistryPagination ariaLabel="Страницы журнала изменений" onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+      <RegistryPagination ariaLabel="Страницы журнала изменений" alwaysShow onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
     </section>
   </>;
 }
@@ -259,7 +259,7 @@ function LoginsJournal({ people }: { readonly people: readonly JournalPerson[] }
                 })}
               </tbody>
             </table></div>}
-      <RegistryPagination ariaLabel="Страницы журнала входов" onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
+      <RegistryPagination ariaLabel="Страницы журнала входов" alwaysShow onPageChange={changePage} onPageSizeChange={(size) => { setPageSize(size); changePage(0); }} pageIndex={pageIndex} pageSize={pageSize} total={total} />
     </section>
   </>;
 }

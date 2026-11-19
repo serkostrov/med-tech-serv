@@ -338,7 +338,7 @@ export function ReservationsPage() {
               >{ACTION_LABELS[action]}</Button>)}</div></td> : null}
             </tr>;
           })}</tbody>
-        </table></div><RegistryPagination ariaLabel="Страницы списка резервов" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={visible.length} /></div>}
+        </table></div><RegistryPagination ariaLabel="Страницы списка резервов" alwaysShow onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageIndex} pageSize={pageSize} total={visible.length} /></div>}
     </DataTableShell>}
     <ConfirmationDialog
       confirmLabel={shown ? CONFIRM_TEXT[shown.action].confirm : ""}
