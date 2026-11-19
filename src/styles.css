@@ -1653,7 +1653,8 @@ td .resource-state {
 .data-table tbody tr { height: auto; }
 .data-table td {
   height: auto;
-  overflow-wrap: anywhere;
+  /* Переносы между словами: «anywhere» позволял сжать столбец до букв («Николаев/ич», «18.11.202/6»). */
+  overflow-wrap: break-word;
   line-height: 1.45;
   white-space: normal;
 }
@@ -1778,9 +1779,12 @@ td .resource-state {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Таблица подстраивается под ширину экрана (встреча 19.11: «умная адаптация под устройства и разрешения»):
+   жёсткие 760 px давали прокрутку вбок на планшете и ноутбуке даже там, где всё помещалось. Прокрутка
+   внутри таблицы остаётся только тогда, когда столбцы не влезают даже с переносами по словам. */
 .data-table {
   width: 100%;
-  min-width: 760px;
+  min-width: 0;
   border-collapse: collapse;
   font-size: 13px;
 }
@@ -1794,7 +1798,8 @@ td .resource-state {
   font-weight: 600;
   letter-spacing: 0.01em;
   text-align: left;
-  white-space: nowrap;
+  /* Заголовок из двух слов («У инженеров», «В резерве») встаёт в две строки, а не раздвигает столбец. */
+  white-space: normal;
 }
 
 .data-table td {
@@ -3400,6 +3405,8 @@ td .resource-state {
 .task-registry-row .text-button { font-weight: 400; }
 
 .task-registry-row__flag {
+  /* Отдельным блоком: «срочно», «гарантия», «просрочена» уходят на следующую строку, а не растягивают «Срок». */
+  display: inline-block;
   margin-left: 6px;
   color: var(--color-danger);
   font-size: 12px;
@@ -5381,7 +5388,7 @@ td .resource-state {
 }
 
 .reference-admin-table {
-  min-width: 720px;
+  min-width: 0;
 }
 
 .reference-admin-table td {
@@ -8661,7 +8668,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .reference-admin-table td { vertical-align: middle; }
 
 /* ===== Уведомления v2: журнал таблицей, текст по клику ===== */
-.notification-table { min-width: 860px; }
+.notification-table { min-width: 0; }
 .notification-table td strong { display: block; color: var(--color-ink); font-weight: 600; }
 .notification-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; }
 .notification-table__when { white-space: nowrap; font-variant-numeric: tabular-nums; color: var(--color-ink-soft); }
@@ -8671,9 +8678,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .notification-table__detail .notification-item__error { margin-top: 10px; }
 
 /* ===== Журналы: что меняли в системе и кто входил (ТЗ 6.3) ===== */
-.journal-table { min-width: 900px; }
-/* У входов всего четыре столбца: лишняя ширина уводила исход за край экрана. */
-.journal-table--logins { min-width: 620px; }
+.journal-table { min-width: 0; }
 .journal-table td strong { display: block; color: var(--color-ink); font-weight: 600; }
 .journal-table td small { display: block; margin-top: 2px; color: var(--color-muted); font-size: 12px; word-break: break-word; }
 /* Дату и адрес не переносим по словам: «217.118.92. / 40» читается как другой адрес,
@@ -9755,3 +9760,64 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .data-table.task-list-table td:not(.task-list-table__number) .entity-link, .data-table.task-list-table td > .entity-link > strong { white-space: normal; text-align: left; }
 .data-table.task-list-table td.task-list-table__number, .data-table.task-list-table td.cell-date { width: 1%; white-space: nowrap; overflow-wrap: normal; }
 .data-table.task-list-table td.task-list-table__number .entity-link, .data-table.task-list-table td.task-list-table__number .text-button { color: var(--color-muted); white-space: nowrap; overflow-wrap: normal; }
+
+/* Прайс: длинное название вида работ («Аппликация: постановка методик исследований») переносится по словам. */
+.price-table td > .entity-link > strong { white-space: normal; }
+/* Справочники на ноутбуке и планшете: разделы над таблицей в три колонки, а таблица — на всю ширину. */
+@media (min-width: 901px) and (max-width: 1180px) {
+  .reference-admin-layout { grid-template-columns: minmax(0, 1fr); }
+  .reference-admin-nav > div:last-child { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+
+/* Плотные реестры: таблицей, пока столбцы помещаются, уже — карточками, как на телефоне, а не прокруткой вбок
+   (встреча 19.11: адаптация под планшет и ноутбук). Порог — естественная ширина таблицы: документы склада 742,
+   прайс 785, список задач 859, письма 920, склад 943 px. На ноутбуке 1280 все пять — таблицы. */
+@container (max-width: 760px) {
+  .table-cards--760 > table { min-width: 0; }
+  .table-cards--760 > table > thead { display: none; }
+  .table-cards--760 > table > tbody > tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; padding: 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .table-cards--760 > table > tbody > tr > td { display: block; padding: 0; border: 0; min-width: 0; white-space: normal; text-align: left; }
+  .table-cards--760 > table > tbody > tr > td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .table-cards--760 > table > tbody > tr > td.cell-wide, .table-cards--760 > table > tbody > tr > td.task-select-cell { grid-column: 1 / -1; }
+  .table-cards--760 > table > tbody > tr > td.numeric { text-align: left; }
+  .table-cards--760 .table-actions { justify-content: flex-start; }
+}
+@container (max-width: 800px) {
+  .table-cards--800 > table { min-width: 0; }
+  .table-cards--800 > table > thead { display: none; }
+  .table-cards--800 > table > tbody > tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; padding: 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .table-cards--800 > table > tbody > tr > td { display: block; padding: 0; border: 0; min-width: 0; white-space: normal; text-align: left; }
+  .table-cards--800 > table > tbody > tr > td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .table-cards--800 > table > tbody > tr > td.cell-wide, .table-cards--800 > table > tbody > tr > td.task-select-cell { grid-column: 1 / -1; }
+  .table-cards--800 > table > tbody > tr > td.numeric { text-align: left; }
+  .table-cards--800 .table-actions { justify-content: flex-start; }
+}
+@container (max-width: 880px) {
+  .table-cards--880 > table { min-width: 0; }
+  .table-cards--880 > table > thead { display: none; }
+  .table-cards--880 > table > tbody > tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; padding: 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .table-cards--880 > table > tbody > tr > td { display: block; padding: 0; border: 0; min-width: 0; white-space: normal; text-align: left; }
+  .table-cards--880 > table > tbody > tr > td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .table-cards--880 > table > tbody > tr > td.cell-wide, .table-cards--880 > table > tbody > tr > td.task-select-cell { grid-column: 1 / -1; }
+  .table-cards--880 > table > tbody > tr > td.numeric { text-align: left; }
+  .table-cards--880 .table-actions { justify-content: flex-start; }
+}
+@container (max-width: 960px) {
+  .table-cards--960 > table { min-width: 0; }
+  .table-cards--960 > table > thead { display: none; }
+  .table-cards--960 > table > tbody > tr { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px 12px; padding: 12px; border-bottom: 1px solid var(--color-border-soft); }
+  .table-cards--960 > table > tbody > tr > td { display: block; padding: 0; border: 0; min-width: 0; white-space: normal; text-align: left; }
+  .table-cards--960 > table > tbody > tr > td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .table-cards--960 > table > tbody > tr > td.cell-wide, .table-cards--960 > table > tbody > tr > td.task-select-cell { grid-column: 1 / -1; }
+  .table-cards--960 > table > tbody > tr > td.numeric { text-align: left; }
+  .table-cards--960 .table-actions { justify-content: flex-start; }
+}
+@container (max-width: 620px) {
+  .table-cards--760 > table > tbody > tr, .table-cards--800 > table > tbody > tr, .table-cards--880 > table > tbody > tr, .table-cards--960 > table > tbody > tr { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+/* Склад: исключения строкой под числом или артикулом, а не отдельным столбцом «Состояние». */
+.data-table td small.inventory-table__flag { color: var(--color-danger); font-weight: 600; }
+.data-table td small.inventory-table__flag--off { color: var(--color-muted); }
+/* Инженеры: ФИО переносится по словам — столбец не раздвигает таблицу на ноутбуке. */
+.data-table.engineer-load-table td:first-child .engineer-load-table__name, .data-table.engineer-load-table td:first-child .engineer-load-table__name strong { white-space: normal; text-align: left; }
+.engineer-load-table td:first-child { min-width: 120px; }

@@ -194,7 +194,7 @@ export function StockDocumentsView() {
           status={filtered ? "filtered-empty" : "empty"}
           title={filtered ? "Документов по этим условиям нет" : "Документов пока нет"}
         />
-        : <><div className="table-scroll table-cards"><table className="data-table stock-documents-table">
+        : <><div className="table-scroll table-cards table-cards--760"><table className="data-table stock-documents-table">
           <thead><tr>
             <th scope="col">Номер</th>
             <th scope="col">Документ</th>

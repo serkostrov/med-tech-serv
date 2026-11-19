@@ -231,8 +231,11 @@ describe("shared UI architecture", () => {
     assert.match(operations, /className="table-scroll engineer-load-scroll"/u);
     assert.match(css, /\.equipment-registry-scroll\s*\{\s*container-type:\s*inline-size;\s*\}/u);
     assert.match(css, /\.engineer-load-scroll\s*\{\s*container-type:\s*inline-size;\s*\}/u);
-    // Карточки включаются там же, где таблица перестаёт помещаться: min-width у `.data-table` — 760px.
-    assert.match(css, /\.data-table\s*\{[^}]*min-width:\s*760px/su);
+    // Таблица без жёсткой ширины (встреча 19.11: адаптация под экраны): столбцы делят ширину сами,
+    // переносы только между словами; где не помещается — карточки по ширине контейнера.
+    assert.match(css, /\.data-table\s*\{[^}]*min-width:\s*0;/su);
+    assert.match(css, /\.data-table td\s*\{[^}]*overflow-wrap:\s*break-word;/su);
+    for (const width of [760, 800, 880, 960]) assert.match(css, new RegExp(`@container \\(max-width: ${width}px\\)[\\s\\S]*?\\.table-cards--${width} > table > thead \\{ display: none; \\}`, "u"));
     assert.match(css, /@container \(max-width: 760px\)[\s\S]*?\.equipment-registry-table thead \{ display: none; \}/u);
     assert.match(css, /@container \(max-width: 760px\)[\s\S]*?\.engineer-load-table thead \{ display: none; \}/u);
     // Серийный номер не рвётся по буквам: нужен селектор сильнее, чем `.data-table td`.

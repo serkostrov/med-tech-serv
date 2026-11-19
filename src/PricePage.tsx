@@ -401,7 +401,7 @@ export function PricePage() {
             ? <ResourceState description="Сначала заведите виды работ в справочниках, затем назначьте им цены." status="empty" title="Видов работ пока нет" />
             : visible.length === 0
               ? <ResourceState description="Измените условия поиска." status="filtered-empty" title="Ничего не найдено" />
-              : <div className="table-scroll"><table className="data-table price-table">
+              : <div className="table-scroll table-cards table-cards--800"><table className="data-table price-table">
                 <thead><tr>
                   {canWrite ? <th className="task-select-cell" scope="col"><input
                     aria-label="Выбрать все показанные строки"
@@ -433,15 +433,15 @@ export function PricePage() {
                         onChange={(event) => toggleSelected(line.key, event.target.checked)}
                         type="checkbox"
                       /></td> : null}
-                      <td><button className="entity-link" onClick={() => setOpenKey(line.key)} title="Открыть вид работ: история цен и задачи" type="button"><strong>{line.workTypeName}</strong></button>{line.guaranteeCategoryName === ALL_CATEGORIES_LABEL ? null : <small>{line.guaranteeCategoryName}</small>}</td>
-                      <td className="numeric">{line.current
+                      <td className="cell-wide" data-label="Вид работ"><button className="entity-link" onClick={() => setOpenKey(line.key)} title="Открыть вид работ: история цен и задачи" type="button"><strong>{line.workTypeName}</strong></button>{line.guaranteeCategoryName === ALL_CATEGORIES_LABEL ? null : <small>{line.guaranteeCategoryName}</small>}</td>
+                      <td className="numeric" data-label="Действующая цена">{line.current
                         ? <strong>{priceLineAmountText(line)}</strong>
                         : <span className="is-empty">{priceLineAmountText(line)}</span>}</td>
-                      <td>{priceLineStartText(line)}{nextText ? <small>{nextText}</small> : null}</td>
-                      <td>{line.current
+                      <td data-label="С какой даты">{priceLineStartText(line)}{nextText ? <small>{nextText}</small> : null}</td>
+                      <td data-label="Гарантия">{line.current
                         ? <StatusBadge tone={line.current.includeGuaranteeWork ? "info" : "neutral"}>{guaranteeWorkLabel(line.current.includeGuaranteeWork)}</StatusBadge>
                         : "—"}</td>
-                      <td>{line.history.length === 0 ? <span className="muted">—</span> : <button
+                      <td data-label="История">{line.history.length === 0 ? <span className="muted">—</span> : <button
                         className="text-button"
                         onClick={() => setOpenKey(line.key)}
                         type="button"
