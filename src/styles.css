@@ -9694,3 +9694,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .dialog-form.role-page__fields { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .role-page__reset { display: flex; justify-content: flex-end; }
 @media (max-width: 720px) { .role-page__fields { grid-template-columns: 1fr; } }
+
+/* Фильтр применяется сам: пока идёт запрос, у строки фильтров маленький кружок вместо кнопки «Показать». */
+.filter-bar__busy { flex: none; align-self: center; width: 14px; height: 14px; border: 2px solid var(--color-border); border-top-color: var(--color-accent); border-radius: 50%; animation: filter-bar-spin 0.8s linear infinite; }
+@keyframes filter-bar-spin { to { transform: rotate(360deg); } }

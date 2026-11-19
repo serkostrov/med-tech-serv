@@ -542,10 +542,38 @@ export function FilterBar({
     setActiveCount(count);
     setSearchFilled(Boolean(formRef.current?.querySelector<HTMLInputElement>(".filter-bar__search input")?.value.trim()));
   });
-  const submit = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); setPanelOpen(false); void onSubmit(); };
+  // Условия применяются сами, как в Linear и Attio, — без кнопок «Показать» и «Найти»
+  // (UI/UX-разбор 19.11). После любой перемены в полях ждём паузу (в поиске — пока человек
+  // печатает) и показываем результат; Enter применяет сразу.
+  const submitRef = useRef(onSubmit);
+  submitRef.current = onSubmit;
+  const applied = useRef<string | null>(null);
+  const skipNext = useRef(false);
+  const timer = useRef<number | undefined>(undefined);
+  useEffect(() => {
+    const form = formRef.current;
+    if (!form) return;
+    const signature = filterSignature(form);
+    if (applied.current === null || skipNext.current) { applied.current = signature; skipNext.current = false; return; }
+    if (signature === applied.current) return;
+    window.clearTimeout(timer.current);
+    const typing = document.activeElement instanceof HTMLInputElement && form.contains(document.activeElement) && document.activeElement.type !== "checkbox";
+    timer.current = window.setTimeout(() => { applied.current = signature; void submitRef.current(); }, typing ? 450 : 150);
+  });
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setPanelOpen(false);
+    window.clearTimeout(timer.current);
+    if (formRef.current) applied.current = filterSignature(formRef.current);
+    void onSubmit();
+  };
+  const reset = () => { skipNext.current = true; window.clearTimeout(timer.current); onReset?.(); setPanelOpen(false); };
   const submitMobile = (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); void Promise.resolve(onSubmit()).then(() => setMobileOpen(false)); };
   const fields = rest.map((node, index) => <div className="filter-bar__field" key={index}>{node}</div>);
-  const actions = (
+  const resetButton = onReset && (activeCount || searchFilled) ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null;
+  // На телефоне условия выбирают в отдельной панели: там «Показать» закрывает её.
+  const mobileActions = (
     <div className="filter-bar__actions">
       {onReset ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null}
       <Button busy={loading} busyLabel="Ищем…" icon="filter" type="submit">{submitLabel}</Button>
@@ -553,7 +581,7 @@ export function FilterBar({
   );
   return (
     <section aria-busy={loading} aria-label="Фильтры" className={cn("filter-bar", "filter-bar--v2", collapsed ? "filter-bar--collapsible" : "")}>
-      <form className="filter-bar__desktop" onReset={() => { onReset?.(); setPanelOpen(false); }} onSubmit={submit} ref={formRef}>
+      <form className="filter-bar__desktop" onReset={reset} onSubmit={submit} ref={formRef}>
         <div className="filter-bar__row">
           {search ? <div className="filter-bar__search">{search}</div> : null}
           {collapsed
@@ -561,22 +589,33 @@ export function FilterBar({
                 {activeCount ? `Фильтры · ${activeCount}` : "Фильтры"}
               </Button>
             : <div className="filter-bar__inline">{fields}</div>}
-          {collapsed ? <>{onReset && (activeCount || searchFilled) ? <Button type="reset" variant="ghost">{resetLabel}</Button> : null}{search ? <Button busy={loading} busyLabel="Ищем…" type="submit" variant="secondary">Найти</Button> : null}</> : actions}
+          {resetButton ? <div className="filter-bar__actions">{resetButton}</div> : null}
+          {loading ? <span aria-hidden="true" className="filter-bar__busy" /> : null}
         </div>
         {collapsed ? <div className="filter-bar__panel" hidden={!panelOpen}>
           <div className="filter-bar__fields">{fields}</div>
-          {actions}
         </div> : null}
       </form>
       <Button className="filter-bar__mobile-trigger" icon="filter" onClick={() => setMobileOpen(true)} variant="secondary">Фильтры</Button>
       <Sheet onOpenChange={setMobileOpen} open={mobileOpen} title="Фильтры">
-        <form className="filter-bar__mobile-form" onReset={() => onReset?.()} onSubmit={submitMobile}>
+        <form className="filter-bar__mobile-form" onReset={reset} onSubmit={submitMobile}>
           <div className="filter-bar__fields">{search}{rest}</div>
-          {actions}
+          {mobileActions}
         </form>
       </Sheet>
     </section>
   );
+}
+
+/** Состояние полей фильтра одной строкой: по ней видно, что человек что-то поменял. */
+function filterSignature(form: HTMLFormElement): string {
+  const controls = [...form.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLTextAreaElement>("input, select, textarea")]
+    // Поиск внутри списка с галочками сам ничего не отбирает — только сужает список вариантов.
+    .filter((control) => !control.classList.contains("multi-select__search"))
+    .map((control) => control instanceof HTMLInputElement && (control.type === "checkbox" || control.type === "radio") ? `${control.name}=${control.checked}` : `${control.name}=${control.value}`);
+  const marks = [...form.querySelectorAll("[data-filter-active], [role=combobox]")]
+    .map((element) => `${element.getAttribute("data-filter-active") ?? ""}|${element.textContent ?? ""}`);
+  return JSON.stringify([controls, marks]);
 }
 
 export type ResourceStatus = "loading" | "empty" | "filtered-empty" | "error";
