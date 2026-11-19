@@ -57,7 +57,13 @@ export function SitePage({ siteId, initialTab = "tasks", onBack }: {
   const [tasksTotal, setTasksTotal] = useState(0);
   const [equipment, setEquipment] = useState<readonly EquipmentApiRecord[] | null>(null);
   const [equipmentTotal, setEquipmentTotal] = useState(0);
-  const [tab, setTab] = useState<SitePageTab>(initialTab);
+  const [tab, setTabState] = useState<SitePageTab>(initialTab);
+  // Вкладка помнится в шаге истории: «Назад» из задачи или прибора вернёт на неё же.
+  const setTab = (next: SitePageTab) => {
+    setTabState(next);
+    const state = window.history.state as { readonly siteId?: string } | null;
+    if (state?.siteId === siteId) window.history.replaceState({ ...state, siteTab: next }, "");
+  };
 
   useEffect(() => {
     let current = true;

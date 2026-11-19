@@ -90,7 +90,13 @@ export function EngineerPage({ engineerId, initialTab = "tasks", onBack, onEdit,
   const [tasks, setTasks] = useState<readonly TaskApiRecord[] | null>(null);
   const [tasksTotal, setTasksTotal] = useState(0);
   const [stock, setStock] = useState<readonly StockReservationRecord[] | null>(null);
-  const [tab, setTab] = useState<EngineerPageTab>(initialTab);
+  const [tab, setTabState] = useState<EngineerPageTab>(initialTab);
+  // Вкладка помнится в шаге истории: «Назад» из прибора или задачи вернёт на неё же.
+  const setTab = (next: EngineerPageTab) => {
+    setTabState(next);
+    const state = window.history.state as { readonly engineerId?: string } | null;
+    if (state?.engineerId === engineerId) window.history.replaceState({ ...state, engineerTab: next }, "");
+  };
 
   useEffect(() => {
     let current = true;

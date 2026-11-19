@@ -56,7 +56,7 @@ import { ClosureReview, MIN_CLOSURE_PHOTOS } from "./ClosureReview.js";
 import { ClampedText } from "./ClampedText.js";
 import { ProfileDialog } from "./ProfileDialog.js";
 import { EquipmentPlanTab, MaintenancePlanPage } from "./MaintenancePlan.js";
-import { SitePage } from "./SitePage.js";
+import { SitePage, type SitePageTab } from "./SitePage.js";
 import { nameRepeats } from "./name-repeats.js";
 import { attentionFilter, taskAttentionItems, type TaskAttentionCounts, type TaskAttentionKey } from "./task-attention.js";
 import { EQUIPMENT_SPEND_PERIODS, equipmentSpendEmptyText, equipmentSpendLines, equipmentSpendRange, type EquipmentSpend, type EquipmentSpendPeriod } from "./equipment-spend.js";
@@ -2093,6 +2093,8 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
   const closeTask = () => {
     // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
     if (onReturnToEquipment) { onReturnToEquipment(); return; }
+    // Открыли ссылкой (из календаря, со страницы инженера или клиента): «Назад» туда же.
+    if (openedViaLink()) { openRequest.current += 1; openInFlight.current = null; window.history.back(); return; }
     openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); setOpenOnMailTab(false); onTaskRouteChange();
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
@@ -2178,8 +2180,8 @@ function CoordinatorTasks({ initialTaskId, initialDrill, onTaskRouteChange, onRe
       setExporting(false);
     }
   };
-  if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
-  if (selectedTaskId && taskCard) return <TaskCard backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} card={taskCard} initialTab={openOnMailTab ? "mail" : "overview"} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }} workTypes={workTypes} />;
+  if (selectedTaskId && !taskCard) return <TaskCardLoading backLabel={taskBackLabel(Boolean(onReturnToEquipment))} onBack={closeTask} task={tasks.find((item) => item.id === selectedTaskId)} />;
+  if (selectedTaskId && taskCard) return <TaskCard backLabel={taskBackLabel(Boolean(onReturnToEquipment))} card={taskCard} initialTab={openOnMailTab ? "mail" : "overview"} onBack={closeTask} onChanged={async () => { await Promise.all([refreshTasks(), openTask(selectedTaskId, false)]); }} onOpenRelated={async (id) => { await openTask(id).catch((openError: unknown) => toast.error(openError instanceof Error ? openError.message : "Не получилось открыть задачу")); }} workTypes={workTypes} />;
   return (
     <>
       <PageIntro
@@ -2696,7 +2698,7 @@ function EquipmentCard({
   const openTask = (id: string) => {
     // Переход в раздел задач с открытой карточкой. Текущий шаг истории запоминает паспорт,
     // чтобы «Назад» и «К прибору» вернули сюда, а не на доску задач.
-    window.history.replaceState({ view: "equipment", equipmentId: record.id }, "", window.location.pathname);
+    window.history.replaceState({ ...currentRouteState(), view: "equipment", equipmentId: record.id }, "", window.location.pathname);
     window.history.pushState({ fromEquipmentId: record.id }, "", taskPathname(id));
     window.dispatchEvent(new PopStateEvent("popstate", { state: { fromEquipmentId: record.id } }));
   };
@@ -2706,7 +2708,7 @@ function EquipmentCard({
   };
   return (
     <div className="equipment-card-view">
-      <EntityDetailToolbar backLabel="К приборам" onBack={onBack} />
+      <EntityDetailToolbar backLabel={openedViaLink() ? "Назад" : "К приборам"} onBack={onBack} />
       <header className="task-head">
         <div className="task-head__meta">
           <span className="task-head__number">S/N {record.serial}</span>
@@ -2881,7 +2883,7 @@ function EquipmentSpendSection({ equipmentId }: { readonly equipmentId: string }
 /** Паспорт открывается: сразу каркас с названием прибора, данные подгружаются следом. */
 function EquipmentCardLoading({ record, onBack }: { readonly record?: Pick<EquipmentUiRecord, "manufacturer" | "model" | "serial">; readonly onBack: () => void }) {
   return <div aria-busy="true" className="equipment-card-loading" role="status">
-    <EntityDetailToolbar backLabel="К приборам" onBack={onBack} />
+    <EntityDetailToolbar backLabel={openedViaLink() ? "Назад" : "К приборам"} onBack={onBack} />
     <header className="task-head">
       {record ? <div className="task-head__meta"><span className="task-head__number">S/N {record.serial}</span></div> : null}
       <h1>{record ? `${record.manufacturer} ${record.model}` : "Открываем паспорт…"}</h1>
@@ -3068,6 +3070,8 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
   // «К приборам»: незавершённые загрузки паспорта больше не открывают его снова.
   const closeCard = () => {
     openCardRequest.current += 1;
+    // Паспорт открыли ссылкой (со страницы инженера, клиента, запчасти): «Назад» туда же.
+    if (openedViaLink()) { window.history.back(); return; }
     setOpeningId(null);
     setSelectedId(null);
     // Шаг истории снова означает список приборов, а не этот паспорт.
@@ -3619,9 +3623,9 @@ function ReferencesWorkspace({ notificationTemplates = false }: { readonly notif
   </>;
 }
 
-function CustomersPage({ initialSiteId }: { readonly initialSiteId?: string | undefined }) {
+function CustomersPage({ initialSiteId, initialSiteTab }: { readonly initialSiteId?: string | undefined; readonly initialSiteTab?: SitePageTab | undefined }) {
   // Страница клиента по ссылке (площадка в задаче, приборе, «Клиентах»), «Назад» — шагом истории.
-  if (initialSiteId) return <SitePage onBack={() => window.history.back()} siteId={initialSiteId} />;
+  if (initialSiteId) return <SitePage {...(initialSiteTab ? { initialTab: initialSiteTab } : {})} onBack={() => window.history.back()} siteId={initialSiteId} />;
   return <>
     <PageIntro title="Клиенты" />
     <CustomerReferencesPage />
@@ -3810,7 +3814,7 @@ function CoordinatorWorkspace({ view, taskRouteId, equipmentRouteId, entityRoute
     case "notifications": return <NotificationsPage />;
     case "journals": return <JournalsPage />;
     case "reports": return <OperationsReportsPage {...(onOpenTasks ? { onOpenTasks } : {})} />;
-    case "customers": return <CustomersPage initialSiteId={entityRoute.siteId} />;
+    case "customers": return <CustomersPage initialSiteId={entityRoute.siteId} initialSiteTab={entityRoute.siteTab} />;
     case "references": return <ReferencesWorkspace />;
     case "finance": return <FinancePage />;
     case "price": return <PricePage />;
@@ -3953,6 +3957,8 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
   const closeTask = () => {
     // Задачу открыли из паспорта прибора: возвращаемся в паспорт тем же шагом истории.
     if (onReturnToEquipment) { onReturnToEquipment(); return; }
+    // Открыли ссылкой (со страницы прибора или инженера): «Назад» туда же.
+    if (openedViaLink()) { openRequest.current += 1; openInFlight.current = null; window.history.back(); return; }
     openRequest.current += 1; openInFlight.current = null; setSelectedTaskId(null); setTaskCard(null); onTaskRouteChange();
   };
   // Ушли со страницы задач: незавершённые загрузки больше ничего не меняют.
@@ -3996,11 +4002,11 @@ function EngineerTasks({ user, initialTaskId, onTaskRouteChange, onReturnToEquip
       });
   }, [initialTaskId]);
   if (selectedTaskId && !taskCard) {
-    return <TaskCardLoading backLabel={onReturnToEquipment ? "К прибору" : "К задачам"} onBack={closeTask} task={page?.items.find((item) => item.id === selectedTaskId)} />;
+    return <TaskCardLoading backLabel={taskBackLabel(Boolean(onReturnToEquipment))} onBack={closeTask} task={page?.items.find((item) => item.id === selectedTaskId)} />;
   }
   if (selectedTaskId && taskCard) {
     return <TaskCard
-      backLabel={onReturnToEquipment ? "К прибору" : "К задачам"}
+      backLabel={taskBackLabel(Boolean(onReturnToEquipment))}
       card={taskCard}
       onBack={closeTask}
       onChanged={async () => {
@@ -4173,6 +4179,9 @@ type RouteState = {
   readonly engineerTab?: EngineerPageTab;
   readonly partId?: string;
   readonly siteId?: string;
+  readonly siteTab?: SitePageTab;
+  /** Карточку открыли ссылкой с другого экрана: её «Назад» возвращает на тот экран (встреча 18.11, вторая). */
+  readonly viaLink?: boolean;
 };
 
 /** Карточка внутри раздела, открытая ссылкой: страница инженера, запчасти, вкладка прибора. */
@@ -4181,6 +4190,7 @@ interface EntityRoute {
   readonly engineerTab?: EngineerPageTab;
   readonly partId?: string;
   readonly siteId?: string;
+  readonly siteTab?: SitePageTab;
   readonly equipmentTab?: EquipmentCardTab;
 }
 
@@ -4189,13 +4199,23 @@ function entityRouteFromState(state: RouteState | null): EntityRoute {
   return {
     ...(state.view === "engineers" && state.engineerId ? { engineerId: state.engineerId, ...(state.engineerTab ? { engineerTab: state.engineerTab } : {}) } : {}),
     ...(state.view === "warehouse" && state.partId ? { partId: state.partId } : {}),
-    ...(state.view === "customers" && state.siteId ? { siteId: state.siteId } : {}),
+    ...(state.view === "customers" && state.siteId ? { siteId: state.siteId, ...(state.siteTab ? { siteTab: state.siteTab } : {}) } : {}),
     ...(state.view === "equipment" && state.equipmentTab ? { equipmentTab: state.equipmentTab } : {})
   };
 }
 
 function currentRouteState(): RouteState | null {
   return typeof window === "undefined" ? null : window.history.state as RouteState | null;
+}
+
+/** Подпись «назад» у карточки задачи: туда, куда она вернёт. */
+function taskBackLabel(fromEquipment: boolean): string {
+  return fromEquipment ? "К прибору" : openedViaLink() ? "Назад" : "К задачам";
+}
+
+/** Текущую карточку открыли ссылкой: «Назад» — шаг истории на экран, откуда пришли, а не список раздела. */
+function openedViaLink(): boolean {
+  return currentRouteState()?.viaLink === true;
 }
 
 /** Обновление страницы открывает раздел по умолчанию: метки текущего шага истории сбрасываем. */
@@ -4330,26 +4350,26 @@ function App() {
         if (routeContext.current.activeView !== "tasks") setNavigationKey((value) => value + 1);
         setActiveView("tasks");
         setTaskRouteId(target.id);
-        window.history.pushState(null, "", taskPathname(target.id));
+        window.history.pushState({ viaLink: true }, "", taskPathname(target.id));
         return;
       }
       setTaskRouteId(undefined);
       if (target.kind === "equipment") {
         setEquipmentRouteId(target.id);
         setEntityRoute(target.tab ? { equipmentTab: target.tab } : {});
-        window.history.pushState({ view: "equipment", equipmentId: target.id, ...(target.tab ? { equipmentTab: target.tab } : {}) }, "", "/");
+        window.history.pushState({ view: "equipment", equipmentId: target.id, ...(target.tab ? { equipmentTab: target.tab } : {}), viaLink: true }, "", "/");
       } else if (target.kind === "engineer") {
         setEquipmentRouteId(undefined);
         setEntityRoute({ engineerId: target.id, ...(target.tab ? { engineerTab: target.tab } : {}) });
-        window.history.pushState({ view: "engineers", engineerId: target.id, ...(target.tab ? { engineerTab: target.tab } : {}) }, "", "/");
+        window.history.pushState({ view: "engineers", engineerId: target.id, ...(target.tab ? { engineerTab: target.tab } : {}), viaLink: true }, "", "/");
       } else if (target.kind === "site") {
         setEquipmentRouteId(undefined);
         setEntityRoute({ siteId: target.id });
-        window.history.pushState({ view: "customers", siteId: target.id }, "", "/");
+        window.history.pushState({ view: "customers", siteId: target.id, viaLink: true }, "", "/");
       } else {
         setEquipmentRouteId(undefined);
         setEntityRoute({ partId: target.id });
-        window.history.pushState({ view: "warehouse", partId: target.id }, "", "/");
+        window.history.pushState({ view: "warehouse", partId: target.id, viaLink: true }, "", "/");
       }
       setActiveView(entityViews[target.kind]);
       setNavigationKey((value) => value + 1);

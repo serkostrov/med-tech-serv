@@ -40,7 +40,7 @@ describe("shared UI architecture", () => {
 
   it("opens directories on the service catalogs tab", async () => {
     const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
-    assert.match(app, /case "customers": return <CustomersPage initialSiteId=\{entityRoute\.siteId\} \/>/u);
+    assert.match(app, /case "customers": return <CustomersPage initialSiteId=\{entityRoute\.siteId\} initialSiteTab=\{entityRoute\.siteTab\} \/>/u);
     assert.match(app, /useState<"catalogs" \| "equipment" \| "notifications">\("catalogs"\)/u);
     assert.match(app, /value: "equipment" as const, label: "Дерево приборов"/u);
     assert.doesNotMatch(app, /notificationTemplates \? "notifications"/u);
@@ -124,10 +124,11 @@ describe("shared UI architecture", () => {
     for (const tab of ["history", "meters", "files", "movements"]) {
       assert.match(app, new RegExp(`value: "${tab}"`, "u"));
     }
-    // Подпись «назад» у задачи зависит от того, откуда её открыли: «К задачам» или «К прибору».
+    // Подпись «назад» у задачи зависит от того, откуда её открыли: «К задачам», «К прибору»,
+    // а по ссылке с другого экрана — «Назад» туда же (вторая встреча 18.11).
     assert.match(app, /<EntityDetailToolbar[\s\S]{0,300}backLabel=\{backLabel\}/u);
-    assert.match(app, /onReturnToEquipment \? "К прибору" : "К задачам"/u);
-    assert.match(app, /<EntityDetailToolbar[\s\S]{0,400}backLabel="К приборам"/u);
+    assert.match(app, /fromEquipment \? "К прибору" : openedViaLink\(\) \? "Назад" : "К задачам"/u);
+    assert.match(app, /<EntityDetailToolbar backLabel=\{openedViaLink\(\) \? "Назад" : "К приборам"\}/u);
     assert.ok(!app.includes("title={`${record.model} · S/N"));
     // Паспорт прибора устроен как карточка задачи: свойства справа, открытые задачи сверху.
     assert.match(app, /aria-label="Паспорт прибора"/u);
