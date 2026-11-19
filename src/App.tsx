@@ -3153,7 +3153,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
     return (
       <>
         <EquipmentCard initialTab={selectedRecord.id === initialEquipmentId ? initialTab : undefined} key={selectedRecord.id} onAddManual={addManualHistoryRecord} onApply={applyAssignment} onBack={closeCard} {...(engineer ? {} : { onEdit: () => openEdit(selectedRecord.id) })} onLoadMoreHistory={loadMoreHistory} onLoadMoreMeterReadings={loadMoreMeterReadings} payers={payers} readOnly={engineer} record={selectedRecord} sites={sites} />
-        {!engineer ? <EquipmentPassportForm key={editingId ?? "card-edit"} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
+        {!engineer ? <EquipmentPassportForm key={`passport-${editingId ?? "card-edit"}`} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
       </>
     );
   }
@@ -3196,7 +3196,7 @@ function EquipmentPage({ engineer = false, initialEquipmentId, initialTab }: { r
         title={engineer ? "Мои приборы" : "Приборы"}
         {...(engineer ? {} : { titleAside: <ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать приборы" onValueChange={setRegistryView} value={registryView} /> })}
       />
-      {!engineer ? <EquipmentPassportForm key={editingId ?? "new"} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
+      {!engineer ? <EquipmentPassportForm key={`passport-${editingId ?? "new"}`} onOpenChange={(open) => { setFormOpen(open); if (!open) setEditingId(null); }} onSave={save} open={formOpen} references={references} {...(editingRecord ? { record: editingRecord } : {})} records={records} /> : null}
       {!engineer && siteChangeRecord ? <EquipmentAssignmentForm kind="site_change" onApply={async (change) => { await applyAssignmentTo(siteChangeRecord, change); setSiteChangeId(null); }} onOpenChange={(open) => { if (!open) setSiteChangeId(null); }} open options={sites} record={siteChangeRecord} /> : null}
       <section className="registry-toolbar" aria-labelledby="equipment-search-title">
         <label className="registry-toolbar__search" htmlFor="equipment-search">
