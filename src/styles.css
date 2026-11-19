@@ -9212,7 +9212,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   font-size: 14px;
   font-weight: 650;
 }
-.engineer-calendar__day small { color: var(--color-muted); font-size: 10.5px; }
+.engineer-calendar__month { color: var(--color-accent-dark); font-weight: 650; white-space: nowrap; }
 .engineer-calendar__day.is-weekend span, .engineer-calendar__day.is-weekend strong { color: var(--color-muted); }
 .engineer-calendar__day.is-today span { color: var(--color-accent-dark); font-weight: 650; }
 .engineer-calendar__day.is-today strong { background: var(--color-accent); color: #fff; }
@@ -9254,7 +9254,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 }
 .engineer-calendar__bg.is-weekend { background: #f5f7f8; }
 .engineer-calendar__bg.is-today { background: color-mix(in srgb, var(--color-accent-soft) 70%, transparent); }
-.engineer-calendar__bg.is-overloaded { background: color-mix(in srgb, var(--color-warning-soft) 70%, transparent); }
 
 .calendar-bar {
   --bar: var(--color-accent);
@@ -9282,12 +9281,6 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .calendar-bar:hover, .calendar-bar:focus-visible { background: color-mix(in srgb, var(--bar) 24%, var(--color-surface)); outline: none; }
 .calendar-bar__number { flex: none; color: color-mix(in srgb, var(--bar) 75%, #000); font-weight: 700; }
 .calendar-bar__title { min-width: 0; overflow: hidden; text-overflow: ellipsis; color: var(--color-ink-soft); }
-.calendar-bar__visit {
-  position: absolute;
-  bottom: 0;
-  height: 3px;
-  background: var(--bar);
-}
 /* Задача началась раньше или кончится позже показанного: край полосы срезан. */
 .calendar-bar--from-before { margin-left: 0; border-left-width: 1px; border-left-style: dashed; border-top-left-radius: 0; border-bottom-left-radius: 0; }
 .calendar-bar--to-after { margin-right: 0; border-right-style: dashed; border-top-right-radius: 0; border-bottom-right-radius: 0; }
@@ -9298,7 +9291,7 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 .calendar-bar--under_review { --bar: #2f86c4; }
 .calendar-bar--closed { --bar: #8a9aa3; }
 .calendar-bar--closed .calendar-bar__title { color: var(--color-muted); }
-.calendar-bar--overdue { --bar: var(--color-danger); }
+.calendar-bar--overdue .calendar-bar__number { color: var(--color-danger); }
 .calendar-bar--urgent .calendar-bar__number::after { content: " !"; color: var(--color-danger); }
 .engineer-calendar__grid--dense .calendar-bar { margin: 0 1px; padding: 0 5px; font-size: 11px; }
 .engineer-calendar__grid--dense .calendar-bar--from-before, .engineer-calendar__grid--dense .calendar-bar--to-after { margin: 0; }

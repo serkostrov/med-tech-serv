@@ -32,8 +32,11 @@ describe("сетка календаря загрузки", () => {
     assert.match(html, /engineer-calendar__day[^"]*is-today/u);
     assert.match(html, />Пн</u);
     assert.match(html, />Вс</u);
-    // Первый день периода подписан месяцем.
-    assert.match(html, />ноя</u);
+    // Месяц периода — в заголовке; у первого дня числа на одной линии с остальными, без подписи
+    // месяца под числом (вторая встреча 18.11: «1 ноября съехал»).
+    assert.doesNotMatch(html, /engineer-calendar__month/u);
+    // Неделя на стыке месяцев: месяц подписан у 1-го числа в строке дня недели.
+    assert.match(markup("2026-11-28", "2026-12-04"), /engineer-calendar__month">Вт · дек</u);
   });
 
   it("многодневная задача — одна полоса через свои дни, название один раз", () => {
@@ -42,8 +45,8 @@ describe("сетка календаря загрузки", () => {
     assert.equal(html.match(/calendar-bar__number">З-000101</gu)?.length, 1);
     assert.equal(html.match(/calendar-bar__title">ТО анализатора</gu)?.length, 1);
     assert.match(html, /grid-column:1 \/ 4[^"]*"[^>]*title="З-000101/u);
-    // День выезда отмечен чертой, подсказка рассказывает срок, выезд и площадку.
-    assert.match(html, /calendar-bar__visit/u);
+    // Черты дня выезда нет (лишнее визуально), подсказка рассказывает срок, выезд и площадку.
+    assert.doesNotMatch(html, /calendar-bar__visit/u);
     assert.match(html, /выезд 17\.11\.2026/u);
     assert.match(html, /ГКБ № 1/u);
     assert.doesNotMatch(html, /день 2 из 3/u);
@@ -56,9 +59,10 @@ describe("сетка календаря загрузки", () => {
     assert.match(html, /grid-column:2 \/ 3;grid-row:3"[^>]*title="З-000102/u);
   });
 
-  it("день с тремя задачами подсвечен, у фамилии — только значки бед, без цифр", () => {
+  it("дни без заливки перегруза, у фамилии — только значки бед, без цифр", () => {
     const html = markup();
-    assert.match(html, /engineer-calendar__bg[^"]*is-overloaded/u);
+    // Вторая встреча 18.11: жёлтая подложка перегруза путала, о перегрузе говорит значок у фамилии.
+    assert.doesNotMatch(html, /is-overloaded/u);
     assert.match(html, />Перегруз</u);
     assert.match(html, />Просрочка</u);
     assert.match(html, /calendar-bar--overdue/u);

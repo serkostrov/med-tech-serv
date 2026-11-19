@@ -89,14 +89,14 @@ function CalendarBarButton({ bar, dense, onOpen }: {
   >
     <span className="calendar-bar__number">{task.number}</span>
     {dense && days < 4 ? null : <span className="calendar-bar__title">{task.title}</span>}
-    {/* День выезда — черта снизу под этим днём полосы. */}
-    {bar.visitIndex !== undefined && days > 1
-      ? <i aria-hidden="true" className="calendar-bar__visit" style={{ left: `${((bar.visitIndex - bar.start) / days) * 100}%`, width: `${100 / days}%` }} />
-      : null}
   </button>;
 }
 
-/** Дни инженера одной дорожкой: фон дней (выходные, сегодня, перегруз) и полосы задач поверх. */
+/**
+ * Дни инженера одной дорожкой: фон дней (выходные, сегодня) и полосы задач поверх. Цвет полосы —
+ * только этап задачи; заливка перегруза, красная перекраска просроченной и черта дня выезда убраны:
+ * «лишнее визуально, не перемудрить» (вторая встреча 18.11). Просрочку видно по красному номеру.
+ */
 function CalendarTrack({ row, dense, onOpenTask }: {
   readonly row: CalendarRow;
   readonly dense: boolean;
@@ -115,7 +115,7 @@ function CalendarTrack({ row, dense, onOpenTask }: {
   >
     {row.cells.map((cell, index) => <span
       aria-hidden="true"
-      className={`engineer-calendar__bg${cell.isWeekend ? " is-weekend" : ""}${cell.isToday ? " is-today" : ""}${cell.level === "overloaded" ? " is-overloaded" : ""}`}
+      className={`engineer-calendar__bg${cell.isWeekend ? " is-weekend" : ""}${cell.isToday ? " is-today" : ""}`}
       key={cell.date}
       style={{ gridColumn: String(index + 1) }}
       title={`${row.engineer.fullName} · ${calendarDayTitle(cell.date)}: ${cell.placements.length ? formatRussianCount(cell.placements.length, ["задача", "задачи", "задач"]) : "свободен"}`}
@@ -217,15 +217,16 @@ export function EngineerCalendarGrid({ calendar, title, onOpenTask, reserveBotto
     >
       <div className="engineer-calendar__head" role="row">
         <div className="engineer-calendar__corner" role="columnheader">Инженер</div>
-        {calendar.days.map((day) => <div
+        {calendar.days.map((day, index) => <div
           className={`engineer-calendar__day${day.isWeekend ? " is-weekend" : ""}${day.isToday ? " is-today" : ""}${day.isPast ? " is-past" : ""}`}
           key={day.date}
           role="columnheader"
           title={calendarDayTitle(day.date)}
         >
-          <span>{day.weekdayLabel}</span>
+          {/* Месяц — только на 1-м числе внутри периода и в строке дня недели, чтобы числа стояли
+              на одной линии («1 ноября съехал», вторая встреча 18.11). Месяц периода — в заголовке. */}
+          <span>{index > 0 && day.date.endsWith("-01") ? <b className="engineer-calendar__month">{dense ? day.monthLabel : `${day.weekdayLabel} · ${day.monthLabel}`}</b> : day.weekdayLabel}</span>
           <strong>{day.dayLabel}</strong>
-          {day.startsMonth ? <small>{day.monthLabel}</small> : null}
         </div>)}
         {showUndated ? <div className="engineer-calendar__undated-head" role="columnheader">Без срока</div> : null}
       </div>
