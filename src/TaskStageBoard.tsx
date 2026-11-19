@@ -15,18 +15,21 @@ const STAGES: readonly StatusBoardColumn[] = [
   { key: "assigned", title: "Назначена", color: "#d4a017" },
   { key: "in_progress", title: "В работе", color: "#1f8a52" },
   { key: "under_review", title: "На проверке", color: "#2f86c4" },
-  { key: "closed", title: "Выполнена", color: "#b42332" }
+  { key: "closed", title: "Выполнена", color: "#b42332" },
+  { key: "cancelled", title: "Отменена", color: "#8a9aa3" }
 ];
 
-/** Колонки доски: основные этапы всегда, «Запланирована» и «Новая» — если в них есть задачи. */
+/** Колонки доски: основные этапы всегда, «Запланирована», «Новая» и «Отменена» — если в них есть задачи. */
 export function taskStageColumns(tasks: readonly TaskApiRecord[]): readonly StatusBoardColumn[] {
   const always = new Set(["assigned", "in_progress", "under_review", "closed"]);
   return STAGES.filter((stage) => always.has(stage.key) || tasks.some((task) => task.status === stage.key));
 }
 
-export function TaskStageBoard({ tasks, label, show }: {
+export function TaskStageBoard({ tasks, label, show, onOpen }: {
   readonly tasks: readonly TaskApiRecord[];
   readonly label: string;
+  /** Своё открытие карточки (у инициатора — его карточка заявки); по умолчанию — задача по ссылке. */
+  readonly onOpen?: (task: TaskApiRecord) => void;
   /** Что писать под названием: прибор (на странице инженера и клиента) и инженера (у клиента). */
   readonly show: { readonly engineer?: boolean };
 }) {
@@ -40,7 +43,7 @@ export function TaskStageBoard({ tasks, label, show }: {
     itemKey={(task) => task.id}
     label={label}
     load={async (status, offset, limit) => localStatusPage(sorted, (task) => task.status === status, offset, limit)}
-    onOpen={(task) => nav?.open({ kind: "task", id: task.id })}
+    onOpen={(task) => onOpen ? onOpen(task) : nav?.open({ kind: "task", id: task.id })}
     queryKey={tasks.map((task) => `${task.id}:${task.status}`).join(",")}
     renderCard={(task) => <>
       <span className="task-board-card__top">{task.number}{task.priority === "urgent" ? <i>Срочно</i> : null}</span>

@@ -5,8 +5,10 @@ import { requestPeriod, requestProblem, requestStageHint, requestTitle, type Req
 import { m2Api, type EquipmentApiRecord, type ReferenceCatalogValue, type TaskApiRecord } from "./m2-api.js";
 import { companyToday } from "./task-dates.js";
 import {
-  Button, CardHeader, DatePicker, DialogForm, EntityDetailToolbar, Input, PageIntro, ResourceState, Select, StatusBadge, Textarea, toast
+  Button, DatePicker, DialogForm, EntityDetailToolbar, Input, PageIntro, ResourceState, Select, StatusBadge, Textarea, ViewSwitch, toast
 } from "./ui.js";
+import { RegistryPagination, usePageSize } from "./RegistryPagination.js";
+import { TaskStageBoard } from "./TaskStageBoard.js";
 
 /**
  * Экран менеджера-инициатора (ТЗ, раздел 2): «Создание заявок, статусы и результаты только своих задач».
@@ -18,9 +20,15 @@ export function InitiatorRequests() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [openTask, setOpenTask] = useState<TaskApiRecord | null>(null);
+  // Доска по этапам или один список постранично (вторая встреча 18.11: при сотнях заявок две
+  // таблицы «В работе» и «Завершённые» со своими колонками выглядели странно).
+  const [view, setView] = useState<"board" | "list">("board");
+  const { pageSize, setPageSize } = usePageSize("initiator-requests");
+  const [pageIndex, setPageIndex] = useState(0);
   const reload = async () => {
     try {
-      const page = await m2Api.tasksPage({ sort: "updated_desc", limit: 200 });
+      // Только свои заявки (0014): их немного даже за годы, поэтому берём разом.
+      const page = await m2Api.tasksPage({ sort: "updated_desc", limit: 1000 });
       setTasks(page.items);
       setLoadError(null);
     } catch (error) {
@@ -31,21 +39,23 @@ export function InitiatorRequests() {
 
   if (openTask) return <InitiatorTaskCard onBack={() => { setOpenTask(null); void reload(); }} task={openTask} />;
 
-  const open = (tasks ?? []).filter((task) => task.status !== "closed" && task.status !== "cancelled");
-  const done = (tasks ?? []).filter((task) => task.status === "closed" || task.status === "cancelled");
+  const all = tasks ?? [];
+  const pageShown = Math.min(pageIndex, Math.max(0, Math.ceil(all.length / pageSize) - 1));
   return <>
     <PageIntro
       actions={<Button icon="plus" onClick={() => setFormOpen(true)}>Новая заявка</Button>}
-      description="Ваши заявки и их статусы"
       title="Мои заявки"
+      titleAside={<ViewSwitch items={[{ value: "board", label: "Доска" }, { value: "list", label: "Список" }]} label="Как показать заявки" onValueChange={setView} value={view} />}
     />
     {loadError ? <ResourceState description={loadError} status="error" title="Заявки не загрузились" />
       : tasks === null ? <ResourceState description="Подождите, заявки сейчас появятся." status="loading" title="Загружаем заявки" />
       : tasks.length === 0 ? <ResourceState description="Нажмите «Новая заявка»: найдите прибор по заводскому номеру и опишите, что случилось. Координатор назначит инженера, о ходе работ придут уведомления." status="empty" title="Заявок пока нет" />
-      : <>
-        <RequestTable onOpen={setOpenTask} tasks={open} title="В работе" empty="Открытых заявок нет." />
-        {done.length > 0 ? <RequestTable onOpen={setOpenTask} tasks={done} title="Завершённые" /> : null}
-      </>}
+      : view === "board"
+        ? <TaskStageBoard label="Мои заявки по этапам" onOpen={setOpenTask} show={{ engineer: true }} tasks={all} />
+        : <section className="card card--table">
+          <RequestTable onOpen={setOpenTask} tasks={all.slice(pageShown * pageSize, (pageShown + 1) * pageSize)} />
+          <RegistryPagination alwaysShow ariaLabel="Страницы моих заявок" onPageChange={setPageIndex} onPageSizeChange={(size) => { setPageSize(size); setPageIndex(0); }} pageIndex={pageShown} pageSize={pageSize} total={all.length} />
+        </section>}
     {formOpen ? <InitiatorRequestForm onClose={() => setFormOpen(false)} onCreated={async (task) => { setFormOpen(false); await reload(); setOpenTask(task); }} /> : null}
   </>;
 }
@@ -63,12 +73,10 @@ function periodText(task: TaskApiRecord): string {
     : formatDisplayDate(task.periodTo);
 }
 
-function RequestTable({ title, tasks, onOpen, empty }: { readonly title: string; readonly tasks: readonly TaskApiRecord[]; readonly onOpen: (task: TaskApiRecord) => void; readonly empty?: string }) {
+/** Все заявки одной таблицей: колонки одни на всю страницу. */
+function RequestTable({ tasks, onOpen }: { readonly tasks: readonly TaskApiRecord[]; readonly onOpen: (task: TaskApiRecord) => void }) {
   return (
-    <section className="card card--table">
-      <CardHeader meta={String(tasks.length)} title={title} />
-      {tasks.length === 0 ? <ResourceState description={empty ?? ""} status="empty" title="Пусто" />
-        : <div className="table-scroll table-cards"><table className="data-table">
+    <div className="table-scroll table-cards"><table className="data-table">
           <thead><tr>
             <th scope="col">Номер</th>
             <th scope="col">Заявка</th>
@@ -83,8 +91,7 @@ function RequestTable({ title, tasks, onOpen, empty }: { readonly title: string;
             <td data-label="Срок">{periodText(task)}{task.isOverdue ? <small className="quote-overdue">просрочена</small> : null}</td>
             <td data-label="Статус"><StatusBadge tone={TASK_STATUS_TONES[task.status] ?? "warning"}>{TASK_STATUS_LABELS[task.status] ?? task.status}</StatusBadge></td>
           </tr>)}</tbody>
-        </table></div>}
-    </section>
+        </table></div>
   );
 }
 
