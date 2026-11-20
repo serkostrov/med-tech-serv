@@ -9772,6 +9772,20 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Плотные реестры: таблицей, пока столбцы помещаются, уже — карточками, как на телефоне, а не прокруткой вбок
    (встреча 19.11: адаптация под планшет и ноутбук). Порог — естественная ширина таблицы: документы склада 742,
    прайс 785, список задач 859, письма 920, склад 943 px. На ноутбуке 1280 все пять — таблицы. */
+/* Сотрудники, роли и справочники (20.11): на телефоне — карточками, а не прокруткой вбок. Естественная ширина
+   таблиц 560–680 px; пустая ячейка (активная запись без отметки) в карточке не показывается. */
+@container (max-width: 700px) {
+  .table-cards--700 > table { min-width: 0; }
+  .table-cards--700 > table > thead { display: none; }
+  .table-cards--700 > table > tbody > tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; padding: 12px; border-bottom: 1px solid var(--color-border-soft); }
+  /* :nth-child(n) — сильнее правил справочника для 3-го и последнего столбцов (ширина, nowrap, вправо). */
+  .table-cards--700 > table > tbody > tr > td:nth-child(n) { display: block; width: auto; padding: 0; border: 0; min-width: 0; white-space: normal; text-align: left; background: none; }
+  .table-cards--700 > table > tbody > tr > td:empty { display: none; }
+  .table-cards--700 > table > tbody > tr.reference-admin-table__inactive { background: #f8fafb; }
+  .table-cards--700 > table > tbody > tr > td[data-label]::before { content: attr(data-label); display: block; margin-bottom: 2px; color: var(--color-muted); font-size: 12px; font-weight: 500; }
+  .table-cards--700 > table > tbody > tr > td.cell-wide { grid-column: 1 / -1; }
+  .table-cards--700 .table-actions, .table-cards--700 .reference-admin-actions { justify-content: flex-start; }
+}
 @container (max-width: 760px) {
   .table-cards--760 > table { min-width: 0; }
   .table-cards--760 > table > thead { display: none; }

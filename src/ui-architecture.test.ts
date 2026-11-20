@@ -235,9 +235,15 @@ describe("shared UI architecture", () => {
     // переносы только между словами; где не помещается — карточки по ширине контейнера.
     assert.match(css, /\.data-table\s*\{[^}]*min-width:\s*0;/su);
     assert.match(css, /\.data-table td\s*\{[^}]*overflow-wrap:\s*break-word;/su);
-    for (const width of [760, 800, 880, 960]) assert.match(css, new RegExp(`@container \\(max-width: ${width}px\\)[\\s\\S]*?\\.table-cards--${width} > table > thead \\{ display: none; \\}`, "u"));
+    for (const width of [700, 760, 800, 880, 960]) assert.match(css, new RegExp(`@container \\(max-width: ${width}px\\)[\\s\\S]*?\\.table-cards--${width} > table > thead \\{ display: none; \\}`, "u"));
     assert.match(css, /@container \(max-width: 760px\)[\s\S]*?\.equipment-registry-table thead \{ display: none; \}/u);
     assert.match(css, /@container \(max-width: 760px\)[\s\S]*?\.engineer-load-table thead \{ display: none; \}/u);
+    // Сотрудники, роли и справочники на телефоне — карточками (20.11), а не прокруткой вбок.
+    const accessAdmin = await readFile(new URL("./AccessAdminPage.tsx", import.meta.url), "utf8");
+    assert.equal(accessAdmin.match(/className="table-scroll table-cards table-cards--700"/gu)?.length, 2);
+    for (const label of ["Роль", "Тип", "Права", "Статус", "Сотрудник", "E-mail"]) assert.match(accessAdmin, new RegExp(`data-label="${label}"`, "u"));
+    assert.match(app, /className="table-scroll table-cards table-cards--700"><table className="data-table reference-admin-table">/u);
+    assert.match(css, /\.table-cards--700 > table > tbody > tr > td:empty \{ display: none; \}/u);
     // Серийный номер не рвётся по буквам: нужен селектор сильнее, чем `.data-table td`.
     assert.match(css, /\.equipment-registry-table td\.equipment-registry-table__serial\s*\{[^}]*white-space:\s*nowrap/u);
   });
