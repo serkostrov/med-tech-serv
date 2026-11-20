@@ -9835,3 +9835,12 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
 /* Инженеры: ФИО переносится по словам — столбец не раздвигает таблицу на ноутбуке. */
 .data-table.engineer-load-table td:first-child .engineer-load-table__name, .data-table.engineer-load-table td:first-child .engineer-load-table__name strong { white-space: normal; text-align: left; }
 .engineer-load-table td:first-child { min-width: 120px; }
+
+/* История цен вида работ (встреча 20.11: «цена по правому краю, как будто съехала»): столбец «Цена» — по ширине
+   суммы, а не растянут; суммы друг под другом выровнены по правому краю, «Период» сразу за ними.
+   Таблица узкая (около 400 px): на планшете — таблицей, карточками только на телефоне (table-cards, до 620 px). */
+.data-table.price-history-table { min-width: 0; }
+@container (min-width: 621px) {
+  .data-table.price-history-table th:first-child,
+  .data-table.price-history-table td:first-child { width: 1%; white-space: nowrap; padding-right: 32px; }
+}

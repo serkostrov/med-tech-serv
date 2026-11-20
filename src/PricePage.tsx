@@ -120,7 +120,7 @@ function WorkTypePricePage({ line, today, canWrite, onBack, onDelete, onEdit }: 
     {tab === "history" ? <section className="task-section" aria-label="История цен">
       {line.history.length === 0
         ? <div className="task-section__empty"><p>{PRICE_NOT_SET_HINT}</p></div>
-        : <div className="table-scroll"><table className="data-table">
+        : <div className="table-scroll table-cards"><table className="data-table price-history-table">
           <thead><tr>
             <th className="numeric" scope="col">Цена</th>
             <th scope="col">Период</th>
@@ -132,10 +132,10 @@ function WorkTypePricePage({ line, today, canWrite, onBack, onDelete, onEdit }: 
             const future = row.validFrom > today;
             const active = priceRowActiveOn(row, today);
             return <tr key={row.id}>
-              <td className="numeric"><strong>{formatMoney(row.amount)}</strong></td>
-              <td>{priceRowPeriodText(row)}</td>
-              <td>{guaranteeWorkLabel(row.includeGuaranteeWork)}</td>
-              <td>{active
+              <td className="numeric" data-label="Цена"><strong>{formatMoney(row.amount)}</strong></td>
+              <td data-label="Период">{priceRowPeriodText(row)}</td>
+              <td data-label="Гарантия">{guaranteeWorkLabel(row.includeGuaranteeWork)}</td>
+              <td data-label="Сейчас">{active
                 ? <StatusBadge tone="success">Действует</StatusBadge>
                 : future ? <StatusBadge tone="purple">Ещё не началась</StatusBadge> : <StatusBadge tone="neutral">В истории</StatusBadge>}</td>
               {canWrite ? <td>{canDeletePriceRow(row, today)

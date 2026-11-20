@@ -521,6 +521,17 @@ describe("прайс: ноль говорит о себе сам", () => {
     assert.match(page, /if \(amount === 0\) \{\s*setFormError\(ZERO_PRICE_MESSAGE\);/u);
   });
 
+  it("в истории цен столбец «Цена» по ширине суммы, а не растянут; на телефоне — карточки (встреча 20.11)", async () => {
+    const [page, css] = await Promise.all([
+      readFile(new URL("./PricePage.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./styles.css", import.meta.url), "utf8")
+    ]);
+    assert.match(page, /className="table-scroll table-cards"><table className="data-table price-history-table"/u);
+    for (const label of ["Цена", "Период", "Гарантия", "Сейчас"]) assert.match(page, new RegExp(`data-label="${label}"`, "u"));
+    assert.match(css, /\.data-table\.price-history-table \{ min-width: 0; \}/u);
+    assert.match(css, /@container \(min-width: 621px\) \{\s*\.data-table\.price-history-table th:first-child,\s*\.data-table\.price-history-table td:first-child \{ width: 1%; white-space: nowrap;/u);
+  });
+
   it("в массовом изменении предупреждает про нули отдельной строкой (находка 40)", async () => {
     const page = await readFile(new URL("./PricePage.tsx", import.meta.url), "utf8");
     assert.match(page, /const zeroCount = zeroPriceCount\(changes\);/u);
