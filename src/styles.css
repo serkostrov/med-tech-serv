@@ -9844,3 +9844,13 @@ input[type="checkbox"], input[type="radio"] { accent-color: var(--color-accent);
   .data-table.price-history-table th:first-child,
   .data-table.price-history-table td:first-child { width: 1%; white-space: nowrap; padding-right: 32px; }
 }
+
+/* Колонки досок: полоса прокрутки видна, только пока листают карточки, и гаснет через секунду (20.11:
+   «должен появляться только в момент, когда я скроллю, а не просто по умолчанию стоять»). Отметку
+   data-scrolling ставит BoardScroller. Место под полосу одинаковое во всех колонках, поэтому
+   карточки одной ширины и не сдвигаются, когда полоса появляется. */
+.task-board__cards { scrollbar-gutter: stable; scrollbar-color: transparent transparent; }
+.task-board__cards[data-scrolling] { scrollbar-color: var(--scrollbar-thumb-hover) transparent; }
+/* Safari понимает только ::-webkit-scrollbar */
+.task-board__cards::-webkit-scrollbar-thumb { background-color: transparent; }
+.task-board__cards[data-scrolling]::-webkit-scrollbar-thumb { background-color: var(--scrollbar-thumb-hover); }

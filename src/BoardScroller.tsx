@@ -13,10 +13,19 @@ export function BoardScroller({ children }: { readonly children: ReactNode }) {
     const board = wrap.current?.querySelector<HTMLElement>(".task-board");
     if (!board) return undefined;
     // Доска тянется до низа окна (17.11: «надо вниз продлить»): на высоком экране под ней не остаётся пустоты.
+    // Снизу оставляем ровно нижний отступ страницы. Раньше вычитали 20 px при отступе 28 px: страница
+    // выходила на 8 px длиннее окна, справа стояла полоса прокрутки и всё сдвигалось на пару пикселей (20.11).
     const fit = () => {
       if (window.innerWidth <= 760) { board.style.height = ""; return; }
-      const top = board.getBoundingClientRect().top + (document.querySelector(".main-shell")?.scrollTop ?? window.scrollY);
-      board.style.height = `${Math.max(360, Math.round(window.innerHeight - top - 20))}px`;
+      const shell = document.querySelector<HTMLElement>(".main-shell");
+      const top = board.getBoundingClientRect().top + (shell?.scrollTop ?? window.scrollY);
+      const content = board.closest(".main-content");
+      const gap = content ? Number.parseFloat(window.getComputedStyle(content).paddingBottom) || 0 : 20;
+      const height = Math.max(360, Math.floor(window.innerHeight - top - gap));
+      board.style.height = `${height}px`;
+      // Если под доской есть ещё отступы обёрток — убираем и их, чтобы страница не прокручивалась.
+      const extra = shell ? shell.scrollHeight - shell.clientHeight : 0;
+      if (extra > 0 && extra < 60 && height - extra >= 360) board.style.height = `${height - extra}px`;
     };
     fit();
     // Над доской могут появиться плашки (счётчики, отбор из отчёта): верх доски сдвинется — пересчитываем высоту.
@@ -33,6 +42,17 @@ export function BoardScroller({ children }: { readonly children: ReactNode }) {
       setEdges((current) => current.left === left && current.right === right ? current : { left, right });
     };
     update();
+    // Полоса прокрутки колонки видна, только пока листают карточки, и гаснет через секунду
+    // (20.11: «должен появляться только в момент, когда я скроллю, а не просто по умолчанию стоять»).
+    const fading = new Map<HTMLElement, number>();
+    const showColumnBar = (event: Event) => {
+      const cards = event.target;
+      if (!(cards instanceof HTMLElement) || !cards.classList.contains("task-board__cards")) return;
+      cards.dataset.scrolling = "";
+      window.clearTimeout(fading.get(cards));
+      fading.set(cards, window.setTimeout(() => { delete cards.dataset.scrolling; fading.delete(cards); }, 1000));
+    };
+    board.addEventListener("scroll", showColumnBar, { capture: true, passive: true });
     board.addEventListener("scroll", update, { passive: true });
     window.addEventListener("resize", update);
     window.addEventListener("resize", fit);
@@ -42,6 +62,8 @@ export function BoardScroller({ children }: { readonly children: ReactNode }) {
     const mutations = typeof MutationObserver === "undefined" ? undefined : new MutationObserver(update);
     mutations?.observe(board, { childList: true });
     return () => {
+      board.removeEventListener("scroll", showColumnBar, { capture: true });
+      fading.forEach((timer) => window.clearTimeout(timer));
       board.removeEventListener("scroll", update);
       window.removeEventListener("resize", update);
       window.removeEventListener("resize", fit);

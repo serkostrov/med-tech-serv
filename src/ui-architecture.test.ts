@@ -94,6 +94,24 @@ describe("shared UI architecture", () => {
     assert.doesNotMatch(css, /input:focus-visible,\s*select:focus-visible/su);
   });
 
+  it("доска не прокручивает страницу, полоса колонки видна только пока листают карточки (20.11)", async () => {
+    const [scroller, css] = await Promise.all([
+      readFile(new URL("./BoardScroller.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./styles.css", import.meta.url), "utf8")
+    ]);
+    // Низ доски — по нижнему отступу страницы, а не «минус 20 px»: иначе страница длиннее окна на 8 px.
+    assert.doesNotMatch(scroller, /innerHeight - top - 20/u);
+    assert.match(scroller, /getComputedStyle\(content\)\.paddingBottom/u);
+    assert.match(scroller, /shell\.scrollHeight - shell\.clientHeight/u);
+    // Прокрутка колонки ловится на доске (capture) и на секунду ставит отметку data-scrolling.
+    assert.match(scroller, /addEventListener\("scroll", showColumnBar, \{ capture: true, passive: true \}\)/u);
+    assert.match(scroller, /cards\.dataset\.scrolling = ""/u);
+    assert.match(scroller, /delete cards\.dataset\.scrolling/u);
+    assert.match(css, /\.task-board__cards \{ scrollbar-gutter: stable; scrollbar-color: transparent transparent; \}/u);
+    assert.match(css, /\.task-board__cards\[data-scrolling\] \{ scrollbar-color: var\(--scrollbar-thumb-hover\) transparent; \}/u);
+    assert.match(css, /\.task-board__cards::-webkit-scrollbar-thumb \{ background-color: transparent; \}/u);
+  });
+
   it("does not nest a second window inside dialogs", async () => {
     const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
     assert.doesNotMatch(app, /className="card equipment-passport"/u);
