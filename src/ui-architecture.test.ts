@@ -112,6 +112,19 @@ describe("shared UI architecture", () => {
     assert.match(css, /\.task-board__cards::-webkit-scrollbar-thumb \{ background-color: transparent; \}/u);
   });
 
+  it("список с галочками в форме открывается поверх страницы и не двигает её (21.11)", async () => {
+    const [select, css] = await Promise.all([
+      readFile(new URL("./MultiSelect.tsx", import.meta.url), "utf8"),
+      readFile(new URL("./styles.css", import.meta.url), "utf8")
+    ]);
+    assert.match(select, /closest\("\.dialog-form"\) && typeof panel\.showPopover === "function"/u);
+    assert.match(select, /panel\.setAttribute\("popover", "manual"\)/u);
+    assert.match(select, /focus\(\{ preventScroll: true \}\)/u);
+    assert.doesNotMatch(select, /autoFocus/u);
+    assert.match(css, /\.dialog-form \.multi-select__panel\[popover\] \{ position: fixed;/u);
+    assert.match(css, /\.dialog-form \.multi-select__panel:not\(\[popover\]\) \{ position: static;/u);
+  });
+
   it("does not nest a second window inside dialogs", async () => {
     const app = await readFile(new URL("./App.tsx", import.meta.url), "utf8");
     assert.doesNotMatch(app, /className="card equipment-passport"/u);
